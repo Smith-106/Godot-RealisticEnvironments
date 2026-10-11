@@ -8,8 +8,8 @@
  * Heights include the interaction simulation's eta = h + p rather than the
  * visible h, so a hull's own rest depression (h = -p) never costs buoyancy,
  * and only outside hulls (render .w = hull coverage): under a hull, eta is not
- * a surface anything floats on. Points whose w is 0 leave the simulation out:
- * OceanSystem.submit_surface_query() clears it for owners on a body that makes
+ * a surface anything floats on. Points from interaction_point_count on leave the
+ * simulation out: OceanSurfaceQueries puts there the owners on a body that makes
  * waves itself, since the simulation is one summed field and that body's own
  * waves, read back after the query delay, act as a lagging spring and drive
  * it. Such bodies feel the incident (FFT) waves only.
@@ -28,7 +28,7 @@ layout(push_constant) restrict readonly uniform PushConstants {
 	float interaction_cell_size;
 	float interaction_fade_start; // Chebyshev distance from the center (m)
 	float interaction_fade_end;
-	uint interaction_enabled;
+	uint interaction_point_count; // points [0, this) add the simulation; 0 while it is off
 };
 
 #define OCEAN_SAMPLING_SET 0
@@ -44,7 +44,7 @@ struct SurfaceSample {
 };
 
 layout(std430, set = 0, binding = 0) restrict readonly buffer PointBuffer {
-	vec4 points[]; // xyz = world position, w = 1 to include the interaction simulation
+	float points[]; // world positions, xyz tightly packed (PackedVector3Array bytes)
 };
 
 layout(std430, set = 0, binding = 2) restrict writeonly buffer SampleBuffer {
@@ -56,9 +56,6 @@ layout(rgba16f, set = 0, binding = 5) restrict readonly uniform image2D interact
 
 // Bilinear eta weighted by (1 - hull coverage) of each texel.
 float sample_interaction_eta(vec2 p) {
-	if (interaction_enabled == 0U) {
-		return 0.0;
-	}
 	vec2 from_center = abs(p - interaction_center);
 	float fade = 1.0 - smoothstep(interaction_fade_start, interaction_fade_end, max(from_center.x, from_center.y));
 	if (fade <= 0.0) {
@@ -81,18 +78,14 @@ float sample_interaction_eta(vec2 p) {
 	return mix(mix(e00, e10, f.x), mix(e01, e11, f.x), f.y) * fade;
 }
 
-float sample_total_height(vec2 p, bool with_interaction) {
-	return ocean_sample_surface_height(p) + (with_interaction ? sample_interaction_eta(p) : 0.0);
-}
-
 void main() {
 	uint index = gl_GlobalInvocationID.x;
 	if (index >= point_count) {
 		return;
 	}
 
-	vec2 p = points[index].xz;
-	bool with_interaction = points[index].w > 0.5;
+	vec2 p = vec2(points[3U * index], points[3U * index + 2U]);
+	bool with_interaction = index < interaction_point_count;
 	vec2 source = ocean_invert_horizontal_displacement(p);
 	vec3 visual_displacement;
 	vec3 velocity;
@@ -101,12 +94,19 @@ void main() {
 		visual_displacement.y += sample_interaction_eta(p);
 	}
 
+	// The rendered surface's normal from its tangents at the surface point over p: the
+	// displaced positions of its rest neighbours (no inversion needed, unlike heights at
+	// world offsets). Then the simulation's slope from its own heights.
 	float e = max(normal_sample_distance, 0.001);
-	float h_l = sample_total_height(p + vec2(-e, 0.0), with_interaction);
-	float h_r = sample_total_height(p + vec2( e, 0.0), with_interaction);
-	float h_b = sample_total_height(p + vec2(0.0, -e), with_interaction);
-	float h_f = sample_total_height(p + vec2(0.0,  e), with_interaction);
-	vec3 normal = normalize(vec3(h_l - h_r, 2.0 * e, h_b - h_f));
+	vec3 tangent_x = vec3(2.0 * e, 0.0, 0.0) + ocean_sample_visual_displacement(source + vec2(e, 0.0)) - ocean_sample_visual_displacement(source - vec2(e, 0.0));
+	vec3 tangent_z = vec3(0.0, 0.0, 2.0 * e) + ocean_sample_visual_displacement(source + vec2(0.0, e)) - ocean_sample_visual_displacement(source - vec2(0.0, e));
+	vec3 normal = normalize(cross(tangent_z, tangent_x));
+	if (with_interaction) {
+		vec2 slope = -normal.xz / normal.y + vec2(
+				sample_interaction_eta(p + vec2(e, 0.0)) - sample_interaction_eta(p - vec2(e, 0.0)),
+				sample_interaction_eta(p + vec2(0.0, e)) - sample_interaction_eta(p - vec2(0.0, e))) / (2.0 * e);
+		normal = normalize(vec3(-slope.x, 1.0, -slope.y));
+	}
 
 	samples[index].displacement_height = vec4(visual_displacement, water_level + visual_displacement.y);
 	samples[index].normal_data = vec4(normal, 0.0);

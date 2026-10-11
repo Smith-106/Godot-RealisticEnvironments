@@ -84,7 +84,7 @@ func _build() -> void:
 	margin.add_child(root)
 
 	var title := Label.new()
-	title.text = "OceanWaves"
+	title.text = "Realistic Environments"
 	title.add_theme_font_size_override("font_size", 18)
 	root.add_child(title)
 
@@ -210,7 +210,7 @@ func _add_ocean_controls(parent : VBoxContainer) -> void:
 			water.foam_color = value
 	)
 
-	var clear_roughness := _add_float_row(parent, "Clear Roughness", "PBR roughness for clear water.", 0.0, 1.0, 0.01, false)
+	var clear_roughness := _add_float_row(parent, "Clear Roughness", "Roughness of calm clear water; the wind adds short-wave roughness on top.", 0.0, 1.0, 0.01, false)
 	clear_roughness.value_changed.connect(func(value : float) -> void:
 		if not _is_syncing and water:
 			water.clear_roughness = value
@@ -256,13 +256,6 @@ func _add_sky_reflection_controls(parent : VBoxContainer) -> void:
 			water.sky_reflection_strength = value
 	)
 
-	var horizon_boost := _add_float_row(parent, "Horizon Boost", "Boosts the reflected horizon color at low reflection angles.", 0.0, 3.0, 0.01, false)
-	horizon_boost.name = "SkyHorizonBoost"
-	horizon_boost.value_changed.connect(func(value : float) -> void:
-		if not _is_syncing and water:
-			water.sky_horizon_boost = value
-	)
-
 	var sun_specular := _add_float_row(parent, "Sun Specular", "Multiplier on the sun's glints and sun path (1 = physical).", 0.0, 4.0, 0.01, false)
 	sun_specular.name = "SunSpecularStrength"
 	sun_specular.value_changed.connect(func(value : float) -> void:
@@ -295,10 +288,12 @@ func _add_buoyancy_controls(parent : VBoxContainer) -> void:
 
 	_add_bound_param(parent, "Buoyancy Strength", "Global multiplier for all buoyancy volume forces.", buoyant_body.buoyancy_strength, 0.0, 10.0, 0.01, func(value : float) -> void: buoyant_body.buoyancy_strength = value, true)
 	_add_bound_param(parent, "Water Density", "Seawater is usually around 1025 kg/m^3; freshwater is around 1000 kg/m^3.", buoyant_body.water_density, 1.0, 2000.0, 1.0, func(value : float) -> void: buoyant_body.water_density = value, true)
-	_add_bound_param(parent, "Heave Damping", "Central damping that suppresses whole-body vertical velocity without adding probe torque.", buoyant_body.heave_damping, 0.0, 20.0, 0.01, func(value : float) -> void: buoyant_body.heave_damping = value, true)
-	_add_bound_param(parent, "Longitudinal Drag", "Global water drag along the body's forward axis.", buoyant_body.longitudinal_water_drag, 0.0, 100.0, 0.01, func(value : float) -> void: buoyant_body.longitudinal_water_drag = value, true)
-	_add_bound_param(parent, "Lateral Drag", "Global water drag along the body's right axis.", buoyant_body.lateral_water_drag, 0.0, 100.0, 0.01, func(value : float) -> void: buoyant_body.lateral_water_drag = value, true)
-	_add_bound_param(parent, "Max Probe Accel", "Caps each buoyancy probe's acceleration contribution to avoid numerical blowups.", buoyant_body.max_probe_acceleration, 0.0, 100.0, 0.1, func(value : float) -> void: buoyant_body.max_probe_acceleration = value, true)
+	_add_bound_param(parent, "Vertical Drag Cd", "Drag coefficient along the body's up axis, against each column's cross-section.", buoyant_body.vertical_drag_coefficient, 0.0, 10.0, 0.01, func(value : float) -> void: buoyant_body.vertical_drag_coefficient = value, true)
+	_add_bound_param(parent, "Longitudinal Drag Cd", "Drag coefficient along the body's forward axis, against each column's wetted side.", buoyant_body.longitudinal_drag_coefficient, 0.0, 10.0, 0.001, func(value : float) -> void: buoyant_body.longitudinal_drag_coefficient = value, true)
+	_add_bound_param(parent, "Lateral Drag Cd", "Drag coefficient along the body's right axis, against each column's wetted side.", buoyant_body.lateral_drag_coefficient, 0.0, 10.0, 0.001, func(value : float) -> void: buoyant_body.lateral_drag_coefficient = value, true)
+	_add_bound_param(parent, "Heave Damping Ratio", "Wave-making damping of each probe's bobbing, as a fraction of critical damping: damps heave, pitch and roll.", buoyant_body.heave_damping_ratio, 0.0, 2.0, 0.01, func(value : float) -> void: buoyant_body.heave_damping_ratio = value, true)
+	_add_bound_param(parent, "Added Mass", "Water moving with the body in heave, as a multiple of the submerged water mass.", buoyant_body.added_mass_coefficient, 0.0, 5.0, 0.01, func(value : float) -> void: buoyant_body.added_mass_coefficient = value, true)
+	_add_bound_param(parent, "Max Probe Accel", "Caps the acceleration each probe's buoyancy, and separately its drag, can contribute.", buoyant_body.max_probe_acceleration, 0.0, 100.0, 0.1, func(value : float) -> void: buoyant_body.max_probe_acceleration = value, true)
 
 
 func _add_mesh_controls(parent : VBoxContainer) -> void:
@@ -407,21 +402,21 @@ func _add_sky_controls(parent : VBoxContainer) -> void:
 			sky_system.north_offset_degrees = value
 	)
 
-	var sun_energy := _add_float_row(parent, "Sun Energy", "Multiplier applied to the sky profile's sun light curve.", 0.0, 8.0, 0.01, false)
+	var sun_energy := _add_float_row(parent, "Sun Energy", "Multiplies the sun's light energy above the atmosphere.", 0.0, 8.0, 0.01, false)
 	sun_energy.name = "SkySunEnergy"
 	sun_energy.value_changed.connect(func(value : float) -> void:
 		if not _is_syncing and sky_system:
 			sky_system.sun_energy_multiplier = value
 	)
 
-	var moon_energy := _add_float_row(parent, "Moon Energy", "Multiplier applied to the sky profile's moon light curve.", 0.0, 8.0, 0.01, false)
+	var moon_energy := _add_float_row(parent, "Moon Energy", "Multiplies the full moon's light energy above the atmosphere.", 0.0, 8.0, 0.01, false)
 	moon_energy.name = "SkyMoonEnergy"
 	moon_energy.value_changed.connect(func(value : float) -> void:
 		if not _is_syncing and sky_system:
 			sky_system.moon_energy_multiplier = value
 	)
 
-	var star_brightness := _add_float_row(parent, "Star Brightness", "Multiplier applied to visible stars at night.", 0.0, 8.0, 0.01, false)
+	var star_brightness := _add_float_row(parent, "Star Brightness", "Multiplies the stars' light (1 = physical; the exposure decides which show).", 0.0, 8.0, 0.01, false)
 	star_brightness.name = "SkyStarBrightness"
 	star_brightness.value_changed.connect(func(value : float) -> void:
 		if not _is_syncing and sky_system:
@@ -523,7 +518,6 @@ func _populate_values() -> void:
 	_set_named_spin("FoamIntensity", water.foam_intensity)
 	_set_named_check("SkyReflectionEnabled", water.sky_reflection_enabled)
 	_set_named_spin("SkyReflectionStrength", water.sky_reflection_strength)
-	_set_named_spin("SkyHorizonBoost", water.sky_horizon_boost)
 	_set_named_spin("SunSpecularStrength", water.sun_specular_strength)
 	_set_named_spin("SunGlitterDensity", water.sun_glitter_density)
 	_set_named_spin("MeshBaseCellSize", water.mesh_base_cell_size)

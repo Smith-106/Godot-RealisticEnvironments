@@ -5,7 +5,8 @@ extends Resource
 ## HullWaterFootprint that baked it. The hull is treated as mirror-symmetric
 ## about x = center_x. Created by HullWaterFootprint.bake_profile().
 ##
-## image is LENGTH_SAMPLES x PROFILE_SAMPLES, FORMAT_RGBH. Column i is the length
+## image is LENGTH_SAMPLES x PROFILE_SAMPLES, FORMAT_RGBAH (a unused, 1: GPUs sample
+## four-channel half floats directly). Column i is the length
 ## station z = min_z + (i + 0.5) / LENGTH_SAMPLES * (max_z - min_z).
 ## - R, row j: inner half-width at height y = min_y + (j + 0.5) / PROFILE_SAMPLES
 ##   * (max_y - min_y). 0 above the hull or below the keel.
@@ -16,26 +17,40 @@ extends Resource
 ##   (0..1 over min_y..max_y) of its highest row with a non-zero half-width.
 ##   The cutout clamps heights above it to it (HullWaterFootprint.cutout_height_offset).
 
+## Columns of image: length stations from min_z to max_z.
 const LENGTH_SAMPLES := 64
+## Rows of image: heights (R) and lateral offsets (G).
 const PROFILE_SAMPLES := 32
 
+## The baked profile (see the class description for its channels).
 @export var image : Image
+## Extent of the hull along its length (local z) covered by the columns.
 @export var min_z := 0.0
+## Far end of the hull along its length (local z).
 @export var max_z := 0.0
+## Extent of the hull in height (local y) covered by the rows.
 @export var min_y := 0.0
+## Top of the profile (local y).
 @export var max_y := 0.0
+## Largest inner half-width of the hull: the lateral range of the G channel.
 @export var max_half_width := 0.0
+## Local x of the hull's plane of symmetry.
 @export var center_x := 0.0
 
 
 ## Bakes a profile from hull triangles given in the footprint's local space.
 ## inset shrinks every half-width so the cutout stays inside the hull shell.
+## Returns null (reported) when the triangles cannot make a profile.
 static func build(triangles : PackedVector3Array, inset : float) -> HullProfile:
-	assert(triangles.size() >= 3, "HullProfile.build() needs at least one triangle.")
+	if triangles.size() < 3:
+		push_error("HullProfile.build() needs at least one triangle.")
+		return null
 	var bounds := AABB(triangles[0], Vector3.ZERO)
 	for vertex in triangles:
 		bounds = bounds.expand(vertex)
-	assert(bounds.size.y > HullSlicer.EPSILON and bounds.size.z > HullSlicer.EPSILON, "Hull triangles are flat; cannot bake a profile.")
+	if bounds.size.y <= HullSlicer.EPSILON or bounds.size.z <= HullSlicer.EPSILON:
+		push_error("Hull triangles are flat; cannot bake a profile.")
+		return null
 
 	var profile := HullProfile.new()
 	profile.min_z = bounds.position.z
@@ -55,9 +70,11 @@ static func build(triangles : PackedVector3Array, inset : float) -> HullProfile:
 
 	for width in half_widths:
 		profile.max_half_width = maxf(profile.max_half_width, width)
-	assert(profile.max_half_width > 0.0, "Hull profile is empty after the inset; reduce bake_inset.")
+	if profile.max_half_width <= 0.0:
+		push_error("Hull profile is empty after the inset; reduce bake_inset.")
+		return null
 
-	profile.image = Image.create_empty(LENGTH_SAMPLES, PROFILE_SAMPLES, false, Image.FORMAT_RGBH)
+	profile.image = Image.create_empty(LENGTH_SAMPLES, PROFILE_SAMPLES, false, Image.FORMAT_RGBAH)
 	for column in LENGTH_SAMPLES:
 		var top := 0.0
 		for row in PROFILE_SAMPLES:
@@ -70,14 +87,17 @@ static func build(triangles : PackedVector3Array, inset : float) -> HullProfile:
 	return profile
 
 
+## Local height at the centre of R-channel row row.
 func get_row_height(row : int) -> float:
 	return lerpf(min_y, max_y, (float(row) + 0.5) / float(PROFILE_SAMPLES))
 
 
+## Lateral offset from center_x at the centre of G-channel row row.
 func get_row_offset(row : int) -> float:
 	return max_half_width * (float(row) + 0.5) / float(PROFILE_SAMPLES)
 
 
+## Local z of the centre of column column.
 func get_station_z(column : int) -> float:
 	return lerpf(min_z, max_z, (float(column) + 0.5) / float(LENGTH_SAMPLES))
 

@@ -1,36 +1,18 @@
 # Wind System
 
-A tiny, dependency-free wind provider node. The ocean reads it, and anything
-else (particles, sails, gameplay) can too.
+A tiny wind provider node. The ocean and the clouds read it; anything else can
+too. No dependencies.
 
-## Usage
-
-Add a `WindSystem` node (or instance `wind_system.tscn`) and point
-`OceanSystem.wind_source_path` at it with `use_external_wind` enabled.
+Add a `WindSystem` (or `wind_system.tscn`) and point
+`OceanSystem.wind_source_path` at it with `use_external_wind` on.
 
 Exports: `wind_speed` (m/s), `wind_direction` (degrees, 0 = +Z, 90 = +X),
-`gust_strength` (extra m/s, 0 = steady), `gust_frequency` (cycles/s).
+`gust_strength` (extra m/s), `gust_frequency` (cycles/s). Gusts only run at
+runtime.
 
-Methods:
+Methods: `get_wind_speed()` (with gusts), `get_base_wind_speed()`,
+`get_wind_direction_degrees()`, `get_wind_vector_2d()`,
+`get_wind_vector_3d()`. Signal `wind_changed` fires when an export changes.
 
-| Method | Returns |
-| --- | --- |
-| `get_wind_speed()` | Base speed + current gust, clamped ≥ 0 |
-| `get_base_wind_speed()` | Base speed without gusts |
-| `get_gust_offset()` | Current gust contribution |
-| `get_wind_direction_degrees()` / `get_wind_direction_radians()` | Heading |
-| `get_wind_vector_2d()` | `(sin θ, cos θ) × speed` in XZ |
-| `get_wind_vector_3d()` | Same, as `Vector3(x, 0, z)` |
-
-Signal `wind_changed` fires when an export changes (not on every gust).
-
-## Notes
-
-- Gusts are three layered sines of an internal clock that only advances at
-  runtime, so the editor always shows the base speed.
-- Any node can replace `WindSystem` as the ocean's wind source if it exposes
-  `get_wind_speed()` and `get_wind_direction_degrees()`, or `wind_speed` and
-  `wind_direction` properties.
-- The ocean only regenerates spectra when speed moves by ≥ 0.25 m/s (at most
-  every 0.5 s), so strong fast gusts cost spectrum regenerations. Direction
-  changes are handled by gradual per-cascade turning instead.
+Any node with `get_wind_speed()` and `get_wind_direction_degrees()` (or
+`wind_speed` / `wind_direction` properties) can replace it.

@@ -12,8 +12,9 @@ const BLENDED_PROPERTIES : Array[StringName] = [
 	&"cloud_type", &"type_variation", &"base_altitude", &"thickness",
 	&"shape_scale", &"detail_scale", &"detail_erosion",
 	&"density", &"density_variation", &"scattering_albedo",
-	&"evolution_speed", &"sun_light_scale", &"ambient_light_scale",
+	&"evolution_speed", &"sun_light_scale",
 	&"haze_visibility", &"haze_scale_height", &"haze_anisotropy",
+	&"star_scintillation",
 ]
 ## Blended fields interpolated geometrically: haze_visibility, so that the haze
 ## thickens evenly through a transition from clear air to fog.
@@ -51,9 +52,11 @@ const GEOMETRIC_BLENDED_PROPERTIES : Array[StringName] = [&"haze_visibility"]
 @export_range(0.0, 8.0, 0.01) var density := 1.0
 ## How much density varies between weather regions.
 @export_range(0.0, 1.0, 0.01) var density_variation := 0.2
-## Share of light the cloud scatters instead of absorbing. Lower values give
-## the dark bases of rain clouds.
-@export_range(0.1, 1.0, 0.01) var scattering_albedo := 0.95
+## Share of light the cloud scatters instead of absorbing. Cloud droplets absorb
+## almost no visible light (1); light scatters dozens to hundreds of times inside a
+## cloud, so lower values darken thick clouds strongly (a stylistic choice). Thick
+## clouds are dark underneath because of their depth, not their albedo.
+@export_range(0.1, 1.0, 0.001) var scattering_albedo := 1.0
 
 @export_group("Motion")
 ## How fast clouds form, dissipate and change shape, on top of drifting with
@@ -63,8 +66,6 @@ const GEOMETRIC_BLENDED_PROPERTIES : Array[StringName] = [&"haze_visibility"]
 @export_group("Scene Lighting")
 ## Multiplies the sun light reaching the scene under this cloud cover.
 @export_range(0.0, 1.0, 0.01) var sun_light_scale := 1.0
-## Multiplies the environment ambient light under this cloud cover.
-@export_range(0.0, 2.0, 0.01) var ambient_light_scale := 1.0
 
 @export_group("Haze")
 ## Visibility at sea level in meters: how far a dark object stays visible (2 %
@@ -80,6 +81,13 @@ const GEOMETRIC_BLENDED_PROPERTIES : Array[StringName] = [&"haze_visibility"]
 ## mean g is 0.75 times this; about 0.97 for marine haze (coarse sea salt), 0.98
 ## for fog droplets. Higher makes the glow around the sun smaller.
 @export_range(0.0, 0.99, 0.01) var haze_anisotropy := 0.97
+
+@export_group("Stars")
+## How much the stars twinkle (the air's turbulence): the spread of the log of a
+## star's brightness at the zenith. It grows toward the horizon with the air
+## mass to the power 1.5, where stars also flash in colour. About 0.1 in calm air,
+## 0.3 in turbulent air (a strong jet stream, a cold front passing).
+@export_range(0.0, 1.0, 0.01) var star_scintillation := 0.15
 
 
 ## Sets every blended field to the interpolation between two presets.

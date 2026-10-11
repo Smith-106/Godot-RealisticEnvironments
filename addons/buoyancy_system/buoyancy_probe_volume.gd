@@ -55,38 +55,25 @@ const DEBUG_SHOW_WATERLINE_CONVEX_HULL := true
 @export_range(0, 256, 1) var fx_probe_count := 24
 ## Default fully-submerged volume assigned to each generated physical probe.
 @export_range(0.001, 100000.0, 0.001, "or_greater") var generated_probe_volume_cubic_meters := 1.0
-## Default vertical water column height assigned to each generated physical probe.
+## Default vertical water column height assigned to each generated physical probe,
+## generated_probe_freeboard included.
 @export_range(0.01, 100.0, 0.01, "or_greater") var generated_probe_buoyancy_height := 1.2
+## Height of each generated physical probe's column top above design_waterline_y.
+## The hull above the waterline (up to the deck or gunwale) is reserve buoyancy: with
+## the column ending at the waterline, waves above it cannot lift the hull.
+@export_range(0.0, 100.0, 0.01, "or_greater") var generated_probe_freeboard := 0.0
 ## Fraction of hull length skipped near bow and stern when placing physical probes.
 @export_range(0.0, 0.45, 0.01) var longitudinal_margin_fraction := 0.08
 ## Editor-only display radius assigned to generated FX/contact probes.
 @export_range(0.01, 5.0, 0.01, "or_greater") var generated_fx_probe_display_radius := 0.12
 ## Automatically generates probes in the editor when this volume has no saved probes.
 @export var editor_auto_generate_if_empty := true
-## Editor action: toggle on to regenerate physical probes from source_paths.
-@export var editor_generate_physical_probes := false :
-	set(value):
-		if not value:
-			editor_generate_physical_probes = false
-			return
-		editor_generate_physical_probes = false
-		generate_physical_probes_from_source()
-## Editor action: toggle on to regenerate FX/contact probes from source_paths.
-@export var editor_generate_fx_probes := false :
-	set(value):
-		if not value:
-			editor_generate_fx_probes = false
-			return
-		editor_generate_fx_probes = false
-		generate_fx_probes_from_source()
-## Editor action: toggle on to regenerate both physical and FX/contact probes.
-@export var editor_generate_all_probes := false :
-	set(value):
-		if not value:
-			editor_generate_all_probes = false
-			return
-		editor_generate_all_probes = false
-		generate_all_probes_from_source()
+## Regenerates physical probes from source_paths.
+@export_tool_button("Generate Physical Probes", "Reload") var generate_physical_probes_action := generate_physical_probes_from_source
+## Regenerates FX/contact probes from source_paths.
+@export_tool_button("Generate FX Probes", "Reload") var generate_fx_probes_action := generate_fx_probes_from_source
+## Regenerates both physical and FX/contact probes.
+@export_tool_button("Generate All Probes", "Reload") var generate_all_probes_action := generate_all_probes_from_source
 
 @export_group("Probe Defaults")
 ## Default forward/back water drag multiplier assigned to generated physical probes.
@@ -161,6 +148,8 @@ func _ready() -> void:
 	_queue_debug_rebuild()
 
 
+## Editor only: replaces the generated physical and contact probes with new ones from the
+## waterline outline of the meshes under source_paths. Save the scene to keep them.
 func generate_all_probes_from_source() -> void:
 	if not Engine.is_editor_hint():
 		push_warning("Buoyancy probes can only be generated in the editor. Generate and save probes before running the scene.")
@@ -177,6 +166,7 @@ func generate_all_probes_from_source() -> void:
 	print("BuoyancyProbeVolume generated %d physical probes and %d FX probes from %d waterline segments in %.2f ms: %s" % [physical_count, fx_count, int(context.get("segment_count", 0)), elapsed_msec, str(get_path())])
 
 
+## Editor only: replaces only the generated physical (force) probes.
 func generate_physical_probes_from_source() -> void:
 	if not Engine.is_editor_hint():
 		push_warning("Buoyancy probes can only be generated in the editor. Generate and save probes before running the scene.")
@@ -191,6 +181,7 @@ func generate_physical_probes_from_source() -> void:
 	print("BuoyancyProbeVolume generated %d physical probes from %d waterline segments in %.2f ms: %s" % [physical_count, int(context.get("segment_count", 0)), elapsed_msec, str(get_path())])
 
 
+## Editor only: replaces only the generated contact (FX) probes.
 func generate_fx_probes_from_source() -> void:
 	if not Engine.is_editor_hint():
 		push_warning("FX probes can only be generated in the editor. Generate and save probes before running the scene.")
@@ -234,7 +225,7 @@ func _generate_physical_probes(root: Node, context: Dictionary) -> int:
 	for spec in physical_specs:
 		var probe : Node3D = PHYSICAL_PROBE_SCRIPT.new()
 		probe.name = "Probe_%03d" % physical_count
-		probe.position = Vector3(float(spec["x"]), design_waterline_y, float(spec["z"]))
+		probe.position = Vector3(float(spec["x"]), design_waterline_y + generated_probe_freeboard, float(spec["z"]))
 		probe.set(&"max_submerged_volume_cubic_meters", generated_probe_volume_cubic_meters)
 		probe.set(&"buoyancy_height", generated_probe_buoyancy_height)
 		probe.set(&"longitudinal_water_drag_multiplier", generated_probe_longitudinal_drag_multiplier)
@@ -269,6 +260,13 @@ func _finalize_generation() -> void:
 	_invalidate_probe_cache()
 	_connect_probe_signals()
 	_queue_debug_rebuild()
+	update_configuration_warnings()
+
+
+func _get_configuration_warnings() -> PackedStringArray:
+	if _get_physical_probes().is_empty():
+		return PackedStringArray(["No buoyancy probes: the body does not float. Set source_paths to the hull meshes, press Generate All Probes, and save the scene."])
+	return PackedStringArray()
 
 
 ## States of the enabled physical probes, created once per probe and reused.
@@ -305,6 +303,7 @@ func _get_or_create_state(probe : Node3D, is_fx_probe : bool, tag : String, ente
 	return _states_by_probe[key]
 
 
+## Called by BuoyantBody each tick with the body's centre of mass and forces, for the debug draw.
 func set_debug_body_state(center_of_mass_world: Vector3, gravity_force: Vector3, external_force: Vector3, has_state: bool) -> void:
 	if not debug_enabled:
 		return
@@ -354,12 +353,12 @@ func _deduplicate_vector2_points(points: Array) -> Array:
 	var result : Array = []
 	for point in points:
 		var p : Vector2 = point
-		var duplicate := false
+		var is_duplicate := false
 		for existing in result:
 			if p.distance_squared_to(existing) <= EPSILON * EPSILON:
-				duplicate = true
+				is_duplicate = true
 				break
-		if not duplicate:
+		if not is_duplicate:
 			result.push_back(p)
 	return result
 
@@ -401,7 +400,8 @@ func _build_physical_probe_specs(hull_points: Array, bounds: AABB) -> Array[Dict
 	var specs : Array[Dictionary] = []
 	var target_count := maxi(physical_probe_count, 1)
 	if mirror_across_yz_plane:
-		var pair_count := int(target_count / 2)
+		@warning_ignore("integer_division")
+		var pair_count := target_count / 2
 		var station_count := maxi(pair_count, 1)
 		for station_index in station_count:
 			var z := _get_station_z(station_index, station_count, bounds)
@@ -414,7 +414,8 @@ func _build_physical_probe_specs(hull_points: Array, bounds: AABB) -> Array[Dict
 				specs.push_back({"x": symmetry_plane_x - x_offset, "z": z})
 				specs.push_back({"x": symmetry_plane_x + x_offset, "z": z})
 		if target_count % 2 != 0:
-			var z := _get_station_z(int(station_count / 2), station_count, bounds)
+			@warning_ignore("integer_division")
+			var z := _get_station_z(station_count / 2, station_count, bounds)
 			specs.push_back({"x": symmetry_plane_x, "z": z})
 	else:
 		for station_index in target_count:
@@ -434,7 +435,8 @@ func _build_fx_probe_specs(hull_points: Array, bounds: AABB) -> Array[Dictionary
 	var specs : Array[Dictionary] = []
 	if fx_probe_count <= 0:
 		return specs
-	var pair_count := maxi(int(fx_probe_count / 2), 1)
+	@warning_ignore("integer_division")
+	var pair_count := maxi(fx_probe_count / 2, 1)
 	for station_index in pair_count:
 		var z := _get_station_z(station_index, pair_count, bounds)
 		var interval := _get_hull_interval_at_z(hull_points, bounds, z)
@@ -923,11 +925,11 @@ func _add_debug_body_net_force() -> void:
 	_add_debug_arrow(center_world, external_force, DEBUG_BODY_FORCE_SCALE)
 
 
-func _add_debug_arrow(start_world: Vector3, force: Vector3, scale: float) -> void:
+func _add_debug_arrow(start_world: Vector3, force: Vector3, force_scale: float) -> void:
 	if force.length_squared() <= 0.0001:
 		return
 	var start_local := to_local(start_world)
-	var end_local := to_local(start_world + force * scale)
+	var end_local := to_local(start_world + force * force_scale)
 	_add_debug_vertex(start_local)
 	_add_debug_vertex(end_local)
 	_add_arrowhead(end_local, start_local)

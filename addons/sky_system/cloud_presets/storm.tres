@@ -1,6 +1,6 @@
-[gd_resource type="Resource" script_class="CloudPreset" format=3]
+[gd_resource type="Resource" script_class="CloudPreset" format=3 uid="uid://c4yip4cm1nf7f"]
 
-[ext_resource type="Script" path="res://addons/sky_system/cloud_preset.gd" id="1_cloud_preset"]
+[ext_resource type="Script" uid="uid://ufgpbpby4f06" path="res://addons/sky_system/cloud_preset.gd" id="1_cloud_preset"]
 
 [resource]
 script = ExtResource("1_cloud_preset")
@@ -16,10 +16,8 @@ detail_scale = 1600.0
 detail_erosion = 0.3
 density = 3.0
 density_variation = 0.35
-scattering_albedo = 0.6
 evolution_speed = 0.008
 sun_light_scale = 0.06
-ambient_light_scale = 0.45
 haze_visibility = 3000.0
 haze_scale_height = 700.0
 haze_anisotropy = 0.96

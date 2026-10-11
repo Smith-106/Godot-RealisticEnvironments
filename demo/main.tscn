@@ -2,64 +2,17 @@
 
 [ext_resource type="Script" uid="uid://dj3qlu7uupdmi" path="res://demo/main.gd" id="1_skarq"]
 [ext_resource type="Script" uid="uid://cqbpvt36rest3" path="res://addons/ocean_system/wave_cascade_parameters.gd" id="2_pw5n6"]
-[ext_resource type="Script" uid="uid://bw2332cbm64tv" path="res://addons/sky_system/sky_profile.gd" id="3_nr2wj"]
 [ext_resource type="PackedScene" uid="uid://c4amd8o0cttut" path="res://systems/camera/player_camera_rig.tscn" id="4_camera_rig"]
 [ext_resource type="PackedScene" uid="uid://lsh7kr3nyl2t" path="res://addons/ocean_system/ocean_system.tscn" id="7_s0x5e"]
-[ext_resource type="PlaneMesh" path="res://addons/ocean_system/editor_water_preview_mesh.tres" id="8_fdg1k"]
 [ext_resource type="PackedScene" uid="uid://bm4bg7uoyr0xy" path="res://systems/debug/ocean_debug_panel.tscn" id="9_gb4mm"]
 [ext_resource type="Script" uid="uid://btyuqnmfuyrr6" path="res://addons/wind_system/wind_system.gd" id="10_tfjfv"]
 [ext_resource type="PackedScene" uid="uid://ckdc57htjsaad" path="res://addons/sky_system/sky_system.tscn" id="11_sky"]
 [ext_resource type="PackedScene" uid="uid://cr5sv0avc8dug" path="res://demo/buoy.tscn" id="13_fdg1k"]
 [ext_resource type="PackedScene" uid="uid://b2pleaxvcdai8" path="res://demo/floating_box.tscn" id="13_floating_box"]
 [ext_resource type="Script" uid="uid://b372vvbghwlxx" path="res://systems/hud/compass_hud.gd" id="14_compass"]
+[ext_resource type="Script" uid="uid://chrxdfdli1lpb" path="res://addons/exposure_system/exposure_controller.gd" id="16_exposure"]
 [ext_resource type="PackedScene" uid="uid://cu6jvrb4ikqbo" path="res://demo/rowboat.tscn" id="15_rowboat"]
-
-[sub_resource type="Curve" id="Curve_fdg1k"]
-_limits = [0.0, 2.0, 0.0, 1.0]
-_data = [Vector2(0, 0.035), 0.0, 0.0, 0, 0, Vector2(0.25, 0.22), 0.0, 0.0, 0, 0, Vector2(0.5, 0.65), 0.0, 0.0, 0, 0, Vector2(0.75, 0.22), 0.0, 0.0, 0, 0, Vector2(1, 0.035), 0.0, 0.0, 0, 0]
-point_count = 5
-
-[sub_resource type="Gradient" id="Gradient_ucu34"]
-offsets = PackedFloat32Array(0, 0.25, 0.5, 0.75, 1)
-colors = PackedColorArray(0.35, 0.45, 0.7, 1, 0.16, 0.2, 0.32, 1, 0.02, 0.025, 0.04, 1, 0.16, 0.2, 0.32, 1, 0.35, 0.45, 0.7, 1)
-
-[sub_resource type="Curve" id="Curve_f8mb2"]
-_limits = [0.0, 2.0, 0.0, 1.0]
-_data = [Vector2(0, 0.045), 0.0, 0.0, 0, 0, Vector2(0.22, 0.018), 0.0, 0.0, 0, 0, Vector2(0.3, 0), 0.0, 0.0, 0, 0, Vector2(0.7, 0), 0.0, 0.0, 0, 0, Vector2(0.78, 0.018), 0.0, 0.0, 0, 0, Vector2(1, 0.045), 0.0, 0.0, 0, 0]
-point_count = 6
-
-[sub_resource type="Gradient" id="Gradient_ykfgg"]
-offsets = PackedFloat32Array(0, 0.25, 0.5, 0.75, 1)
-colors = PackedColorArray(0.015, 0.018, 0.035, 1, 1, 0.46, 0.22, 1, 0.58, 0.78, 0.94, 1, 1, 0.36, 0.18, 1, 0.015, 0.018, 0.035, 1)
-
-[sub_resource type="Gradient" id="Gradient_4bnku"]
-offsets = PackedFloat32Array(0, 0.25, 0.5, 0.75, 1)
-colors = PackedColorArray(0.005, 0.008, 0.018, 1, 0.36, 0.3, 0.42, 1, 0.12, 0.42, 0.78, 1, 0.38, 0.24, 0.34, 1, 0.005, 0.008, 0.018, 1)
-
-[sub_resource type="Curve" id="Curve_dls5p"]
-_limits = [0.0, 2.0, 0.0, 1.0]
-_data = [Vector2(0, 0), 0.0, 0.0, 0, 0, Vector2(0.35, 0), 0.0, 0.0, 0, 0, Vector2(0.7, 0.85), 0.0, 0.0, 0, 0, Vector2(1, 1), 0.0, 0.0, 0, 0]
-point_count = 4
-
-[sub_resource type="Gradient" id="Gradient_haa2m"]
-offsets = PackedFloat32Array(0, 0.25, 0.5, 0.75, 1)
-colors = PackedColorArray(0.05, 0.07, 0.12, 1, 1, 0.48, 0.22, 1, 1, 0.96, 0.82, 1, 1, 0.42, 0.18, 1, 0.05, 0.07, 0.12, 1)
-
-[sub_resource type="Curve" id="Curve_27lkm"]
-_limits = [0.0, 2.0, 0.0, 1.0]
-_data = [Vector2(0, 0), 0.0, 0.0, 0, 0, Vector2(0.23, 0), 0.0, 0.0, 0, 0, Vector2(0.3, 0.65), 0.0, 0.0, 0, 0, Vector2(0.5, 1.25), 0.0, 0.0, 0, 0, Vector2(0.7, 0.65), 0.0, 0.0, 0, 0, Vector2(0.77, 0), 0.0, 0.0, 0, 0, Vector2(1, 0), 0.0, 0.0, 0, 0]
-point_count = 7
-
-[sub_resource type="Resource" id="Resource_msmub"]
-script = ExtResource("3_nr2wj")
-sun_color_gradient = SubResource("Gradient_haa2m")
-moon_color_gradient = SubResource("Gradient_ucu34")
-sky_top_gradient = SubResource("Gradient_4bnku")
-sky_horizon_gradient = SubResource("Gradient_ykfgg")
-sun_energy_curve = SubResource("Curve_27lkm")
-moon_energy_curve = SubResource("Curve_f8mb2")
-star_visibility_curve = SubResource("Curve_dls5p")
-ambient_energy_curve = SubResource("Curve_fdg1k")
+[ext_resource type="PackedScene" path="res://demo/underwater_showcase.tscn" id="17_underwater"]
 
 [sub_resource type="Resource" id="Resource_adqv5"]
 script = ExtResource("2_pw5n6")
@@ -108,8 +61,12 @@ script = ExtResource("1_skarq")
 time_of_day = 0.3
 cycle_enabled = false
 cycle_duration_seconds = 30.0
-profile = SubResource("Resource_msmub")
 cloud_wind_source_path = NodePath("../WindSystem")
+
+[node name="ExposureController" type="Node" parent="." unique_id=1520734419]
+script = ExtResource("16_exposure")
+light_source_path = NodePath("../SkySystem")
+target_path = NodePath("../SkySystem/WorldEnvironment")
 
 [node name="PlayerCameraRig" parent="." unique_id=436407652 instance=ExtResource("4_camera_rig")]
 active_mode = 0
@@ -124,10 +81,7 @@ script = ExtResource("10_tfjfv")
 wind_direction = 0.0
 
 [node name="Water" parent="." unique_id=1159832475 instance=ExtResource("7_s0x5e")]
-extra_cull_margin = 362.03867
 gi_mode = 0
-mesh = ExtResource("8_fdg1k")
-skeleton = NodePath("")
 sky_source_path = NodePath("../SkySystem")
 interaction_viscosity = 0.05
 use_external_wind = true
@@ -160,6 +114,9 @@ debug_enabled = true
 
 [node name="Buoy" parent="." unique_id=2077650632 instance=ExtResource("13_fdg1k")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 146.46655, 2.0000153, -97.32648)
+
+[node name="UnderwaterShowcase" parent="." instance=ExtResource("17_underwater")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 6)
 
 [node name="Caravel" parent="." unique_id=1779372444 instance=ExtResource("13_floating_box")]
 transform = Transform3D(0.63730067, 0, -0.7706152, 0, 1, 0, 0.7706152, 0, 0.63730067, -13.774445, 0, -15.14146)
