@@ -1,7 +1,7 @@
 class_name CloudRenderer
 extends RefCounted
 ## Renders volumetric clouds into [member cubemap] with compute shaders on the
-## main RenderingDevice. Owned by SkySystem; see the sky_system README.
+## main RenderingDevice. Owned by SkySystem.
 ##
 ## Per frame: the weather pass writes a camera-centred coverage/type/density map,
 ## the raymarch pass refreshes 1 / update_stride^2 of the cubemap texels, and the

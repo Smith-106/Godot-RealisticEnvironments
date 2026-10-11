@@ -1,18 +1,17 @@
 # Core
 
-The shared foundation of the ocean addons. Every `*_system` addon may depend on
-`core`; `core` depends on nothing, and the systems never depend on each other.
-Anything two systems need goes here.
+Shared code for the ocean addons. Every `*_system` addon may depend on `core`;
+`core` depends on nothing, and the systems never depend on each other.
 
-## Water surface contract
+## `WaterSurface`
 
-`WaterSurface` (abstract, `RefCounted`) is how anything that floats on water or
-disturbs it talks to a water simulation, without knowing which one. A
-simulation registers one surface per `World3D`; consumers look it up:
+How anything that floats on or disturbs water talks to a water simulation
+without knowing which one. A simulation registers one surface per `World3D`
+(`ocean_system` does); consumers look it up:
 
 ```gdscript
-var water := WaterSurface.find(self)  # null when the world has no water
-water.submit_query(self, points)      # every physics tick
+var water := WaterSurface.find(self)        # null when the world has no water
+water.submit_query(self, points)            # every physics tick
 var result := water.get_query_result(self)  # null until the first readback
 if result != null:
 	var height := result.samples[0].extrapolated_height(water.get_query_age(result))
@@ -20,66 +19,21 @@ if result != null:
 water.release_query(self)
 ```
 
-| Member | Purpose |
-| --- | --- |
-| `static register(world, surface)`, `static unregister(world, surface)` | Called by the simulation when it enters / leaves the tree. One surface per world; a second registration is an error. |
-| `static find(node) -> WaterSurface` | The surface of `node`'s world, or `null`. |
-| `submit_query(owner, points, body = null)` | Queue points; the latest submission per owner wins. `body` (default: the owner's nearest `PhysicsBody3D`) lets the simulation leave out waves that body makes itself. |
-| `get_query_result(owner) -> WaterSurfaceQueryResult` | Latest completed result, or `null`. Its points belong to its dispatch, not to the latest submission. |
-| `get_query_age(result) -> float` | Seconds from the result's dispatch to now (the start of the current physics tick inside one), for `WaterSurfaceSample.extrapolated_height()`. |
-| `release_query(owner)` | Forget an owner. |
-| `get_clock() -> float` | The clock `dispatch_time` is measured on. |
-| `can_add_impulses()`, `add_impulse(position, radius, amplitude)` | Splashes in the simulation's dynamic waves, when it runs them: the surface is raised by a Gaussian of `amplitude` meters at rest and spreads as a ring, independent of the tick rate. |
+- Results arrive a few frames late; extrapolate with `get_query_age()`. A
+  result's `points` are those of its dispatch, not your latest submission.
+- `submit_query(owner, points, body)`: `body` (default: the owner's nearest
+  `PhysicsBody3D`) lets the simulation leave out waves that body makes itself.
+- Each `WaterSurfaceSample` has `height`, `normal`, `displacement`,
+  `surface_velocity` and `extrapolated_height(age)`.
+- `can_add_impulses()` / `add_impulse(position, radius, amplitude)` add a
+  splash that spreads as a ring.
 
-`WaterSurfaceQueryResult` holds `points`, `samples` (`samples[i]` answers
-`points[i]`) and `dispatch_time`. `WaterSurfaceSample` holds the surface
-`height`, `normal`, `displacement` and `surface_velocity` over a point, and
-`extrapolated_height(age)` to hide the readback latency.
+## Other helpers
 
-Implemented by `ocean_system` (`OceanSurfaceQueries`, registered by
-`OceanSystem`). Used by `buoyancy_system` and `boat_template`.
-
-## Rendering helpers
-
-`RenderingContext` owns the `RenderingDevice` resources of one compute feature
-and frees them together, newest first, when it is freed:
-
-- `own(rid)` for anything created directly on the device; creation helpers for
-  textures of any type (`create_texture_rid`, `create_texture` for 2D and 2D
-  arrays), storage buffers, samplers, uniform sets, compute pipelines and
-  single-mip slice views;
-- `load_shader(path, version)` / `load_shader_file(file, version)`, cached per
-  file and `#[versions]` entry;
-- static `image_uniform`, `sampled_uniform`, `buffer_uniform` and
-  `linear_sampler_state`;
-- static `create_push_constant(values)` (ints and bools as `int32`, the rest as
-  `float32`) and `create_float_push_constant(values)` (all `float32`), at the
-  exact byte size the shader declares (no 16-byte padding).
-
-A failed creation (a shader that does not compile, an invalid RID) is reported
-with `push_error` and sets `failed`; owners check it after building their
-resources and disable their feature.
-
-## Editor helpers
-
-`HullSlicer` gathers triangles from mesh instances and slices them with
-horizontal planes, for hull profile baking (`ocean_system`) and probe
-generation (`buoyancy_system`).
-
-## Project setup
-
-`ProjectSetup` is what the addons' editor plugins use to add the project
-settings they need when enabled (global shader uniforms, registered with the
-editor's RenderingServer at once; input actions; rendering options). It only
-adds what is missing, never changes or removes a value, then saves
-`project.godot` once and prints what it added.
-
-## Files
-
-| File | Role |
-| --- | --- |
-| `water_surface.gd` | `WaterSurface` contract and per-world registry |
-| `water_surface_query_result.gd`, `water_surface_sample.gd` | Query result types |
-| `rendering_context.gd` | `RenderingContext` RenderingDevice helper |
-| `hull_slicer.gd` | `HullSlicer` mesh slicing |
-| `project_setup.gd` | `ProjectSetup` project settings for the plugins |
+- `RenderingContext` — owns a compute feature's `RenderingDevice` resources
+  and frees them together; shader loading, buffers, textures, uniform sets and
+  exact-size push constants. Check `failed` after building resources.
+- `HullSlicer` — slices hull meshes with horizontal planes (hull profiles,
+  buoyancy probes).
+- `ProjectSetup` — used by the editor plugins to add missing project settings
+  (global shader uniforms, input actions); never changes existing values.

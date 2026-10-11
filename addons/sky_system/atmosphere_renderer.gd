@@ -1,7 +1,7 @@
 class_name AtmosphereRenderer
 extends RefCounted
 ## Builds the atmosphere's lookup textures with compute shaders on the main
-## RenderingDevice, once per frame. Owned by SkySystem; see the sky_system README.
+## RenderingDevice, once per frame. Owned by SkySystem.
 ##
 ## The atmosphere model lives only in these passes (shaders/compute/atmosphere_*.glsl):
 ## every consumer (sky, starfield, aerial perspective, water, transparent materials,

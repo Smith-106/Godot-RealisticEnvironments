@@ -34,8 +34,7 @@ eye-like exposure, and floating bodies and boats that ride it all.
   together in one scene. Plugins set up the project; misconfigured nodes show
   editor warnings.
 
-Each addon's README lists its visual effects in detail and explains how it
-works.
+Each addon has a short README on what it does and how to set it up.
 
 ## Requirements
 
@@ -129,8 +128,8 @@ demo/                    Demo scenes, ship/buoy instances and third-party assets
 tools/                   Development scripts (gd_lint.py: GDScript warnings via the editor's language server; bakers for the star catalog, the Milky Way and the example hull)
 ```
 
-Each addon has a `README.md` describing what it does, how to use it and how it
-works inside. `systems/README.md` covers the demo support code. `AGENTS.md`
+Each addon has a short `README.md` on what it does and how to use it; the
+scripts' `##` doc comments document the API. `systems/README.md` covers the demo support code. `AGENTS.md`
 holds the working rules for anyone (human or agent) changing the code;
 `CONTRIBUTING.md` explains how to report problems and send changes, and
 `CHANGELOG.md` lists what changed.

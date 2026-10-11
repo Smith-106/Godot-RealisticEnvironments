@@ -2,7 +2,7 @@
 
 Thanks for helping. This file covers how to report problems and how to send
 changes; `AGENTS.md` holds the detailed working rules for the code (for people
-and coding agents alike), and each addon's `README.md` explains how it works.
+and coding agents alike), and each addon's `README.md` explains how to use it.
 
 ## Scope
 
@@ -42,9 +42,9 @@ Please include:
    `demo/ocean_optics_debug.tscn` for water shading. Headless runs have no
    `RenderingDevice`, so they catch script errors but not rendering ones.
 5. Document new public members with `##` comments (they become the inspector
-   tooltips and the editor's class reference), update the addon's `README.md`
-   (and `AGENTS.md` if a rule changes) in the same change, and add a line to
-   `CHANGELOG.md` under *Unreleased*.
+   tooltips and the editor's class reference), update the addon's short
+   `README.md` if setup or usage changes (and `AGENTS.md` if a rule changes)
+   in the same change, and add a line to `CHANGELOG.md` under *Unreleased*.
 
 Generated files (`addons/sky_system/stars/*`, `examples/assets/simple_hull.*`,
 baked hull profiles and buoyancy probes) are regenerated with their tools or
