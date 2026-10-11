@@ -319,6 +319,8 @@ var _moon_direction := Vector3.DOWN
 var _sun_visibility := 1.0
 var _moon_visibility := 0.0
 var _moon_phase := 1.0
+## The moon's light as a share of the full moon's (_lunar_phase_brightness()).
+var _moon_brightness := 1.0
 ## Colours of the sun's and the moon's light at the sea (brightest channel 1): white
 ## light coloured by the atmosphere along their direction.
 var _sun_color := Color.WHITE
@@ -675,6 +677,7 @@ func _update_lighting_state() -> void:
 	var moon_state := _get_moon_state()
 	_moon_direction = moon_state["direction"]
 	_moon_phase = float(moon_state["phase"])
+	_moon_brightness = float(moon_state["brightness"])
 	_sun_visibility = _disk_above_horizon(_sun_direction.y, SUN_ANGULAR_RADIUS)
 	_moon_visibility = _disk_above_horizon(_moon_direction.y, MOON_ANGULAR_RADIUS)
 	_update_haze_medium()
@@ -743,10 +746,20 @@ func _get_sun_energy() -> float:
 	return SOLAR_ENERGY * sun_energy_multiplier
 
 
-## The moon's light energy above the atmosphere: the full moon's times the lit share
-## of its disk.
+## The moon's light energy above the atmosphere: the full moon's times its phase's
+## brightness (_lunar_phase_brightness()).
 func _get_moon_energy() -> float:
-	return MOON_ENERGY * moon_energy_multiplier * _moon_phase
+	return MOON_ENERGY * moon_energy_multiplier * _moon_brightness
+
+
+## The moon's light at phase angle (rad, sun-moon-earth: 0 full) as a share of the full
+## moon's, from its measured V magnitudes (Allen; Krisciunas and Schaefer 1991):
+## 0.026 |a| + 4e-9 a^4 magnitudes fainter (a in degrees). Its rough surface shadows
+## itself away from full, so it dims far faster than its lit share: about 9 % at a
+## quarter, where half the disk is lit.
+static func _lunar_phase_brightness(phase_angle : float) -> float:
+	var degrees := rad_to_deg(absf(phase_angle))
+	return pow(10.0, -0.4 * (0.026 * degrees + 4e-9 * pow(degrees, 4.0)))
 
 
 ## Luminance of a light's irradiance (scene units) on a level surface at the sea.
@@ -918,6 +931,9 @@ func _update_environment(sun_direction : Vector3, moon_direction : Vector3, sun_
 	shader_material.set_shader_parameter(&"moon_irradiance", Vector3(_moon_irradiance.r, _moon_irradiance.g, _moon_irradiance.b))
 	shader_material.set_shader_parameter(&"moon_visibility", moon_visibility if render_bodies_in_sky else 0.0)
 	shader_material.set_shader_parameter(&"moon_phase", _moon_phase)
+	# The lit part's radiance as a share of the full moon's (at most 1: the formula
+	# overshoots near new moon, where the lit share goes to 0).
+	shader_material.set_shader_parameter(&"moon_surface_brightness", minf(_moon_brightness / maxf(_moon_phase, 1e-6), 1.0))
 	shader_material.set_shader_parameter(&"milky_way_basis", get_star_basis())
 	shader_material.set_shader_parameter(&"milky_way_scale", MILKY_WAY_UNIT * get_star_radiance_scale())
 	_radiance_observer_altitude = _get_atmosphere_observer_altitude()
@@ -1115,7 +1131,7 @@ func _update_visual_colors(sun_visibility : float, moon_visibility : float) -> v
 			_moon_visual.visible = false
 		return
 	_set_visual_color(_sun_visual, _sun_color, sun_visibility)
-	_set_visual_color(_moon_visual, _moon_color, moon_visibility * _moon_phase)
+	_set_visual_color(_moon_visual, _moon_color, moon_visibility * _moon_brightness)
 
 
 func _set_visual_color(visual : MeshInstance3D, color : Color, visibility : float) -> void:
@@ -1179,6 +1195,7 @@ func _get_moon_state() -> Dictionary:
 	return {
 		"direction": _equatorial_to_horizontal_direction(declination, hour_angle),
 		"phase": phase,
+		"brightness": _lunar_phase_brightness(PI - phase_angle),
 	}
 
 

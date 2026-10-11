@@ -10,8 +10,8 @@
 [ext_resource type="PackedScene" uid="uid://cr5sv0avc8dug" path="res://demo/buoy.tscn" id="13_fdg1k"]
 [ext_resource type="PackedScene" uid="uid://b2pleaxvcdai8" path="res://demo/floating_box.tscn" id="13_floating_box"]
 [ext_resource type="Script" uid="uid://b372vvbghwlxx" path="res://systems/hud/compass_hud.gd" id="14_compass"]
-[ext_resource type="Script" uid="uid://chrxdfdli1lpb" path="res://addons/exposure_system/exposure_controller.gd" id="16_exposure"]
 [ext_resource type="PackedScene" uid="uid://cu6jvrb4ikqbo" path="res://demo/rowboat.tscn" id="15_rowboat"]
+[ext_resource type="Script" uid="uid://chrxdfdli1lpb" path="res://addons/exposure_system/exposure_controller.gd" id="16_exposure"]
 [ext_resource type="PackedScene" path="res://demo/underwater_showcase.tscn" id="17_underwater"]
 
 [sub_resource type="Resource" id="Resource_adqv5"]
@@ -58,15 +58,19 @@ foam_lifetime = 0.8
 script = ExtResource("1_skarq")
 
 [node name="SkySystem" parent="." unique_id=447290062 instance=ExtResource("11_sky")]
-time_of_day = 0.3
+time_of_day = 0.0
 cycle_enabled = false
 cycle_duration_seconds = 30.0
+latitude_degrees = 20.0
+day_of_year = 172.0
+lunar_age_days = 0.0
 cloud_wind_source_path = NodePath("../WindSystem")
 
 [node name="ExposureController" type="Node" parent="." unique_id=1520734419]
 script = ExtResource("16_exposure")
 light_source_path = NodePath("../SkySystem")
 target_path = NodePath("../SkySystem/WorldEnvironment")
+adapt_to_view = null
 
 [node name="PlayerCameraRig" parent="." unique_id=436407652 instance=ExtResource("4_camera_rig")]
 active_mode = 0
@@ -110,12 +114,12 @@ script = ExtResource("14_compass")
 [node name="Rowboat" parent="." unique_id=1766651400 instance=ExtResource("15_rowboat")]
 transform = Transform3D(0.69116926, 0, -0.72269297, 0, 1, 0, 0.72269297, 0, 0.69116926, 0, 0, 0)
 player_controlled = true
-debug_enabled = true
 
 [node name="Buoy" parent="." unique_id=2077650632 instance=ExtResource("13_fdg1k")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 146.46655, 2.0000153, -97.32648)
+visible = false
 
-[node name="UnderwaterShowcase" parent="." instance=ExtResource("17_underwater")]
+[node name="UnderwaterShowcase" parent="." unique_id=30121161 instance=ExtResource("17_underwater")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 6)
 
 [node name="Caravel" parent="." unique_id=1779372444 instance=ExtResource("13_floating_box")]

@@ -27,7 +27,11 @@ uniform vec4 moon_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform vec3 moon_irradiance = vec3(0.1);
 uniform float moon_visibility : hint_range(0.0, 1.0) = 0.0;
 uniform float moon_disk_size : hint_range(0.001, 0.05) = 0.00465;
+// Lit share of the disk.
 uniform float moon_phase : hint_range(0.0, 1.0) = 1.0;
+// Radiance of the lit part as a share of the full moon's: its rough surface dims it
+// away from full (SkySystem._lunar_phase_brightness() over the lit share).
+uniform float moon_surface_brightness : hint_range(0.0, 1.0) = 1.0;
 
 // Volumetric clouds rendered by CloudRenderer: rgb is premultiplied radiance,
 // a is opacity. SkySystem sets both through the RenderingServer so the runtime
@@ -106,14 +110,14 @@ void sky() {
 	// radiance of a white diffuser in their light): disks that bright would sparkle in
 	// every glossy reflection.
 	vec3 sun_disk_color = sun_irradiance / (PI * sun_disk_size * sun_disk_size);
-	vec3 moon_disk_color = moon_irradiance / (PI * moon_disk_size * moon_disk_size);
+	vec3 moon_disk_color = moon_irradiance * moon_surface_brightness / (PI * moon_disk_size * moon_disk_size);
 	vec3 sun_halo_color = vec3(0.0);
 	vec3 moon_halo_color = vec3(0.0);
 	if (AT_CUBEMAP_PASS) {
 		sun_disk_color = sun_irradiance / PI * radiance_sun_disk_strength;
-		moon_disk_color = moon_irradiance / PI * radiance_sun_disk_strength;
+		moon_disk_color = moon_irradiance * moon_surface_brightness / PI * radiance_sun_disk_strength;
 		sun_halo_color = sun_irradiance / PI * radiance_sun_halo_strength;
-		moon_halo_color = moon_irradiance / PI * radiance_sun_halo_strength * moon_phase;
+		moon_halo_color = moon_irradiance * moon_surface_brightness / PI * radiance_sun_halo_strength * moon_phase;
 	}
 	vec3 space = (sun_disk_color * sun_disk + sun_halo_color * sun_halo) * sun_visibility
 			+ (moon_disk_color * moon_disk * moon_lit + moon_halo_color * moon_halo) * moon_visibility;
