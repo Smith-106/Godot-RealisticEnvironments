@@ -3,11 +3,13 @@ class_name ExposureController
 extends Node
 ## Sets a camera's exposure from the light falling on the scene, as an incident-light
 ## meter would, and adapts to it over time as an eye does. It reads a light source (any
-## node with get_scene_illuminance() and get_illuminance_unit_lux(), e.g. SkySystem), not
-## the rendered image, so looking at the sun or the sea does not change it.
+## node with get_scene_illuminance() and get_illuminance_unit_lux(), e.g. SkySystem).
+## With adapt_to_view, a view brighter than that light (a low moon's or sun's glow,
+## bright sky) adapts the eye further, as glare does; a darker one (the sea) does not.
 ##
 ## The meter: a grey card (18 %) in the metered light renders at 0.18 (a white diffuser
-## at 1), times exposure_compensation_ev. With perceptual_adaptation the eye adapts only
+## at 1), times exposure_compensation_ev. The view counts as the light under which a grey
+## card is as bright as its log-average luminance (ViewLuminanceEffect). With perceptual_adaptation the eye adapts only
 ## partly in dim light (Krawczyk, Myszkowski and Seidel 2005, "Lightness perception in
 ## tone reproduction for high dynamic range images"): twilight and night stay darker than
 ## day.
@@ -23,6 +25,10 @@ const GREY_REFLECTANCE := 0.18
 const DAYLIGHT_GREY_LUMINANCE := 1000.0
 ## Grey-card luminance (cd/m2) below which the eye adapts no further (a moonless night).
 const DARKEST_GREY_LUMINANCE := 1e-4
+## Readings above this illuminance (lux; full sun is ~130000) count as it: a sudden jump
+## to daylight overflows the sky's buffers pre-exposed for the night (infinite readings),
+## and an exposure of 0 from them would never recover.
+const BRIGHTEST_ILLUMINANCE := 1e6
 
 ## The node metering the light: get_scene_illuminance() (lux on a level surface at the
 ## camera, negative while unknown) and get_illuminance_unit_lux() (lux of a scene
@@ -53,12 +59,18 @@ const DARKEST_GREY_LUMINANCE := 1e-4
 @export var night_vision := true
 ## How far colours shift toward rod vision (0-1).
 @export_range(0.0, 1.0, 0.01) var night_vision_strength := 1.0
+## Adapt to the view as well: the eye adapts to what it looks at, so a bright glow in
+## view (a low moon in haze) lowers the exposure instead of clipping to white. Measured
+## on the rendered image by a ViewLuminanceEffect added to the target's compositor at
+## runtime; needs a RenderingDevice (Forward+ or Mobile).
+@export var adapt_to_view := true
 
 var _light_source : Node
 var _attributes : CameraAttributes
-## The target's compositor holding _night_vision, and the effect; null without.
+## The target's compositor holding the effects below, which are null without.
 var _compositor : Compositor
 var _night_vision : NightVisionEffect
+var _view_meter : ViewLuminanceEffect
 ## Illuminance (lux) the eye is adapted to; < 0 before the first reading.
 var _adapted_lux := -1.0
 
@@ -85,35 +97,43 @@ func _ready() -> void:
 		push_error("ExposureController %s: target_path must point to a WorldEnvironment or a Camera3D; exposure is fixed." % get_path())
 		set_process(false)
 		return
+	if (adapt_to_view or night_vision) and RenderingServer.get_rendering_device() == null:
+		push_error("ExposureController %s: adapt_to_view and night vision need a RenderingDevice (Forward+ or Mobile renderer); they are off." % get_path())
+		return
+	# The meter runs first: it measures the view before night vision changes it.
+	if adapt_to_view:
+		var meter := ViewLuminanceEffect.new()
+		if meter.is_valid():
+			_add_effect(target, meter)
+			_view_meter = meter
 	if night_vision:
-		_add_night_vision(target)
+		var effect := NightVisionEffect.new()
+		if effect.is_valid():
+			_add_effect(target, effect)
+			_night_vision = effect
 
 
 func _exit_tree() -> void:
-	if _compositor and _night_vision:
+	if _compositor:
 		var effects := _compositor.compositor_effects
+		effects.erase(_view_meter)
 		effects.erase(_night_vision)
 		_compositor.compositor_effects = effects
 	_compositor = null
 	_night_vision = null
+	_view_meter = null
 
 
-## Appends a NightVisionEffect to the target's compositor (created if missing).
-func _add_night_vision(target : Node) -> void:
-	if RenderingServer.get_rendering_device() == null:
-		push_error("ExposureController %s: night vision needs a RenderingDevice (Forward+ or Mobile renderer); it is off." % get_path())
-		return
-	var effect := NightVisionEffect.new()
-	if not effect.is_valid():
-		return
-	_compositor = target.get(&"compositor")
+## Appends effect to the target's compositor (created if missing).
+func _add_effect(target : Node, effect : CompositorEffect) -> void:
+	if _compositor == null:
+		_compositor = target.get(&"compositor")
 	if _compositor == null:
 		_compositor = Compositor.new()
 		target.set(&"compositor", _compositor)
 	var effects := _compositor.compositor_effects
 	effects.push_back(effect)
 	_compositor.compositor_effects = effects
-	_night_vision = effect
 
 
 func _get_configuration_warnings() -> PackedStringArray:
@@ -139,9 +159,13 @@ func _process(delta : float) -> void:
 	if _attributes == null:
 		return
 	var lux : float = _light_source.get_scene_illuminance()
-	if lux < 0.0:
+	if lux < 0.0 or is_nan(lux):
 		return
-	lux = maxf(lux, DARKEST_GREY_LUMINANCE * PI / GREY_REFLECTANCE)
+	if _view_meter:
+		var view_luminance := _view_meter.get_view_luminance()
+		if view_luminance > 0.0:
+			lux = maxf(lux, view_luminance * PI / GREY_REFLECTANCE)
+	lux = clampf(lux, DARKEST_GREY_LUMINANCE * PI / GREY_REFLECTANCE, BRIGHTEST_ILLUMINANCE)
 	if _adapted_lux < 0.0:
 		_adapted_lux = lux
 	else:
@@ -150,8 +174,11 @@ func _process(delta : float) -> void:
 		_adapted_lux = exp(lerpf(log(_adapted_lux), log(lux), weight))
 	var unit_lux : float = _light_source.get_illuminance_unit_lux()
 	_attributes.exposure_multiplier = _get_exposure(_adapted_lux, unit_lux)
+	var luminance_scale := unit_lux / _attributes.exposure_multiplier
+	if _view_meter:
+		_view_meter.luminance_scale = luminance_scale
 	if _night_vision:
-		_night_vision.luminance_scale = unit_lux / _attributes.exposure_multiplier
+		_night_vision.luminance_scale = luminance_scale
 		_night_vision.strength = night_vision_strength
 
 

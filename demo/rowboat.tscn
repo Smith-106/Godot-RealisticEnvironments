@@ -348,6 +348,7 @@ hitbox_group = &"hull"
 shape = SubResource("ConvexPolygonShape3D_c6sjc")
 
 [node name="Weapons" parent="." index="4" unique_id=1799022156]
+visible = false
 min_pitch_degrees = -10.0
 
 [node name="HullWaterFootprint" parent="." index="5" unique_id=1721786654]
@@ -355,6 +356,7 @@ profile = ExtResource("5_2yvxr")
 cutout_height_offset = 0.3
 wake_strength = 2.11
 bake_source_paths = Array[NodePath]([NodePath("../Model/Sketchfab_model/Wooden_boat_fbx/RootNode/Boat/Boat_Boat_texture_0")])
+bake_inset = 0.04
 
 [node name="ThirdPersonFocus" parent="CameraTargets" parent_id_path=PackedInt32Array(1262110883) index="0" unique_id=398705810]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0.3)
@@ -370,19 +372,23 @@ transform = Transform3D(-2.6226834e-08, 0, 0.6, 0, 0.6, 0, -0.6, 0, -2.6226834e-
 
 [node name="SwivelGun" type="Node3D" parent="." index="9" unique_id=147997565]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.03, -2.4)
+visible = false
 
 [node name="Post" type="MeshInstance3D" parent="SwivelGun" index="0" unique_id=1724367206]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.15, 0)
+visible = false
 material_override = SubResource("StandardMaterial3D_5kn8o")
 mesh = SubResource("CylinderMesh_tscx6")
 
 [node name="Barrel" type="MeshInstance3D" parent="SwivelGun" index="1" unique_id=1310809071]
 transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 0, 0.05, -0.2)
+visible = false
 material_override = SubResource("StandardMaterial3D_5kn8o")
 mesh = SubResource("CylinderMesh_x253k")
 
 [node name="ProjectileLauncher" parent="SwivelGun" index="2" unique_id=300448311 instance=ExtResource("7_ojoqu")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.05, -0.7)
+visible = false
 projectile_mass = 2.0
 drag_coefficient = 0.1
 projectile_lifetime = 8.0
