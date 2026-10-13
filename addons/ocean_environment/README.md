@@ -1,36 +1,44 @@
 # Ocean Environment
 
-A drop-in open ocean: `ocean_environment.tscn` holds the wind, sky, ocean and
-exposure, already wired together.
+**English** · [简体中文](README.zh-CN.md)
 
-Depends on `core`, `wind_system`, `sky_system`, `ocean_system` and
+A drop-in open ocean. `ocean_environment.tscn` contains the wind, the sky, the
+ocean and exposure, already connected to each other.
+
+Requires `core`, `wind_system`, `sky_system`, `ocean_system` and
 `exposure_system`.
 
-## Quick start
-
-1. Copy those addons and this one into `addons/` and enable them in
-   Project Settings > Plugins.
-2. Use Forward+, with physical light units off.
-3. Instance `ocean_environment.tscn`; remove any other `WorldEnvironment` or
-   `DirectionalLight3D`.
-4. Add a `Camera3D` whose `far` reaches past the horizon (the demo uses
-   60 000 m) and run.
-
-## Inside
+## How it works
 
 ```
 OceanEnvironment        sea_level for the whole environment
 ├─ WindSystem
 ├─ SkySystem            clouds drift with WindSystem
-├─ Ocean                reflects SkySystem, waves follow WindSystem
+├─ Ocean                waves follow WindSystem, reflects SkySystem
 └─ ExposureController   exposes for SkySystem's light
 ```
 
-- Set `sea_level` on the root; it keeps the ocean and sky in sync.
-- For everything else, enable **Editable Children** and edit the systems
-  (time of day, clouds, wind, wave cascades, quality, exposure).
-- Scripts can reach the systems as `wind`, `sky`, `ocean`, `exposure`.
-- Don't rotate, scale or raise the environment: `sea_level` sets the sea's
-  height.
+The scene only sets the paths between the systems. `OceanEnvironment` adds a
+single setting, `sea_level`, which sets both the ocean's `water_level` and the
+sky's `sea_level` (the two must match).
 
-To float things, see `buoyancy_system`; for a ready boat, `boat_template`.
+## How to use
+
+1. Copy the addons above and this one into `addons/`, and enable them in
+   **Project Settings > Plugins**.
+2. Use the Forward+ renderer, with physical light units off.
+3. Instance `ocean_environment.tscn`. Remove any other `WorldEnvironment` or
+   `DirectionalLight3D`.
+4. Add a `Camera3D` whose `far` reaches past the horizon (the demo uses
+   60 000 m), and run.
+
+- Set the sea's height with `sea_level`. Don't move, rotate or scale the
+  environment.
+- To change anything else (time of day, weather, wind, waves, quality,
+  exposure), right-click the instance, turn on **Editable Children**, and
+  edit the systems. Their READMEs explain the settings.
+- Scripts reach the systems as `wind`, `sky`, `ocean` and `exposure`, e.g.
+  `$OceanEnvironment.sky.time_of_day = 0.75`.
+
+To float objects, see `buoyancy_system`. For a ready-made boat, see
+`boat_template`.

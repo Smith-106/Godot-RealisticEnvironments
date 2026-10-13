@@ -1,8 +1,10 @@
 # Godot-RealisticEnvironments
 
-A physically based open ocean for Godot 4.8: FFT waves out to a curved
-horizon, a real sky with an atmosphere, volumetric clouds and the night sky,
-eye-like exposure, and floating bodies and boats that ride it all.
+**English** · [简体中文](README.zh-CN.md)
+
+A physically based open ocean for Godot 4.8. It has FFT waves out to a curved
+horizon, a physical sky with an atmosphere, volumetric clouds and the night
+sky, eye-like exposure, and bodies and boats that float on the water.
 
 ![Two boats on a fair-weather sea](docs/images/screenshot-hero.jpg)
 
@@ -11,155 +13,124 @@ eye-like exposure, and floating bodies and boats that ride it all.
 | ![Sunset with the sun path on the water](docs/images/screenshot-sunset.jpg) | ![Storm sea under an overcast sky](docs/images/screenshot-storm.jpg) |
 | ![Moonless night with the Milky Way](docs/images/screenshot-night.jpg) | |
 
-## Features
+## How it works
 
-- **Ocean** (`ocean_system`): FFT wave cascades from a JONSWAP spectrum that
-  follow the wind; a level-of-detail mesh to the real horizon; whitecaps, wake
-  and bow foam; Kelvin wakes, bow waves and splash rings around hulls (iWave);
-  water colour from absorption and scattering, glowing crests, refraction,
-  caustics; sky, star and planet reflections with a rough-surface Fresnel;
-  screen-space or planar reflections; Low / Medium / High shader
-  tiers.
-- **Sky** (`sky_system`): sun and moon placed astronomically, a physical
-  atmosphere (blue sky, twilight, sea haze and fog, distance haze on the
-  scene), volumetric clouds with seven blended weather presets, the 9,096
-  naked-eye stars, the Milky Way, airglow and planets.
-- **Exposure** (`exposure_system`): auto exposure from an incident-light
-  meter, eye adaptation, darker nights as the eye sees them, rod night vision.
-- **Floating things** (`buoyancy_system`, `boat_template`): probe buoyancy from
-  asynchronous GPU water queries, sinking, a ready-wired boat with driving,
-  stability, hull cutout, wake and bow spray. `hitbox_damage_system` gives
-  ships grouped health.
-- **Drop-in setup** (`ocean_environment`): wind, sky, ocean and exposure wired
-  together in one scene. Plugins set up the project; misconfigured nodes show
-  editor warnings.
+The project is a set of Godot addons. Each one does one job and works on its
+own. They connect through small contracts instead of each other's types.
 
-Each addon has a short README on what it does and how to set it up.
+| Addon | What it does |
+| --- | --- |
+| [`core`](addons/core/README.md) | The shared contracts (`WaterSurface`, `WindSource`) and GPU helpers. |
+| [`wind_system`](addons/wind_system/README.md) | One wind with gusts. The waves and the clouds follow it. |
+| [`ocean_system`](addons/ocean_system/README.md) | FFT waves computed on the GPU and a level-of-detail mesh to the horizon. Also water shading, foam, reflections, wakes, and water-height queries. |
+| [`sky_system`](addons/sky_system/README.md) | Astronomical sun and moon, a physical atmosphere, volumetric clouds, stars and planets. It lights the scene and meters that light. |
+| [`exposure_system`](addons/exposure_system/README.md) | Exposes the camera for that light, adapting like an eye. |
+| [`buoyancy_system`](addons/buoyancy_system/README.md) | Floats rigid bodies with probes that sample the water. Also contact events and sinking. |
+| [`hitbox_damage_system`](addons/hitbox_damage_system/README.md) | Projectile hitboxes and health per group (e.g. hull, mast). |
+| [`ocean_environment`](addons/ocean_environment/README.md) | Wind, sky, ocean and exposure in one ready-wired scene. |
+| [`boat_template`](addons/boat_template/README.md) | A ready-wired boat: driving, buoyancy, sinking, health, wake and spray. |
+
+```
+WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---> ExposureController
+    |                     |      ^                           ^
+    +---------------------|------|--- wind (cloud drift) ----+
+                registers |      +--- hull poses --- HullWaterFootprint
+                          v
+      WaterSurface (core): async height queries, splashes
+                          ^
+      BuoyantBody, BowSpray: submit points every physics tick
+```
+
+- The ocean and the sky render with compute shaders on the GPU each frame:
+  wave spectra and FFTs, the atmosphere's lookup textures, and the clouds.
+- Physics code never touches the ocean directly. It submits points to the
+  world's `WaterSurface` every physics tick and reads the answer a few frames
+  later, extrapolated to the present.
+- Damage is wired in the scene: `HitboxHealthManager.group_destroyed` can make
+  a `BuoyantBody` sink.
+- Most units are physical: wind in m/s, light in lux, water optics per metre.
+  The look comes from the physics, not from artistic tints.
 
 ## Requirements
 
-- Godot **4.8** with the **Forward+** renderer. The ocean, atmosphere and
-  clouds run on compute shaders: the Compatibility renderer and headless runs
-  have no water or sky. The Mobile renderer is untested.
-- A desktop GPU. Developed and measured on Windows with an RTX 4070 Ti (the
-  clouds cost about 0.5–0.8 ms of it at 1080p); other platforms are untested.
+- Godot **4.8** with the **Forward+** renderer. The ocean, the atmosphere and
+  the clouds need compute shaders, so the Compatibility renderer and headless
+  runs have no water or sky. The Mobile renderer is untested.
+- A desktop GPU. The project was developed on Windows with an RTX 4070 Ti;
+  other platforms are untested.
 - Physical light units off (the default).
 
-## Getting started
+## How to use
 
-**Try it:** open the folder in Godot 4.8 and run the project (the demo,
-`demo/main.tscn`), or open one of the examples:
+**Try it.** Open the folder in Godot 4.8 and run the project (the demo,
+`demo/main.tscn`), or open one of the [examples](examples/README.md):
 
 | Example | Shows |
 | --- | --- |
-| `examples/ocean_only.tscn` | The drop-in environment and a fly camera |
-| `examples/floating_objects.tscn` | Crates and barrels floating on probe buoyancy |
-| `examples/boat.tscn` | A drivable boat (W A S D) built on the boat template |
+| `examples/ocean_only.tscn` | The drop-in environment and a fly camera. |
+| `examples/floating_objects.tscn` | Crates and barrels floating on probe buoyancy. |
+| `examples/boat.tscn` | A drivable boat (W A S D) built on the boat template. |
 
-The examples use only the open-source addons; `examples/README.md` explains
-them.
-
-**Use it in your project:**
+**Use it in your project.**
 
 1. Copy `addons/core` and the addons you want into your project's `addons/`
-   folder (see the dependencies below and in each addon's README).
-2. Enable them in **Project Settings > Plugins**. Enabling sets up the project
-   for them and prints what it added: the sky's global shader uniforms and
-   debanding, and the boat's default input actions. Nothing that is already
-   set is changed.
-3. Use the Forward+ renderer and keep physical light units off.
-4. For a complete sea, instance `addons/ocean_environment/ocean_environment.tscn`
-   (wind, sky, ocean and exposure, wired together) and add a `Camera3D` with a
-   far plane beyond the horizon; see its README. Or instance a single addon's
-   scene (`sky_system.tscn`, `ocean_system.tscn`, ...) and follow its README's
-   quick start.
+   folder. Each addon needs the ones listed below.
+2. Enable them in **Project Settings > Plugins**. The plugins add what the
+   project needs (the sky's global shader uniforms and debanding, the boat's
+   input actions), never change existing settings, and print what they added.
+3. Instance `addons/ocean_environment/ocean_environment.tscn`, add a
+   `Camera3D` whose far plane reaches past the horizon (the demo uses 60 km),
+   and run.
+4. To float objects, add `buoyancy_system` nodes to them. For a drivable boat,
+   inherit `addons/boat_template/boat.tscn`.
 
-Every setting has an inspector tooltip, and every node type and resource
-(`OceanSystem`, `SkySystem`, `BuoyantBody`, ...) has a page in the editor's
-help: press F1 and search for its name.
+| Addon | Needs |
+| --- | --- |
+| `core`, `wind_system`, `exposure_system`, `hitbox_damage_system` | Nothing |
+| `ocean_system`, `sky_system` | `core` |
+| `buoyancy_system` | `core`, and water such as `ocean_system` |
+| `ocean_environment` | `core`, `wind_system`, `sky_system`, `ocean_system`, `exposure_system` |
+| `boat_template` | `core`, `ocean_system`, `sky_system`, `buoyancy_system`, `hitbox_damage_system` |
+
+Every setting has an inspector tooltip, and every class has a page in the
+editor's help (F1, then search for e.g. `OceanSystem`). Misconfigured nodes
+show warnings in the Scene dock.
 
 ## The demo
 
-`demo/main.tscn` is the development sandbox: the player's rowboat (one bow
-swivel gun), a caravel you can shoot and sink, a buoy that shows its distance
-to the player, a compass HUD (ship heading + wind), and a hidden debug panel
-exposing most ocean, sky, wind, buoyancy and cascade parameters live. Its
-weapons (`projectile_launcher_system`, `floating_boat_template`) are demo
-gameplay, not part of the open-source addons.
-`demo/ocean_optics_debug.tscn` is a lighter scene with just sky, wind, water, a
-camera and the debug panel, for tuning water shading.
+`demo/main.tscn` is the development sandbox. You drive a rowboat with a bow
+swivel gun. There is a caravel you can shoot and sink, a buoy, a compass HUD
+and a hidden debug panel for most ocean, sky and wind settings. The weapons
+(`projectile_launcher_system`, `floating_boat_template`) are demo gameplay and
+not part of the open-source addons. `demo/ocean_optics_debug.tscn` is a
+lighter scene for tuning the water's shading.
 
 | Input | Action |
 | --- | --- |
-| W / S | Ship throttle forward / reverse |
-| A / D | Ship turn left / right |
-| Space | Fire the boat's guns at the aim marker (0.5 s cooldown) |
-| Right mouse (hold) | Mouse look; the aim marker follows the screen center |
-| C | Cycle camera: third person → first person → free look |
-| Free look: W/A/S/D, R / F, Shift, mouse wheel | Fly, up / down, boost, change fly speed |
-| H or \` | Toggle the ocean debug panel |
-| F | Toggle fullscreen (also "down" in free look) |
+| W / S | Throttle forward / reverse |
+| A / D | Turn left / right |
+| Space | Fire at the aim marker |
+| Right mouse (hold) | Mouse look |
+| C | Camera: third person → first person → free look |
+| Free look: W A S D, R / F, Shift, wheel | Fly, up / down, boost, fly speed |
+| H or \` | Debug panel |
+| F | Fullscreen (also "down" in free look) |
 | Esc | Leave fullscreen, release the mouse |
-
-The wave simulation started as a fork of
-[2Retr0/GodotOceanWaves](https://github.com/2Retr0/GodotOceanWaves) — see
-`README_original.md` for the upstream write-up of the spectrum/FFT math and
-`LICENSE_original` for its license.
 
 ## Repository layout
 
 ```
-project.godot            Godot manifest (main scene, input map, physics layer names)
-addons/                  Reusable systems, each self-contained with its own README
-  core/                  Shared foundation: WaterSurface and WindSource contracts, RenderingDevice helpers
-  ocean_system/          FFT ocean: compute pipeline, water shader, mesh, reflections, queries
-  sky_system/            Day/night sky, atmosphere, sun + moon lights, starfield, astronomy, volumetric clouds
-  wind_system/           Wind provider node with procedural gusts
-  exposure_system/       Camera exposure from the scene's light meter, eye-like adaptation
-  buoyancy_system/       Probe-based buoyancy, probe generation, sinking monitor
-  hitbox_damage_system/  Hitboxes, grouped health, hit effects
-  ocean_environment/     Drop-in scene: wind, sky, ocean and exposure wired together
-  boat_template/         Boat scene that wires the systems together (driving, buoyancy, health, wake, spray)
-  projectile_launcher_system/  (development only) Launchers, projectiles, aim solver, recoil, FX
-  floating_boat_template/      (development only) The boat template plus weapons, for the demo
-examples/                Small example scenes using only the open-source addons
-systems/                 Demo-level support code: camera rig, debug panel, compass HUD
-demo/                    Demo scenes, ship/buoy instances and third-party assets
-tools/                   Development scripts (gd_lint.py: GDScript warnings via the editor's language server; bakers for the star catalog, the Milky Way and the example hull)
+addons/      The addons, each with its own README
+examples/    Example scenes that use only the open-source addons
+demo/        The demo scenes, ships and third-party models
+systems/     Demo support code: camera rig, debug panel, compass HUD
+tools/       Development scripts (lint, star catalog, Milky Way and hull bakers)
+docs/        Design records and images
 ```
 
-Each addon has a short `README.md` on what it does and how to use it; the
-scripts' `##` doc comments document the API. `systems/README.md` covers the demo support code. `AGENTS.md`
-holds the working rules for anyone (human or agent) changing the code;
-`CONTRIBUTING.md` explains how to report problems and send changes, and
-`CHANGELOG.md` lists what changed.
-
-## How the pieces fit
-
-```
-WindSystem ──wind speed/dir──▶ OceanSystem ◀──sun, atmosphere, clouds, stars── SkySystem ◀── wind (cloud drift)
-								   │  compute: spectrum → FFT → displacement/normal maps
-								   │  shader:  displacement, foam, reflections, cutouts
-								   │  iWave:   wakes and foam from HullWaterFootprint
-								   ▼
-		WaterSurface (core): submit_query / get_query_result   (GPU point query, async readback)
-								   ▼
-					 BuoyantBody (buoyancy + sinking) ── forces ──▶ RigidBody3D (FloatingBoat)
-								   ▲            │ probe wet/dry states → your gameplay
-								   │ group_destroyed
- ProjectileWeaponController        │
-   └─ ProjectileLauncher ──projectile──▶ ProjectileHitbox ──▶ HitboxHealthManager
-```
-
-Systems never reference each other directly. What several of them share lives
-in the `core` addon (the `WaterSurface` and `WindSource` contracts,
-RenderingDevice helpers);
-everything else goes through duck-typed methods, node groups and signals. Each
-addon can be dropped into another project with `core` alone (buoyancy also
-needs some water in the scene that registers a `WaterSurface`), except
-`ocean_environment` and `boat_template`, which compose them. The projectile weapons and the
-`floating_boat_template` that adds them to the boat are the demo's gameplay and
-not part of the open-source addons.
+`CONTRIBUTING.md` explains how to report problems and send changes,
+`AGENTS.md` holds the working rules for the code, and `CHANGELOG.md` lists the
+changes.
 
 ## License and credits
 
@@ -167,10 +138,11 @@ not part of the open-source addons.
   (© 2026 itzMeerkat). The wave simulation started from
   [2Retr0/GodotOceanWaves](https://github.com/2Retr0/GodotOceanWaves) by Ethan
   Truong, MIT, `LICENSE_original` (also in `addons/ocean_system/LICENSE`).
+  `README_original.md` is the upstream write-up of the spectrum and FFT math.
 - **Demo models** (`demo/assets/`): CC BY 4.0, by Ginny Sutton ("Caravel
   Ship") and Muyaya Concept ("Stylized Low Poly Rowboat with Paddles", "Red
-  Marine Navigation Buoy"); sources and details in `demo/assets/README.md`.
-  The addons and examples do not use them.
+  Marine Navigation Buoy"). Sources and details are in
+  `demo/assets/README.md`. The addons and examples do not use them.
 - **Stars**: the Bright Star Catalogue, 5th Revised Ed. (Hoffleit & Warren
   1991; CDS catalogue V/50), baked by `tools/bake_star_catalog.py`.
 - **Milky Way**: NASA/Goddard Space Flight Center Scientific Visualization

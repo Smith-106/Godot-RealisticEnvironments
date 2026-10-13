@@ -1,43 +1,46 @@
 # Exposure System
 
-Camera exposure from the light falling on the scene, like an incident-light
-meter with eye adaptation, darkened further when the view is brighter than that
-light (a low sun or moon in view), as the eye adapts to glare. Looking at the
-sea or a dark hull does not change it. No dependencies.
+**English** · [简体中文](README.zh-CN.md)
 
-## Features
+Automatic camera exposure that behaves like an eye. It meters the light falling
+on the scene, adapts to it over time, keeps night darker than day, and fades
+colours in dim light. It depends on nothing.
 
-- **Auto exposure** from a light meter; with `adapt_to_view`, a bright view
-  (the log-average luminance of the rendered image) lowers it further, so a
-  low moon's haze glow or a sunset does not clip to white.
-- **Eye adaptation** with separate times for brightening and darkening.
-- **Perceptual darkness:** sunset, twilight and night look progressively darker,
-  as the eye sees them.
-- **Night vision:** below about 3 cd/m² colours fade and shift blue
-  (rod vision); the moon keeps its colour.
+## How it works
 
-## Usage
+- **Incident-light meter.** Each frame, `ExposureController` reads the lux at
+  the camera from a light source (e.g. `SkySystem`). It picks the exposure that
+  renders an 18 % grey card in that light at 0.18 (a white surface at 1).
+  `exposure_compensation_ev` shifts the result.
+- **Adaptation.** The exposure moves toward that target over time. Adapting to
+  more light (`brighten_seconds`) is faster than adapting to less
+  (`darken_seconds`).
+- **Perceptual darkness.** In dim light the eye adapts only part of the way
+  (Krawczyk et al. 2005), so dusk and night stay darker than day. Turn
+  `perceptual_adaptation` off to expose every light level like a camera.
+- **Adapting to the view** (`adapt_to_view`). A `ViewLuminanceEffect` measures
+  the rendered image's average brightness. When the view is brighter than the
+  metered light (a low sun or moon glowing in haze), exposure drops further, as
+  the eye does under glare. A darker view (the sea, a hull) does not raise it.
+- **Night vision** (`night_vision`). A `NightVisionEffect` fades dark pixels
+  toward a slightly blue grey, the way rods take over from cones.
 
-Add an `ExposureController` and set:
+The result goes into the target's `CameraAttributes.exposure_multiplier`, at
+runtime only. Godot applies it to lights, emission and the sky. The two effects
+are added to the target's compositor at runtime and need a `RenderingDevice`.
 
-- `light_source_path` — a node with `get_scene_illuminance()` (lux at the
-  camera, negative while unknown) and `get_illuminance_unit_lux()`.
-  `SkySystem` provides both.
-- `target_path` — a `WorldEnvironment` or a `Camera3D` (a camera's own
-  attributes override the world's, so target the camera if it has some).
+## How to use
 
-Exports: `exposure_compensation_ev`, `perceptual_adaptation` (eye vs. camera),
-`brighten_seconds` / `darken_seconds`, `night_vision`,
-`night_vision_strength`, `adapt_to_view`. `get_adapted_illuminance()` returns the current
-adapted lux.
+1. Add an `ExposureController` node.
+2. Set `light_source_path` to a `SkySystem`, or to any node with
+   `get_scene_illuminance()` (lux at the camera, negative while unknown) and
+   `get_illuminance_unit_lux()` (the lux of a scene irradiance of 1).
+3. Set `target_path` to the `WorldEnvironment` or the `Camera3D`. A camera's
+   own attributes override the world's, so target the camera if it has any.
+   A target without attributes gets a `CameraAttributesPractical`.
+4. Keep physical light units off, and don't use a second auto-exposure.
 
-The controller writes `CameraAttributes.exposure_multiplier` at runtime only,
-and adds a `ViewLuminanceEffect` and a `NightVisionEffect` to its target's
-compositor. Keep physical light
-units off.
-
-## Files
-
-`exposure_controller.gd`, `view_luminance_effect.gd`, `view_luminance.glsl`,
-`night_vision_effect.gd`, `night_vision.glsl`,
-`exposure_system_plugin.gd`, `plugin.cfg`.
+Settings: `exposure_compensation_ev`, `perceptual_adaptation`,
+`brighten_seconds`, `darken_seconds`, `night_vision`, `night_vision_strength`,
+`adapt_to_view`. `get_adapted_illuminance()` returns the lux the eye is
+currently adapted to.

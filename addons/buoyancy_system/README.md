@@ -1,13 +1,39 @@
 # Buoyancy System
 
-Probe-based buoyancy for `RigidBody3D`s: probes generated from the hull in the
-editor, sampled every physics tick through the world's `WaterSurface`. Also
-gives water contact events and sinking.
+**English** · [简体中文](README.zh-CN.md)
 
-Requires the `core` addon and a water simulation that registers a
-`WaterSurface` (e.g. `ocean_system`).
+Makes `RigidBody3D`s float on the water. Probes are generated from the hull in
+the editor and sample the water every physics tick. The system also gives
+water contact events and makes bodies sink.
 
-## Setup
+Requires `core`, and water that registers a `WaterSurface` (e.g.
+`ocean_system`).
+
+## How it works
+
+- **Probes.** A `BuoyancyProbeVolume` holds the body's probes. A physical
+  probe (`BuoyancyProbeNode`) is the top of a vertical water column with a
+  `volume` and a `buoyancy_height`. A contact probe (`BuoyancyFxProbeNode`)
+  only reports whether it is wet. In the editor, the volume slices the hull
+  mesh at the design waterline and fills the outline with probes. The probes
+  are saved with the scene and are never generated at runtime.
+- **Sampling.** Every physics tick, `BuoyantBody` submits all probe positions
+  as one water query (see `core`'s `WaterSurface`). It applies forces from the
+  latest result, extrapolated to the present. Until the first result arrives,
+  the body is held frozen.
+- **Forces.** Each column pushes up by the weight of the water it displaces.
+  Each column also feels water resistance relative to the moving water:
+  quadratic drag along the body's three axes, damping while it crosses the
+  surface (the energy a bobbing body radiates as waves) and added mass in
+  heave. Everything is summed into one force and one torque per tick.
+- **Contact states.** Every probe has a `BuoyancyProbeState` (depth,
+  submersion, wet/dry with hysteresis, the force it applied, the water's normal
+  and velocity). Probes that cross the surface emit enter/exit signals.
+- **Sinking** (optional). The body sinks when it rolls too far, when chosen
+  probes are flooded, or when a damage group is destroyed. Sinking lowers its
+  buoyancy, emits a signal and frees it after a delay.
+
+## How to use
 
 ```
 RigidBody3D
@@ -15,75 +41,44 @@ RigidBody3D
 ├─ <hull model>
 ├─ BuoyantBody             applies the forces; optional sinking
 └─ BuoyancyProbeVolume     source_paths → hull model
-   └─ GeneratedProbes      generated probe nodes
+   └─ GeneratedProbes      generated probes
 ```
 
-1. Add a `BuoyantBody` under the rigid body (it finds the nearest
-   `RigidBody3D` ancestor and the water itself).
-2. Add a `BuoyancyProbeVolume`. Set `source_paths` to the hull mesh,
-   `design_waterline_y` (local) to where the hull should float, and
-   `generated_probe_freeboard` to the height of the deck or gunwale above it,
-   so waves above the waterline still lift the hull.
-3. Press **Generate All Probes** in the editor and save the scene. The
-   **New Probes** settings (`generated_probe_volume`, ...) apply to probes
-   generated from then on. Probes are never generated at runtime.
-4. Tune `buoyancy_strength`, the probe volumes and the drag coefficients.
-   Probes are ordinary nodes you can move, delete or duplicate.
+1. Add a `BuoyantBody` under the rigid body. It finds the nearest
+   `RigidBody3D` ancestor and the water by itself.
+2. Add a `BuoyancyProbeVolume` and set:
+   - `source_paths`: the hull mesh;
+   - `design_waterline_y`: where the hull should float (local);
+   - `physical_probe_count` and `fx_probe_count`;
+   - **New Probes**: `generated_probe_volume`, the column height and
+     `generated_probe_freeboard`. Freeboard is the deck's height above the
+     waterline, so waves above the waterline still lift the hull.
+3. Press **Generate All Probes** and save the scene. Probes are ordinary nodes:
+   move, delete or duplicate them as you like.
+4. Tune `buoyancy_strength` and the drag coefficients on `BuoyantBody`
+   (streamlined hulls want a low `longitudinal_drag_coefficient`, about 0.05).
 
-Size the probes so they hold well over the body's weight when fully
-submerged (the demo rowboat holds 2.4×). If the collision shape is scaled
-non-uniformly, set the body's `inertia` explicitly or it cannot pitch or roll.
+Together, the probes should hold well over the body's weight when fully
+submerged (mass ÷ water density; the demo rowboat holds 2.4×). If the
+collision shape is scaled non-uniformly, set the body's `inertia` explicitly,
+or it cannot pitch or roll. Turn on `debug_enabled` on the volume to see
+probes, the waterline and the forces.
 
-## Probes
+### Contact events and probe states
 
-- **`BuoyancyProbeNode`** (physical): the top of a water column
-  `buoyancy_height` tall that displaces `volume` (m³) when fully under water;
-  `longitudinal_drag_multiplier` / `lateral_drag_multiplier` scale its drag.
-- **`BuoyancyFxProbeNode`** (contact): no force, only wet/dry state and
-  enter/exit events, tagged `bow`, `side` or `stern`.
+- Signals: `probe_entered_water(state)`, `probe_exited_water(state)`.
+- `get_probe_states(tag)`, `get_wet_probe_states(tag)`, `get_probe_state(probe)`.
+  Generated contact probes are tagged `bow`, `side` or `stern`.
+- After adding or removing volumes at runtime, call `refresh_volumes()`.
+- `apply_forces = false` hands the body back to plain physics.
 
-## `BuoyantBody`
+### Sinking
 
-Each probe gets buoyancy plus water resistance relative to the moving water:
-quadratic drag per axis (`vertical_drag_coefficient`,
-`longitudinal_drag_coefficient`, `lateral_drag_coefficient`; about 1 for blunt
-bodies, ~0.05 forward for streamlined hulls), wave-making damping
-(`heave_damping_ratio`) and added mass (`added_mass_coefficient`). Forces per
-probe are capped by `max_probe_acceleration`. The body stays frozen until the
-first water result arrives.
-
-API: `get_probe_states(tag_filter)`, `get_wet_probe_states(tag_filter)`,
-`get_probe_state(probe)`, `refresh_volumes()`; signals
-`probe_entered_water(state)`, `probe_exited_water(state)`. Each
-`BuoyancyProbeState` carries the probe's `depth`, `submersion`, `is_wet`,
-`entered` / `exited`, `force`, `normal` and `surface_velocity`. Set
-`apply_forces = false` to stop forces and sampling.
-
-`debug_enabled` on a volume (off by default) draws probes, the waterline and
-forces, in the editor and at runtime. `generate_probes(physical, fx)` is what
-the Generate buttons call.
-
-## Sinking
-
-Turn on `sinking_enabled`. The body sinks when roll exceeds
-`max_roll_degrees`, when every probe in `sinking_probe_paths` is deeper than
-`sink_probe_depth_threshold`, or when a group in `sink_on_destroyed_groups`
-is destroyed. For that, connect a damage system's signal (e.g.
-`HitboxHealthManager.group_destroyed`) to `_on_hitbox_group_destroyed` in the
-scene. Sinking scales buoyancy by `sink_buoyancy_multiplier`, emits
+Turn on `sinking_enabled` and choose the triggers: `max_roll_degrees`,
+`sinking_probe_paths` with `sink_probe_depth_threshold`, and
+`sink_on_destroyed_groups`. To sink on damage, connect
+`HitboxHealthManager.group_destroyed` (or your own signal with the same
+arguments) to `BuoyantBody._on_hitbox_group_destroyed` in the scene. Sinking
+multiplies buoyancy by `sink_buoyancy_multiplier`, emits
 `sinking_started(reason, data)` and frees `delete_root_path` after
-`delete_delay`. `start_sinking()` and `is_sinking()` work from code.
-
-## Future work
-
-- **Progressive flooding:** compartments that fill through damage and sink the
-  hull with trim and list, instead of one buoyancy multiplier.
-- **Wind and current forces:** drag from the wind source on sails and
-  superstructure, and drift with water currents.
-- **Wave loads:** slamming impacts on the bow and water on deck.
-- **Rotational added mass:** added inertia in pitch and roll (heave only today).
-- **Probes from collision shapes:** probes for spheres, boxes and capsules
-  without a hull mesh, for debris and props.
-- **Scaling to many bodies:** fewer probes or sleeping for bodies far from the
-  camera.
-- **Constraints:** mooring lines, anchors and towing.
+`delete_delay`. From code: `start_sinking()`, `is_sinking()`.

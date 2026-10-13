@@ -1,156 +1,126 @@
 # Ocean System
 
-FFT-simulated ocean for Godot 4 Forward+: compute-shader waves rendered on a
-CDLOD mesh out to the horizon, with wakes, hull cutouts and GPU water-height
-queries for gameplay.
+**English** · [简体中文](README.zh-CN.md)
 
-Requires the `core` addon.
+An open ocean for Godot 4.8 Forward+. It has wind-driven FFT waves out to a
+curved horizon, physically based water shading, foam and reflections. Hulls
+make wakes, and anything that floats can query the water height on the GPU.
 
-## Features
+Requires `core` and a `RenderingDevice` (Forward+). Without one
+(Compatibility renderer, headless) the ocean reports an error and stays off.
 
-- **Waves:** up to 8 FFT cascades of a JONSWAP spectrum, from swell to chop.
-  They follow the wind and crossfade smoothly when it changes.
-- **Sea to the horizon:** drawn on the earth's curve; distant waves are
-  filtered by mips instead of fading.
-- **Foam:** whitecaps on sharp crests, plus wake, bow and hull-edge foam.
-- **Wakes and splashes:** an iWave simulation around the camera; hulls make
-  Kelvin wakes and bow waves.
-- **Hull cutouts:** no water inside up to 8 nearby ships.
-- **Water optics:** colour from absorption and scattering, glowing crests,
-  refraction, shallow-water transparency and caustics.
-- **Reflections:** sky, clouds, stars, planets and the scene (screen-space or
-  planar), with a rough-surface Fresnel.
-- **Quality tiers:** Low / Medium / High shaders and 15 debug views.
+## How it works
 
-## Quick start
+- **One sea state, several tiles.** A `WaveSpectrum` describes the sea: a
+  wind-driven JONSWAP spectrum, corrected for water depth (TMA). The
+  `WaveCascade`s are FFT tiles of this spectrum at different sizes (default
+  250, 37 and 9 m). Each tile draws only its own band of wavelengths, so
+  together they draw the spectrum exactly once, from long swell to short chop.
+- **GPU wave synthesis.** Compute shaders advance each cascade's spectrum to
+  the current time and run an inverse FFT. The output is a displacement map
+  and a normal map (slopes and foam) with full mip chains. Small tiles update
+  more often than large ones, and frames in between blend two FFT results.
+- **Following the wind.** The wind comes from `wind_source_path`, or else from
+  the spectrum's own settings. When it changes past a threshold, a new
+  spectrum is generated in a spare slot and crossfaded in. The sea never jumps,
+  and long swell turns toward a new wind more slowly than chop.
+- **Mesh to the horizon.** The mesh is a quadtree of grid patches around the
+  camera (CDLOD, drawn as one multimesh), finest near the camera. It bends with
+  the earth's curve, so the sea ends at the real horizon. The vertex shader
+  displaces it by every cascade. Far waves are filtered through mip levels, not
+  faded out.
+- **Shading.** Absorption and scattering in the water set its colour. Light
+  through thin crests makes them glow, and the shader adds refraction,
+  caustics and foam where waves compress. One rough-surface Fresnel weights
+  every reflection: the sky with its clouds, stars, planets and atmosphere,
+  the sun's highlight, and the scene (screen-space or planar).
+- **Wakes and splashes.** An iWave simulation runs on a window around the
+  camera (by default 512 × 512 cells of 0.5 m). Hulls (`HullWaterFootprint`)
+  push water in it, which makes Kelvin wakes, bow waves and wake foam.
+  `add_impulse()` adds splash rings. Water inside nearby hulls is cut out.
+- **Water queries.** The ocean registers a `WaterSurface` (see `core`). All
+  queries in a frame go to the GPU in one dispatch. They sample the same
+  surface that is drawn, wakes included, and are read back asynchronously.
 
-1. Instance `ocean_system.tscn` (an `OceanSystem`, a `MeshInstance3D`).
-2. Optional: set `sky_source_path` to a `SkySystem` so the water reflects its
-   sky and follows the time of day.
-3. Optional: set `wind_source_path` to a `WindSystem` (or any wind source, see
-   `core`'s `WindSource`); without one the waves follow the spectrum's own
-   wind.
-4. Run with an active `Camera3D` whose far plane reaches past the horizon
-   (the demo uses 60 km).
+The sea lies at `water_level`. The node's own transform is ignored.
 
-`water_level` sets the sea's height; the node's own transform is ignored, so
-leave it at the origin, unrotated and unscaled (it warns otherwise). Without a
-`RenderingDevice` (Compatibility renderer, headless) the ocean reports an
-error and disables itself.
+## How to use
 
-## Main settings
+1. Enable **Core** and **Ocean System** in **Project Settings > Plugins**, then
+   instance `ocean_system.tscn`. Leave the node at the origin, unrotated and
+   unscaled, and set the height with `water_level`.
+2. Use a `Camera3D` whose `far` reaches past the horizon. From 10 m up the
+   horizon is 11 km away, from 100 m up 36 km; the demo uses 60 km.
+3. Optional: set `wind_source_path` to a `WindSystem` and `sky_source_path` to
+   a `SkySystem`. Without them, the waves use the spectrum's own wind and the
+   water reflects the **Manual Sky** colours.
 
-| Group | What it controls |
+`ocean_environment` does all of this for you.
+
+### Settings
+
+| Group | Contents |
 | --- | --- |
 | `water_level` | Height of the still water. |
-| Waves | `spectrum` (`WaveSpectrum`), `cascades` (`WaveCascade`, at most 8), `wind_source_path`. |
-| Water | Optical properties: `water_absorption`, `water_scattering`, `water_scattering_anisotropy`. |
-| Surface | Roughness (`clear_roughness`, `short_wave_slope_scale`) and `normal_scale` (1 = physical slopes). |
-| Foam | `foam_color`, `foam_intensity`, `foam_roughness`, the foam pattern. |
-| Sky | `sky_source_path`, reflection strength, sun highlight; `manual_*` values without a sky source. |
-| Reflections | `reflection_mode` (`SKY_ONLY`, `SCREEN_SPACE`, `PLANAR`) and the planar reflection's settings. |
-| Hull Cutouts / Interaction | Hull cutout range; the wake simulation's grid, damping and foam. |
+| Waves | `spectrum`: wind (used without a wind source), `fetch_length`, `water_depth`, `swell`, `spread`, `detail`, `displacement_scale` (1 = physical height; the demo uses 2), and how fast the sea follows changes. Save one as a `.tres` to reuse a sea state. `cascades` (at most 8): `tile_length`, plus foam (`whitecap`, `foam_generation`, `foam_lifetime`). Use tile lengths that don't divide each other. Retune `whitecap` after changing `displacement_scale`. |
+| Water | `water_absorption`, `water_scattering`, `water_scattering_anisotropy`: the only source of the water's colour. |
+| Surface | `clear_roughness`, `short_wave_slope_scale` (wind ripples too small to simulate), `normal_scale` (1 = physical slopes). |
+| Foam | `foam_color`, `foam_intensity`, `foam_roughness`, the foam pattern texture and its tile size. |
+| Sky | `sky_source_path`, reflection strength and F0, the sun's highlight; **Manual Sky** values for when there is no sky source. |
+| Reflections | `reflection_mode`: `SKY_ONLY`, `SCREEN_SPACE` or `PLANAR` (default), plus the planar reflection's resolution and clipping. Render layer 20 (`reflection_water_layer`) is reserved for the water. |
+| Hull Cutouts | `hull_cutout_distance`. |
+| Interaction | The wake simulation: on/off, grid, cell size, step rate, damping and foam. |
 | Quality | `shader_quality` (`LOW`, `MEDIUM`, `HIGH`), `simulation_map_size` (128–1024), `max_wave_phase_step`, `fragment_cascade_limit`, `use_bicubic_normals`, `mesh_base_cell_size`. |
-| Material | `water_material`, the template the ocean duplicates. |
+| Material | `water_material`: the template the ocean copies. The ocean renders with a private duplicate. |
 
-**Waves.** `spectrum` (a `WaveSpectrum`, which you can save as a `.tres` sea
-state) is shared by every cascade: its wind (used without a wind source), the
-spectrum's shape (`fetch_length`, `water_depth`, `swell`, `spread`, `detail`),
-`displacement_scale` (1 = the spectrum's wave height; the demo uses 2) and how
-fast the waves follow changes. Each of the `cascades` (`WaveCascade`) is one
-FFT tile of it repeating every `tile_length` metres: long tiles for swell,
-short for chop. The cascades split the spectrum by wavelength, so no wave is
-drawn twice: each draws waves up to a sixth of its tile, the next larger tile
-the longer ones (its most regular, tile-periodic waves). Use tile lengths that
-don't divide each other (the default 250 / 37 / 9 m), so the tiles never repeat
-in step. Per cascade you set the foam (`whitecap`, `foam_generation`,
-`foam_lifetime`); retune `whitecap` when you change `displacement_scale`.
-`get_wind_speed()` / `get_wind_direction_degrees()` give the wind the waves
-follow.
+From code: `get_wind_speed()` and `get_wind_direction_degrees()` give the wind
+the waves follow. `get_water_material()` returns the material actually used. To
+show single shading terms, set its `water_debug_view` uniform (1–15) at
+runtime.
 
-**Debug views.** At runtime, set the shader uniform `water_debug_view` (1–15)
-on `get_water_material()` (the ocean's private copy) to show single shading
-terms.
+### Ships: cutouts and wakes
 
-## Sky source
+1. Add a `HullWaterFootprint` to the ship, rigidly attached (usually a direct
+   child of the body; the boat template has one).
+2. Set `bake_source_paths` to the hull meshes only (no masts or rigging).
+3. Save the scene, press **Bake Profile**, and save again.
 
-`sky_source_path` accepts a `SkySystem` or any node with these methods (all but
-the first optional; missing ones fall back to the `manual_*` values or to
-nothing):
+The baked `HullProfile` hides the water inside the hull and lets the hull
+push water. Tune the wakes in the **Wake** group. If waves cresting a low
+gunwale show water inside the boat, raise `cutout_height_offset`. Only the 8
+nearest hulls get cutouts, and only the 32 nearest make wakes.
+
+### Water queries and splashes
+
+Use `WaterSurface.find(node)` from `core` (its README has the example), never
+`OceanSystem`. Bodies with their own `HullWaterFootprint` read only the FFT
+waves, not the wakes they make themselves. Up to 64 splashes per simulation
+step are accepted.
+
+### Sky source
+
+`sky_source_path` accepts a `SkySystem` or any node with these methods. Only
+the first one is required; the ocean falls back to the **Manual Sky** values
+for missing ones.
 
 | Method | Gives the water |
 | --- | --- |
 | `get_sun_direction()` | Direction toward the sun (world space). |
-| `get_sun_visibility()` | Share of the sun reaching the sea (0–1), for caustics. |
+| `get_sun_visibility()` | Share of the sun reaching the sea (0–1). |
 | `get_cloud_cubemap()` | Clouds: rgb premultiplied radiance at the cloud, a opacity, full mips; `null` = none. |
 | `get_star_cubemap()`, `get_star_basis()`, `get_star_radiance_scale()` | Stars: radiance cubemap, world-to-cubemap rotation, scale to scene radiance. |
-| `get_planet_directions()`, `get_planet_irradiance()` | Up to 8 point lights reflected as glints. |
-| `get_atmosphere_sky_volumes()`, `get_atmosphere_light()` | The sky seen from the sea through an atmosphere; without them the water reflects a gradient of `manual_sky_top_color` and `manual_sky_horizon_color`. |
+| `get_planet_directions()`, `get_planet_irradiance()` | Up to 8 point lights, reflected as glints. |
+| `get_atmosphere_sky_volumes()`, `get_atmosphere_light()` | The sky seen from the sea, through the atmosphere. Without them the water reflects a gradient from `manual_sky_top_color` to `manual_sky_horizon_color`. |
 | `get_atmosphere_view_volumes()`, `get_atmosphere_view_observer()`, `get_atmosphere_view_max_distance()` | The haze between the camera and the water. |
 
-A source with a `lighting_changed` signal is read only when it fires (emit it
-after every change), others every frame.
+If the source has a `lighting_changed` signal, the ocean reads it only when
+that signal fires (emit it after every change). Otherwise it reads it every
+frame.
 
-## Water queries and splashes
+## Limits
 
-Use the `WaterSurface` contract from `core` (see its README), never
-`OceanSystem` directly:
-
-```gdscript
-var water := WaterSurface.find(self)
-water.submit_query(self, points)            # every physics tick
-var result := water.get_query_result(self)  # null until the first readback
-if result != null:
-	var h := result.samples[0].extrapolated_height(water.get_query_age(result))
-water.add_impulse(position, radius, amplitude)  # splash
-```
-
-Results are asynchronous and arrive a few frames late; always extrapolate with
-`get_query_age()`. A result's `points` belong to its dispatch, so check its size
-if your point count changes. Bodies that make their own wake read only the FFT
-waves; other floating objects also ride wakes and splashes.
-
-## Ships: cutouts and wakes
-
-1. Add a `HullWaterFootprint` rigidly to the ship (the boat template has one).
-2. Set `bake_source_paths` to the hull meshes only (no masts or rigging).
-3. Save the scene, press **Bake Profile**, save again.
-
-The baked `HullProfile` hides water inside the hull and makes the hull push
-water in the wake simulation. Tune it in the footprint's **Wake** group
-(`wake_enabled`, `wake_strength`, `wake_edge_softness`, `bow_wave_strength`).
-Raise `cutout_height_offset` if waves cresting a low gunwale show inside the
-boat. Only the 8 nearest hulls get cutouts and the 32 nearest make wakes; the
-wake simulation runs only at runtime.
-
-## Future work
-
-- **Underwater view:** a camera below the surface (the surface's underside,
-  Snell's window, underwater fog and god rays).
-- **Shores and shallow water:** a bathymetry map instead of one
-  `water_depth`, giving wave shoaling, refraction and
-  breaking along coasts, with shore foam.
-- **Currents:** a current field that Doppler-shifts the waves and carries
-  floating bodies and foam.
-- **Spray and rain:** mist blown off breaking whitecaps; raindrop rings and
-  roughness on the surface under rain presets.
-- **Persistent wakes:** foam trails that outlive the interaction window around
-  the camera, and wakes for ships outside it.
-- **Fallback renderer:** a simpler (e.g. Gerstner) ocean for the
-  Compatibility renderer, which has no `RenderingDevice`.
-
-## Files
-
-| File | Role |
-| --- | --- |
-| `ocean_system.gd` / `.tscn` | `OceanSystem` node and default setup |
-| `wave_spectrum.gd` | `WaveSpectrum` resource (the sea state) |
-| `wave_cascade.gd` | `WaveCascade` resource (one FFT tile) |
-| `wave_cascade_state.gd`, `wave_generator.gd`, `shaders/compute/` | Cascade simulation state and the FFT compute pipeline |
-| `ocean_lod_grid.gd` | CDLOD mesh |
-| `ocean_surface_queries.gd` | The ocean's `WaterSurface` (async GPU queries) |
-| `hull_water_footprint.gd`, `hull_profile.gd`, `ocean_hulls.gd` | Hull cutouts and wake sources |
-| `water_interaction_sim.gd`, `shaders/compute/iwave_*` | Wake simulation |
-| `ocean_reflection_renderer.gd`, `planar_reflection_capture_effect.gd` | Planar reflections |
-| `shaders/spatial/water.gdshaderinc` + `water*.gdshader`, `mat_water.tres` | Water shader and its quality variants |
-| `textures/foam_detail.png`, `textures/generate_foam_detail.py` | Foam pattern and its generator |
+- The camera must stay above the water (there is no underwater view).
+- One ocean per world, with one depth for the whole sea (no shores).
+- Only the drawing is curved. Queries, buoyancy and the wake simulation treat
+  the sea as flat.
+- Wakes exist only inside the simulation window around the camera.

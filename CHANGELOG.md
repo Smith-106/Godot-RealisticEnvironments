@@ -32,3 +32,5 @@ First open-source release.
 - Plugins set up the project they need (global shader uniforms, debanding,
   input actions); misconfigured nodes show editor warnings.
 - `examples/`: ocean only, floating objects, a drivable boat.
+- Documentation in English and Simplified Chinese (`README.md` /
+  `README.zh-CN.md`): how each addon works and how to use it.

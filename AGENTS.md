@@ -56,6 +56,10 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `examples/` uses only the open-source addons (never `systems/`, `demo/`,
   projectile weapons or `floating_boat_template`); its hull mesh comes from
   `tools/make_example_hull.py`.
+- User docs are pairs: `README.md` (English) and `README.zh-CN.md`
+  (Simplified Chinese) at the top level, in `examples/` and in each
+  open-source addon. Each covers briefly how it works and how to use it;
+  change both languages together.
 - Runtime types use `class_name`, except internal `Node` helpers
   (`OceanReflectionRenderer`), which are preloaded so they stay out of the
   Create Node dialog; `*_plugin.gd` only set up the project via
