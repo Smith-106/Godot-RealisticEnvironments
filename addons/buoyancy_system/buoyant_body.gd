@@ -62,7 +62,8 @@ signal sinking_started(reason: StringName, data: Dictionary)
 ## Safety cap for the acceleration any single probe's buoyancy, and separately
 ## its drag, can contribute. 0 disables it.
 @export_range(0.0, 100.0, 0.1, "or_greater") var max_probe_acceleration := 35.0
-## Enables applying forces. Disable to keep query/contact state without affecting physics.
+## Applies the forces and samples the water. Off: the body is left to physics alone and
+## its probe states stop updating.
 @export var apply_forces := true
 
 @export_group("Sinking")
@@ -88,7 +89,7 @@ signal sinking_started(reason: StringName, data: Dictionary)
 ## The body the forces act on (resolved in _ready).
 var rigid_body : RigidBody3D
 ## The water surface of this body's world (resolved in _ready); null disables buoyancy.
-var water : WaterSurface
+var _water : WaterSurface
 ## The probe volumes in use (see refresh_volumes()).
 var probe_volumes : Array[BuoyancyProbeVolume] = []
 ## True while the body is held frozen waiting for its first water sample.
@@ -129,9 +130,9 @@ func _ready() -> void:
 		set_physics_process(false)
 		return
 	rigid_body = _resolve_rigid_body()
-	water = WaterSurface.find(self)
-	if rigid_body == null or water == null:
-		if water == null:
+	_water = WaterSurface.find(self)
+	if rigid_body == null or _water == null:
+		if _water == null:
 			push_error("BuoyantBody %s: no WaterSurface in this world (add an OceanSystem). Buoyancy is disabled." % get_path())
 		set_physics_process(false)
 		return
@@ -154,8 +155,8 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
-	if water != null:
-		water.release_query(self)
+	if _water != null:
+		_water.release_query(self)
 
 
 func _physics_process(delta : float) -> void:
@@ -172,7 +173,7 @@ func _physics_process(delta : float) -> void:
 
 	var body_transform := rigid_body.global_transform
 	_submit_points(body_transform)
-	var result := water.get_query_result(self)
+	var result := _water.get_query_result(self)
 	# The first readback arrives a few frames after the first submit.
 	if result == null or result.dispatch_time <= _probe_set_time:
 		return
@@ -180,7 +181,7 @@ func _physics_process(delta : float) -> void:
 		push_error("BuoyantBody %s: query result has %d samples for %d probes; tick skipped." % [get_path(), result.samples.size(), _points.size()])
 		return
 	_end_first_sample_hold()
-	var elapsed := water.get_query_age(result)
+	var elapsed := _water.get_query_age(result)
 	_update_water_acceleration(result)
 	# Drag acts along the body's own axes, so it stays well defined however the
 	# body lies. The areas come from each column's geometry, so the coefficients
@@ -470,11 +471,11 @@ func _rebuild_probe_cache() -> void:
 	for i in force_count:
 		var probe := _force_states[i].probe as BuoyancyProbeNode
 		_body_offsets[i] = to_body * probe.global_position
-		_max_volumes[i] = probe.max_submerged_volume_cubic_meters
+		_max_volumes[i] = probe.volume
 		_column_heights[i] = probe.buoyancy_height
-		_column_widths[i] = sqrt(probe.max_submerged_volume_cubic_meters / probe.buoyancy_height)
-		_longitudinal_drag[i] = probe.longitudinal_water_drag_multiplier
-		_lateral_drag[i] = probe.lateral_water_drag_multiplier
+		_column_widths[i] = sqrt(probe.volume / probe.buoyancy_height)
+		_longitudinal_drag[i] = probe.longitudinal_drag_multiplier
+		_lateral_drag[i] = probe.lateral_drag_multiplier
 		_states_by_probe[probe.get_instance_id()] = _force_states[i]
 		total_volume += _max_volumes[i]
 	for i in force_count:
@@ -485,9 +486,9 @@ func _rebuild_probe_cache() -> void:
 		_states_by_probe[probe.get_instance_id()] = _contact_states[j]
 	# Replace any queued submission of the old probe set, so every dispatch after
 	# this moment answers the new one.
-	_probe_set_time = water.get_clock()
+	_probe_set_time = _water.get_clock()
 	if point_count == 0:
-		water.release_query(self)
+		_water.release_query(self)
 	else:
 		_submit_points(rigid_body.global_transform)
 
@@ -495,7 +496,7 @@ func _rebuild_probe_cache() -> void:
 func _submit_points(body_transform : Transform3D) -> void:
 	for i in _points.size():
 		_points[i] = body_transform * _body_offsets[i]
-	water.submit_query(self, _points, rigid_body)
+	_water.submit_query(self, _points, rigid_body)
 
 
 func _update_state(state : BuoyancyProbeState, position : Vector3, sample : WaterSurfaceSample, water_height : float, applied_force : Vector3, submersion : float, now : float) -> void:

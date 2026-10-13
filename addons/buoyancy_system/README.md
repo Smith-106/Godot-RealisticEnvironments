@@ -24,8 +24,9 @@ RigidBody3D
    `design_waterline_y` (local) to where the hull should float, and
    `generated_probe_freeboard` to the height of the deck or gunwale above it,
    so waves above the waterline still lift the hull.
-3. Press **Generate All Probes** in the editor and save the scene. Probes are
-   never generated at runtime.
+3. Press **Generate All Probes** in the editor and save the scene. The
+   **New Probes** settings (`generated_probe_volume`, ...) apply to probes
+   generated from then on. Probes are never generated at runtime.
 4. Tune `buoyancy_strength`, the probe volumes and the drag coefficients.
    Probes are ordinary nodes you can move, delete or duplicate.
 
@@ -36,8 +37,8 @@ non-uniformly, set the body's `inertia` explicitly or it cannot pitch or roll.
 ## Probes
 
 - **`BuoyancyProbeNode`** (physical): the top of a water column
-  `buoyancy_height` tall that displaces `max_submerged_volume_cubic_meters`
-  when fully under water.
+  `buoyancy_height` tall that displaces `volume` (m³) when fully under water;
+  `longitudinal_drag_multiplier` / `lateral_drag_multiplier` scale its drag.
 - **`BuoyancyFxProbeNode`** (contact): no force, only wet/dry state and
   enter/exit events, tagged `bow`, `side` or `stern`.
 
@@ -58,7 +59,9 @@ API: `get_probe_states(tag_filter)`, `get_wet_probe_states(tag_filter)`,
 `entered` / `exited`, `force`, `normal` and `surface_velocity`. Set
 `apply_forces = false` to stop forces and sampling.
 
-`debug_enabled` on a volume draws probes, the waterline and forces.
+`debug_enabled` on a volume (off by default) draws probes, the waterline and
+forces, in the editor and at runtime. `generate_probes(physical, fx)` is what
+the Generate buttons call.
 
 ## Sinking
 

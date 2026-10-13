@@ -27,6 +27,10 @@ layout(push_constant) restrict readonly uniform PushConstants {
 	float detail;
 	float spread;
 	uint cascade_index;
+	// This cascade's wavenumber band (rad/m), [min, max): the cascades split the spectrum
+	// between them (OceanSystem._update_spectrum_bands()), so no wave is drawn twice.
+	float wavenumber_min;
+	float wavenumber_max;
 };
 
 // --- HELPER FUNCTIONS ---
@@ -104,6 +108,8 @@ vec2 get_spectrum_amplitude(in ivec2 id, in ivec2 map_size) {
 	vec2 dk = 2.0*PI / tile_length;
 	vec2 k_vec = (id - map_size*0.5)*dk; // Wave direction
 	float k = length(k_vec) + 1e-6;
+	if (k < wavenumber_min || k >= wavenumber_max)
+		return vec2(0.0);
 	float theta = atan(k_vec.x, k_vec.y);
 
 	vec2 dispersion = dispersion_relation(k);

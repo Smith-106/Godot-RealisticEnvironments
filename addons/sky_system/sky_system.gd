@@ -125,6 +125,14 @@ const RADIANCE_ALTITUDE_TOLERANCE := 0.1
 ## day, the sun deep in twilight): it would cost a shadowed light for nothing.
 const NEGLIGIBLE_LIGHT_SHARE := 0.001
 
+## World height of the sea surface: keep it equal to OceanSystem.water_level
+## (OceanEnvironment.sea_level sets both). The sea's horizon lies below eye level by
+## sqrt(2 h / R) for a camera h meters above it (earth radius R), and the sky
+## shows down to there. The atmosphere's haze (CloudPreset haze_*) is densest here.
+@export var sea_level := 0.0 :
+	set(value):
+		sea_level = value
+		_update_sky()
 ## Normalized day time. 0 is midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset.
 @export_range(0.0, 1.0, 0.001) var time_of_day := 0.35 :
 	set(value):
@@ -134,10 +142,11 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 ## Advances time_of_day automatically during gameplay.
 @export var cycle_enabled := true
 ## Real seconds required for one full in-game day.
-@export_range(1.0, 86400.0, 1.0, "or_greater") var cycle_duration_seconds := 600.0
+@export_range(1.0, 86400.0, 1.0, "or_greater", "suffix:s") var cycle_duration_seconds := 600.0
+
 @export_group("Astronomy")
 ## Observer latitude in degrees. This controls sun/moon altitude and seasonality.
-@export_range(-89.0, 89.0, 0.1) var latitude_degrees := 35.0 :
+@export_range(-89.0, 89.0, 0.1, "degrees") var latitude_degrees := 35.0 :
 	set(value):
 		latitude_degrees = value
 		_update_sky()
@@ -158,17 +167,19 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 		year = value
 		_update_sky()
 ## Rotates celestial north around world up, useful when a level's north is not -Z.
-@export_range(-180.0, 180.0, 0.1) var north_offset_degrees := 0.0 :
+@export_range(-180.0, 180.0, 0.1, "degrees") var north_offset_degrees := 0.0 :
 	set(value):
 		north_offset_degrees = value
 		_update_sky()
 ## Planetary axis tilt in degrees. Earth-like default is 23.44.
-@export_range(0.0, 45.0, 0.01) var axis_tilt_degrees := 23.44 :
+@export_range(0.0, 45.0, 0.01, "degrees") var axis_tilt_degrees := 23.44 :
 	set(value):
 		axis_tilt_degrees = value
 		_update_sky()
 ## When cycle_enabled is true, also advances day_of_year and lunar_age_days.
 @export var advance_calendar_with_cycle := true
+
+@export_group("Lights")
 ## Multiplies the sun's light energy above the atmosphere (SOLAR_ENERGY).
 @export_range(0.0, 8.0, 0.01) var sun_energy_multiplier := 1.0 :
 	set(value):
@@ -179,6 +190,20 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 	set(value):
 		moon_energy_multiplier = value
 		_update_sky()
+## Strength of the sun's and the moon's disks in the sky's radiance map (the ambient
+## light and reflections it gives): at their real radiance they would sparkle in every
+## glossy surface. The sky itself shows them at full radiance.
+@export_range(0.0, 3.0, 0.01) var radiance_sun_disk_strength := 0.16 :
+	set(value):
+		radiance_sun_disk_strength = value
+		_update_sky()
+## Strength of their halos in the radiance map.
+@export_range(0.0, 1.0, 0.01) var radiance_sun_halo_strength := 0.18 :
+	set(value):
+		radiance_sun_halo_strength = value
+		_update_sky()
+
+@export_group("Night Sky")
 ## Multiplies the stars' light. 1 is physical: the exposure decides which stars show
 ## (none by day, the brightest first at dusk, fewer under a bright moon).
 @export_range(0.0, 8.0, 0.01, "or_greater") var star_brightness := 1.0 :
@@ -206,37 +231,6 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 		if is_node_ready():
 			_setup_starfield()
 
-@export_group("Visuals")
-## World height of the sea surface. The sea's horizon lies below eye level by
-## sqrt(2 h / R) for a camera h meters above it (earth radius R), and the sky
-## shows down to there. The atmosphere's haze (CloudPreset haze_*) is densest here.
-@export var sea_level := 0.0 :
-	set(value):
-		sea_level = value
-		_update_sky()
-## Keeps the optional sun and moon meshes centered around the active camera.
-@export var follow_active_camera := true
-## Renders sun/moon disks directly in the sky shader instead of using mesh billboards.
-@export var render_bodies_in_sky := true :
-	set(value):
-		render_bodies_in_sky = value
-		_update_sky()
-## Distance from origin/camera for optional sun and moon visual meshes.
-@export_range(100.0, 10000.0, 1.0, "or_greater") var celestial_visual_distance := 900.0 :
-	set(value):
-		celestial_visual_distance = value
-		_update_visual_positions()
-## Strength of the sun disk drawn into the radiance sky material.
-@export_range(0.0, 3.0, 0.01) var radiance_sun_disk_strength := 0.16 :
-	set(value):
-		radiance_sun_disk_strength = value
-		_update_sky()
-## Strength of the sun halo drawn into the radiance sky material.
-@export_range(0.0, 1.0, 0.01) var radiance_sun_halo_strength := 0.18 :
-	set(value):
-		radiance_sun_halo_strength = value
-		_update_sky()
-
 @export_group("Clouds")
 ## Renders volumetric clouds into the sky, the starfield and (through
 ## get_cloud_cubemap()) the ocean's sky reflection. Needs a RenderingDevice
@@ -255,12 +249,12 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 			_start_cloud_transition()
 ## Seconds a new cloud_preset takes to blend in at runtime.
 @export_range(0.0, 600.0, 0.1, "or_greater") var cloud_transition_seconds := 30.0
-## Optional wind source the clouds drift with: get_wind_speed() and
-## get_wind_direction_degrees(), or wind_speed / wind_direction properties.
-## Empty uses cloud_wind_speed and cloud_wind_direction.
+## The wind the clouds drift with: a WindSystem, or any node with the wind contract
+## (see core's WindSource). Empty: cloud_wind_speed and cloud_wind_direction.
 @export var cloud_wind_source_path : NodePath :
 	set(value):
 		cloud_wind_source_path = value
+		update_configuration_warnings()
 		if is_node_ready():
 			_resolve_cloud_wind_source()
 ## Multiplies the wind source's speed: wind at cloud height is stronger than at the surface.
@@ -303,8 +297,6 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 @onready var _world_environment : WorldEnvironment = $WorldEnvironment
 @onready var _sun_light : DirectionalLight3D = $SunLight
 @onready var _moon_light : DirectionalLight3D = $MoonLight
-@onready var _sun_visual : MeshInstance3D = $SunVisual
-@onready var _moon_visual : MeshInstance3D = $MoonVisual
 
 var _elapsed_time := 0.0
 var _sun_hour_angle := 0.0
@@ -455,6 +447,8 @@ func _get_configuration_warnings() -> PackedStringArray:
 				break
 		if not exposed:
 			warnings.push_back("No ExposureController reads this sky (light_source_path): light levels are physical, so nights and overcast render near black. Add one (exposure_system), or ignore this if your own exposure reads get_scene_illuminance().")
+	if not cloud_wind_source_path.is_empty() and not WindSource.is_valid(get_node_or_null(cloud_wind_source_path)):
+		warnings.push_back("cloud_wind_source_path does not point to a wind source (e.g. a WindSystem); the clouds use cloud_wind_speed.")
 	return warnings
 
 
@@ -484,7 +478,6 @@ func _process(delta : float) -> void:
 		_advancing_cycle = false
 		_update_sky()
 	_elapsed_time += delta
-	_update_visual_positions()
 	_update_starfield()
 	if _cloud_transition_duration > 0.0:
 		_process_weather_transition(delta)
@@ -502,18 +495,6 @@ func _ensure_unique_runtime_resources() -> void:
 			environment.sky = environment.sky.duplicate()
 			if environment.sky.sky_material:
 				environment.sky.sky_material = environment.sky.sky_material.duplicate()
-	_duplicate_material_override(_sun_visual)
-	_duplicate_material_override(_moon_visual)
-
-
-func _duplicate_material_override(visual : MeshInstance3D) -> void:
-	if visual and visual.material_override:
-		visual.material_override = visual.material_override.duplicate()
-
-
-## time_of_day: 0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset.
-func get_time_of_day() -> float:
-	return time_of_day
 
 
 ## World direction toward the sun (unit vector; y < 0 below the horizon).
@@ -716,8 +697,6 @@ func _update_sky() -> void:
 		_update_haze_lighting(_moon_direction, moon_energy, _sun_direction, sun_energy)
 	_update_environment(_sun_direction, _moon_direction, _sun_visibility, _moon_visibility)
 	_push_atmosphere_parameters()
-	_update_visual_colors(_sun_visibility, _moon_visibility)
-	_update_visual_positions()
 	lighting_changed.emit()
 
 
@@ -923,13 +902,13 @@ func _update_environment(sun_direction : Vector3, moon_direction : Vector3, sun_
 	shader_material.set_shader_parameter(&"sun_direction", sun_direction)
 	shader_material.set_shader_parameter(&"sun_color", _sun_color)
 	shader_material.set_shader_parameter(&"sun_irradiance", Vector3(_sun_irradiance.r, _sun_irradiance.g, _sun_irradiance.b))
-	shader_material.set_shader_parameter(&"sun_visibility", sun_visibility if render_bodies_in_sky else 0.0)
+	shader_material.set_shader_parameter(&"sun_visibility", sun_visibility)
 	shader_material.set_shader_parameter(&"radiance_sun_disk_strength", radiance_sun_disk_strength)
 	shader_material.set_shader_parameter(&"radiance_sun_halo_strength", radiance_sun_halo_strength)
 	shader_material.set_shader_parameter(&"moon_direction", moon_direction)
 	shader_material.set_shader_parameter(&"moon_color", _moon_color)
 	shader_material.set_shader_parameter(&"moon_irradiance", Vector3(_moon_irradiance.r, _moon_irradiance.g, _moon_irradiance.b))
-	shader_material.set_shader_parameter(&"moon_visibility", moon_visibility if render_bodies_in_sky else 0.0)
+	shader_material.set_shader_parameter(&"moon_visibility", moon_visibility)
 	shader_material.set_shader_parameter(&"moon_phase", _moon_phase)
 	# The lit part's radiance as a share of the full moon's (at most 1: the formula
 	# overshoots near new moon, where the lit share goes to 0).
@@ -1121,50 +1100,6 @@ func _update_starfield() -> void:
 	_starfield_material.set_shader_parameter(&"planet_directions", _planet_directions)
 	_starfield_material.set_shader_parameter(&"planet_light", _planet_lux)
 	_starfield_material.set_shader_parameter(&"sea_level", sea_level)
-
-
-func _update_visual_colors(sun_visibility : float, moon_visibility : float) -> void:
-	if render_bodies_in_sky:
-		if _sun_visual:
-			_sun_visual.visible = false
-		if _moon_visual:
-			_moon_visual.visible = false
-		return
-	_set_visual_color(_sun_visual, _sun_color, sun_visibility)
-	_set_visual_color(_moon_visual, _moon_color, moon_visibility * _moon_brightness)
-
-
-func _set_visual_color(visual : MeshInstance3D, color : Color, visibility : float) -> void:
-	if visual == null:
-		return
-	visual.visible = visibility > 0.001
-	var shader_material := visual.material_override as ShaderMaterial
-	if shader_material:
-		shader_material.set_shader_parameter(&"body_color", color)
-		shader_material.set_shader_parameter(&"visibility", visibility)
-		return
-	var material := visual.material_override as StandardMaterial3D
-	if material:
-		material.albedo_color = Color(color.r, color.g, color.b, visibility)
-		material.emission = color
-		material.emission_energy_multiplier = visibility
-
-
-func _update_visual_positions() -> void:
-	var camera := _get_active_camera()
-	if camera == null:
-		return
-	var origin := camera.global_position if follow_active_camera else global_position
-	if not render_bodies_in_sky:
-		_position_body_visual(_sun_visual, origin, get_sun_direction())
-		_position_body_visual(_moon_visual, origin, get_moon_direction())
-
-
-func _position_body_visual(visual : MeshInstance3D, origin : Vector3, direction : Vector3) -> void:
-	if visual == null:
-		return
-	visual.global_position = origin + direction * celestial_visual_distance
-	visual.look_at(origin, _get_look_up(direction))
 
 
 func _get_solar_equatorial_coordinates() -> Vector2:
@@ -1546,32 +1481,20 @@ func _get_cloud_sun_light_scale() -> float:
 
 ## The clouds use cloud_wind_speed / cloud_wind_direction while there is no valid source.
 func _resolve_cloud_wind_source() -> void:
-	_cloud_wind_source = null if cloud_wind_source_path.is_empty() else get_node_or_null(cloud_wind_source_path)
-	if _cloud_wind_source == null:
-		if not cloud_wind_source_path.is_empty():
-			push_error("SkySystem %s: cloud_wind_source_path %s not found; using cloud_wind_speed." % [get_path(), cloud_wind_source_path])
+	_cloud_wind_source = null
+	if cloud_wind_source_path.is_empty():
 		return
-	for value in [[&"get_wind_speed", &"wind_speed"], [&"get_wind_direction_degrees", &"wind_direction"]]:
-		if not _cloud_wind_source.has_method(value[0]) and _cloud_wind_source.get(value[1]) == null:
-			push_error("SkySystem %s: cloud wind source has neither %s() nor a %s property; using cloud_wind_speed." % [get_path(), value[0], value[1]])
-			_cloud_wind_source = null
-			return
+	var node := get_node_or_null(cloud_wind_source_path)
+	if WindSource.is_valid(node):
+		_cloud_wind_source = node
+	else:
+		push_error("SkySystem %s: cloud_wind_source_path %s is not a wind source (get_wind_speed() and get_wind_direction_degrees(), or wind_speed and wind_direction); the clouds use cloud_wind_speed." % [get_path(), cloud_wind_source_path])
 
 
 func _get_cloud_wind_velocity() -> Vector2:
-	var speed := cloud_wind_speed
-	var direction := cloud_wind_direction
 	if _cloud_wind_source:
-		speed = _read_wind_value(&"get_wind_speed", &"wind_speed") * cloud_wind_speed_multiplier
-		direction = _read_wind_value(&"get_wind_direction_degrees", &"wind_direction")
-	var radians := deg_to_rad(direction)
-	return Vector2(sin(radians), cos(radians)) * speed
-
-
-func _read_wind_value(method : StringName, property : StringName) -> float:
-	if _cloud_wind_source.has_method(method):
-		return float(_cloud_wind_source.call(method))
-	return float(_cloud_wind_source.get(property))
+		return WindSource.get_velocity(_cloud_wind_source) * cloud_wind_speed_multiplier
+	return WindSource.direction_to_vector(cloud_wind_direction) * cloud_wind_speed
 
 
 func _get_cloud_camera_position() -> Vector3:

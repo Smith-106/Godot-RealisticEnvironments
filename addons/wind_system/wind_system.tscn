@@ -1,6 +1,0 @@
-[gd_scene format=3 uid="uid://clrjnofocfcpe"]
-
-[ext_resource type="Script" uid="uid://btyuqnmfuyrr6" path="res://addons/wind_system/wind_system.gd" id="1_wind"]
-
-[node name="WindSystem" type="Node" unique_id=138637095]
-script = ExtResource("1_wind")

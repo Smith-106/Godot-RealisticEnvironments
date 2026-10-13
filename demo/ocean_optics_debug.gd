@@ -25,7 +25,6 @@ func _ready() -> void:
 	camera.look_at(initial_camera_target, Vector3.UP)
 	_yaw = camera.rotation.y
 	_pitch = camera.rotation.x
-	water.use_external_wind = true
 	water.wind_source_path = water.get_path_to(wind_system)
 	water.sky_source_path = water.get_path_to(sky_system)
 	debug_panel.setup(water, wind_system, sky_system)

@@ -14,7 +14,9 @@ const SLOT_COUNT := 3
 const WORKGROUP_SIZE := 64
 ## Points are uploaded as tightly packed xyz floats (PackedVector3Array bytes).
 const BYTES_PER_POINT := 12
-const BYTES_PER_CASCADE := 48
+## Floats of one cascade record (OceanCascade in ocean_sampling.glslinc).
+const FLOATS_PER_CASCADE := 12
+const BYTES_PER_CASCADE := FLOATS_PER_CASCADE * 4
 const BYTES_PER_SAMPLE := 48
 const FLOATS_PER_SAMPLE := 12
 const NORMAL_SAMPLE_DISTANCE := 0.25

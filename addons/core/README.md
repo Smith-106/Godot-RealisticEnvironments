@@ -1,7 +1,9 @@
 # Core
 
-Shared code for the ocean addons. Every `*_system` addon may depend on `core`;
-`core` depends on nothing, and the systems never depend on each other.
+Shared code for the ocean addons: the contracts between the systems
+(`WaterSurface`, `WindSource`) and helpers. Every `*_system` addon may depend
+on `core`; `core` depends on nothing, and the systems never depend on each
+other.
 
 ## `WaterSurface`
 
@@ -27,6 +29,21 @@ water.release_query(self)
   `surface_velocity` and `extrapolated_height(age)`.
 - `can_add_impulses()` / `add_impulse(position, radius, amplitude)` add a
   splash that spreads as a ring.
+
+## `WindSource`
+
+The wind contract: a wind source is any node with `get_wind_speed()` (m/s)
+and `get_wind_direction_degrees()` (the direction the wind blows toward, 0 =
++Z, 90 = +X), or `wind_speed` / `wind_direction` properties. `WindSystem` is
+one; `OceanSystem.wind_source_path` and `SkySystem.cloud_wind_source_path`
+accept any. Read one with the static helpers:
+
+```gdscript
+if WindSource.is_valid(node):
+	var speed := WindSource.get_speed(node)          # m/s
+	var heading := WindSource.get_direction(node)    # degrees
+	var velocity := WindSource.get_velocity(node)    # Vector2(x, z), m/s
+```
 
 ## Other helpers
 

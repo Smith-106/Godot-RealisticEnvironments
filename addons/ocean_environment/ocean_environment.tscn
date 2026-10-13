@@ -17,7 +17,6 @@ cloud_wind_source_path = NodePath("../WindSystem")
 
 [node name="Ocean" parent="." unique_id=1691752938 instance=ExtResource("4_ocean")]
 sky_source_path = NodePath("../SkySystem")
-use_external_wind = true
 wind_source_path = NodePath("../WindSystem")
 
 [node name="ExposureController" type="Node" parent="." unique_id=1814142300]

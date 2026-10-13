@@ -38,28 +38,35 @@ Keep physical light units and Godot's Environment fog off.
 
 ## Main settings
 
+- `sea_level`: world height of the sea (keep it equal to the ocean's
+  `water_level`).
 - `time_of_day` 0–1 (0.25 sunrise, 0.5 noon, 0.75 sunset); `cycle_enabled` and
   `cycle_duration_seconds` run a day cycle.
 - **Astronomy:** `latitude_degrees`, `day_of_year`, `year`, `lunar_age_days`,
-  `north_offset_degrees` (default north is −Z).
+  `north_offset_degrees` (default north is −Z), `axis_tilt_degrees`,
+  `advance_calendar_with_cycle`.
+- **Lights:** `sun_energy_multiplier`, `moon_energy_multiplier` (1 =
+  physical), and how bright the disks are in the sky's radiance map
+  (`radiance_sun_disk_strength`, `radiance_sun_halo_strength`).
+- **Night Sky:** `star_brightness` (1 = physical), `airglow_brightness`,
+  `star_catalog`, `star_cubemap_size`.
 - **Clouds:** `clouds_enabled`, `cloud_preset` (blends over
   `cloud_transition_seconds`, or call `transition_clouds_to(preset, seconds)`),
-  `cloud_wind_source_path` or `cloud_wind_speed` / `cloud_wind_direction`,
-  quality (`cloud_cubemap_size`, `cloud_update_stride`, step counts).
+  `cloud_wind_source_path` (any wind source, see `core`'s `WindSource`) or
+  `cloud_wind_speed` / `cloud_wind_direction`, lighting and quality
+  (`cloud_cubemap_size`, `cloud_update_stride`, step counts).
 - **Weather haze** is part of each `CloudPreset`: `haze_visibility`,
   `haze_scale_height`, `haze_anisotropy`, `star_scintillation`.
-- **Stars:** `star_catalog`, `star_brightness` (1 = physical),
-  `airglow_brightness`.
-- `sea_level`: world height of the sea.
 
 ## Using it from other code
 
 Getters return cached values and are free to call:
 `get_sun_direction()`, `get_moon_direction()`, `get_sun_color()`,
-`get_sun_visibility()`, `get_moon_phase()`, `get_time_of_day()`,
-`get_scene_illuminance()`, `get_illuminance_unit_lux()`, plus cloud, star,
-planet and atmosphere textures for the ocean (see the sky-source contract in
-`AGENTS.md`). Signals: `time_of_day_changed(time_of_day)`, `lighting_changed`.
+`get_sun_visibility()`, `get_moon_visibility()`, `get_moon_phase()`,
+`get_cloud_state()`, `get_scene_illuminance()`, `get_illuminance_unit_lux()`,
+plus the cloud, star, planet and atmosphere textures the ocean reflects (the
+sky source contract, see the `ocean_system` README). Signals:
+`time_of_day_changed(time_of_day)`, `lighting_changed`.
 
 Transparent shaders that should be hazed include
 `shaders/atmosphere.gdshaderinc` and write
@@ -100,4 +107,4 @@ Opaque materials must not write `FOG`.
 | `shaders/atmosphere.gdshaderinc`, `atmosphere_globals.gd` | Haze for transparent materials, global uniforms |
 | `cloud_renderer.gd`, `shaders/compute/cloud_*`, `cloud_preset.gd`, `cloud_presets/` | Clouds and weather |
 | `star_catalog.gd`, `stars/` | Star catalog and Milky Way (baked by `tools/`) |
-| `shaders/sky.gdshader`, `starfield.gdshader`, `celestial_disk.gdshader`, `materials/` | Sky, stars, sun/moon disks |
+| `shaders/sky.gdshader`, `starfield.gdshader`, `materials/` | Sky (with the sun and moon disks) and stars |

@@ -29,7 +29,8 @@ Boat (RigidBody3D, FloatingBoat)   drive input, stability, model animation
 2. Replace the collision shape; set `mass` and `center_of_mass`.
 3. On `BuoyancyProbeVolume`: set `source_paths`, `design_waterline_y` and the
    probe sizes, press **Generate All Probes**, save (see the buoyancy README).
-4. Add `ProjectileHitbox` areas under `Hitboxes`; list their groups in
+4. Add `ProjectileHitbox` areas under `Hitboxes`, with a `collision_mask`
+   that includes your projectiles' layer; list their groups in
    `group_max_health`, and in `BuoyantBody.sink_on_destroyed_groups` if losing
    them should sink the boat.
 5. Move `CameraTargets/*` to the deck and `BowSpray` to the stem, just below

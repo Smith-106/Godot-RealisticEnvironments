@@ -18,7 +18,7 @@ eye-like exposure, and floating bodies and boats that ride it all.
   and bow foam; Kelvin wakes, bow waves and splash rings around hulls (iWave);
   water colour from absorption and scattering, glowing crests, refraction,
   caustics; sky, star and planet reflections with a rough-surface Fresnel;
-  screen-space or planar reflections; sun glitter; Low / Medium / High shader
+  screen-space or planar reflections; Low / Medium / High shader
   tiers.
 - **Sky** (`sky_system`): sun and moon placed astronomically, a physical
   atmosphere (blue sky, twilight, sea haze and fog, distance haze on the
@@ -111,7 +111,7 @@ The wave simulation started as a fork of
 ```
 project.godot            Godot manifest (main scene, input map, physics layer names)
 addons/                  Reusable systems, each self-contained with its own README
-  core/                  Shared foundation: WaterSurface contract, RenderingDevice helpers
+  core/                  Shared foundation: WaterSurface and WindSource contracts, RenderingDevice helpers
   ocean_system/          FFT ocean: compute pipeline, water shader, mesh, reflections, queries
   sky_system/            Day/night sky, atmosphere, sun + moon lights, starfield, astronomy, volumetric clouds
   wind_system/           Wind provider node with procedural gusts
@@ -137,7 +137,7 @@ holds the working rules for anyone (human or agent) changing the code;
 ## How the pieces fit
 
 ```
-WindSystem ──wind speed/dir──▶ OceanSystem ◀──sun/sky colors, clouds── SkySystem ◀── wind (cloud drift)
+WindSystem ──wind speed/dir──▶ OceanSystem ◀──sun, atmosphere, clouds, stars── SkySystem ◀── wind (cloud drift)
 								   │  compute: spectrum → FFT → displacement/normal maps
 								   │  shader:  displacement, foam, reflections, cutouts
 								   │  iWave:   wakes and foam from HullWaterFootprint
@@ -152,7 +152,8 @@ WindSystem ──wind speed/dir──▶ OceanSystem ◀──sun/sky colors, cl
 ```
 
 Systems never reference each other directly. What several of them share lives
-in the `core` addon (the `WaterSurface` contract, RenderingDevice helpers);
+in the `core` addon (the `WaterSurface` and `WindSource` contracts,
+RenderingDevice helpers);
 everything else goes through duck-typed methods, node groups and signals. Each
 addon can be dropped into another project with `core` alone (buoyancy also
 needs some water in the scene that registers a `WaterSurface`), except

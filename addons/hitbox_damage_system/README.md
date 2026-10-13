@@ -13,20 +13,25 @@ Ship (RigidBody3D)
    └─ MastHitbox  (ProjectileHitbox, hitbox_group = "mast") + CollisionShape3D
 ```
 
-- Hitboxes sit on physics layer 3 with mask 2 (projectiles).
+- Each hitbox finds the nearest `HitboxHealthManager` above it (or its
+  `manager_path`) and warns in the editor without one.
+- Set each hitbox's own `collision_mask` to the projectiles' physics layer
+  (the demo: hitboxes on layer 3 "Hitbox", mask 2 "Projectile").
 - A projectile is anything in group `projectile` or with a `launch()` method.
   Hits from the ship's own projectiles are ignored (`ignore_own_projectiles`).
-- Set health per group in `group_max_health` and multipliers in
-  `group_damage_multipliers`; other groups use `default_group_max_health`.
+- Set health per group in `group_max_health` (the debug panel shows these)
+  and multipliers in `group_damage_multipliers`; other groups use
+  `default_group_max_health`.
 - Damage is `hit_data.damage` if given, else projectile momentum ×
   `damage_per_momentum` × multipliers (at least `minimum_hit_damage`).
 - Connect `group_destroyed` to whatever reacts, e.g.
   `BuoyantBody._on_hitbox_group_destroyed`.
 
-Signals: `projectile_hit`, `hitbox_hit`, `group_health_changed`,
-`group_destroyed`. Methods: `get_group_health()`, `get_group_max_health()`,
-`set_group_health()`, `is_group_destroyed()`, `reset_health()`,
-`refresh_hitboxes()`.
+Signals: `projectile_hit` (hitbox), `hitbox_hit`, `group_health_changed`,
+`group_destroyed` (manager). Methods: `handle_projectile_hit(hitbox,
+projectile, hit_data)` (also for damage from your own code: pass the group and
+`damage` in `hit_data`), `get_group_health()`, `get_group_max_health()`,
+`set_group_health()`, `is_group_destroyed()`, `reset_health()`.
 
 `hit_effect_scene` (default: smoke puff) spawns at each impact.
 `debug_ui_enabled` shows a health bar per group.

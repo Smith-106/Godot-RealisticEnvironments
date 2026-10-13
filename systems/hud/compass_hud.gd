@@ -94,9 +94,9 @@ func _draw_cardinals(center: Vector2, radius: float) -> void:
 
 
 func _draw_wind_arrow(center: Vector2, radius: float) -> void:
-	if wind_source == null:
+	if not WindSource.is_valid(wind_source):
 		return
-	var direction := _degrees_to_screen_direction(_get_wind_direction_degrees())
+	var direction := _degrees_to_screen_direction(WindSource.get_direction(wind_source))
 	var right := Vector2(-direction.y, direction.x)
 	var start := center - direction * 11.0
 	var tip := center + direction * (radius - 27.0)
@@ -132,13 +132,6 @@ func _get_boat_heading_degrees() -> float:
 		return 0.0
 	forward = forward.normalized()
 	return rad_to_deg(atan2(forward.x, forward.z))
-
-
-func _get_wind_direction_degrees() -> float:
-	if wind_source.has_method(&"get_wind_direction_degrees"):
-		return float(wind_source.call(&"get_wind_direction_degrees"))
-	var value = wind_source.get(&"wind_direction")
-	return float(value) if value != null else 0.0
 
 
 func _degrees_to_screen_direction(degrees: float) -> Vector2:

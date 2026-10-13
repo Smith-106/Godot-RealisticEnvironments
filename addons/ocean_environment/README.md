@@ -30,6 +30,7 @@ OceanEnvironment        sea_level for the whole environment
 - For everything else, enable **Editable Children** and edit the systems
   (time of day, clouds, wind, wave cascades, quality, exposure).
 - Scripts can reach the systems as `wind`, `sky`, `ocean`, `exposure`.
-- Don't rotate or scale the environment.
+- Don't rotate, scale or raise the environment: `sea_level` sets the sea's
+  height.
 
 To float things, see `buoyancy_system`; for a ready boat, `boat_template`.

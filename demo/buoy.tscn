@@ -130,7 +130,7 @@ cast_shadow = 0
 extra_cull_margin = 10000.0
 mesh = SubResource("SphereMesh_3aspy")
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
+volume = 1.2809
 buoyancy_height = 1.6078372
 
 [node name="Probe_001" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=282954885]
@@ -140,7 +140,7 @@ cast_shadow = 0
 extra_cull_margin = 10000.0
 mesh = SubResource("SphereMesh_y2khd")
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
+volume = 1.2809
 buoyancy_height = 1.6078372
 
 [node name="Probe_002" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=606315226]
@@ -150,7 +150,7 @@ cast_shadow = 0
 extra_cull_margin = 10000.0
 mesh = SubResource("SphereMesh_yspub")
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
+volume = 1.2809
 buoyancy_height = 1.6078372
 
 [node name="Probe_003" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=2073005665]
@@ -160,7 +160,7 @@ cast_shadow = 0
 extra_cull_margin = 10000.0
 mesh = SubResource("SphereMesh_nrol3")
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
+volume = 1.2809
 buoyancy_height = 1.6078372
 
 [node name="Probe_004" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=826536182]
@@ -170,7 +170,7 @@ cast_shadow = 0
 extra_cull_margin = 10000.0
 mesh = SubResource("SphereMesh_wjqy0")
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
+volume = 1.2809
 buoyancy_height = 1.6078372
 
 [node name="Probe_005" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=601307136]
@@ -180,7 +180,7 @@ cast_shadow = 0
 extra_cull_margin = 10000.0
 mesh = SubResource("SphereMesh_d63e2")
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
+volume = 1.2809
 buoyancy_height = 1.6078372
 
 [node name="Probe_006" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1325008678]
@@ -190,7 +190,7 @@ cast_shadow = 0
 extra_cull_margin = 10000.0
 mesh = SubResource("SphereMesh_gpwpt")
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
+volume = 1.2809
 buoyancy_height = 1.6078372
 
 [node name="Probe_007" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=701507295]
@@ -200,7 +200,7 @@ cast_shadow = 0
 extra_cull_margin = 10000.0
 mesh = SubResource("SphereMesh_67ip0")
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
+volume = 1.2809
 buoyancy_height = 1.6078372
 
 [node name="Sketchfab_Scene" parent="RigidBody3D" unique_id=660243005 instance=ExtResource("1_lq5a0")]

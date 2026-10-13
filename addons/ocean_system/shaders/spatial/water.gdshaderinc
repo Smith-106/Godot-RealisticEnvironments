@@ -3,7 +3,8 @@
 // A variant may define, before including it:
 //   REFRACTION_MARCH_STEPS, REFRACTION_REFINE_STEPS, CREST_MARCH_STEPS,
 //   PLANAR_REFLECTION_STEPS: fewer steps for the searches and marches below;
-//   WATER_NO_CAUSTICS, WATER_NO_GLITTER, WATER_NO_SKY_POINTS: compile those features out.
+//   NORMAL_ANISOTROPY_TAPS: fewer normal map reads along stretched pixel footprints;
+//   WATER_NO_CAUSTICS, WATER_NO_SKY_POINTS: compile those features out.
 // Every variant declares the same uniforms, so OceanSystem drives them alike.
 /*
  * Lights (the sun) shade the water in light(): Lambert diffuse and a GGX
@@ -30,8 +31,6 @@
 #define MAX_CASCADES 8
 #define MAX_NEAR_HULLS 8
 #define MAX_LOD_LEVELS 16
-// Solid angle (sr) of the sun's (and the moon's) disk, about 0.53 degrees across.
-#define LIGHT_DISK_SOLID_ANGLE 6.8e-5
 // Radius (m) of the sphere the water is drawn on (OceanSystem.EARTH_RADIUS).
 #define EARTH_RADIUS 6371000.0
 #define WATER_IOR 1.333
@@ -45,6 +44,11 @@
 #define CREST_MARCH_STEPS 7
 #endif
 #define CREST_PATH_MAX 32.0
+// Most normal map reads per cascade along a pixel footprint's long axis (anisotropic
+// filtering in the fragment shader); footprints stretched further are blurred across.
+#ifndef NORMAL_ANISOTROPY_TAPS
+#define NORMAL_ANISOTROPY_TAPS 8
+#endif
 // Foam lighting (light()): wrap of its diffuse term, and strength and sharpness of the
 // light it lets through toward the viewer.
 #define FOAM_WRAP 0.6
@@ -97,7 +101,7 @@ uniform float water_scattering_anisotropy : hint_range(0.0, 0.99) = 0.85; // Hen
 
 uniform float clear_roughness : hint_range(0.0, 1.0) = 0.10;
 uniform float foam_roughness : hint_range(0.0, 1.0) = 0.24;
-uniform float normal_strength : hint_range(0.0, 1.0) = 1.0; // Global normal strength
+uniform float normal_scale : hint_range(0.0, 2.0) = 1.0; // multiplies every wave slope (OceanSystem.normal_scale; 1 = physical)
 uniform float foam_intensity : hint_range(0.0, 4.0) = 1.0; // multiplies the wave foam coverage
 // Foam pattern with uniformly distributed values (textures/generate_foam_detail.py): foam
 // shows where pattern > 1 - coverage, which covers exactly `coverage` of the area.
@@ -150,17 +154,9 @@ uniform sampler3D aerial_inscatter : filter_linear, repeat_disable;
 uniform sampler3D aerial_inscatter_lobe : filter_linear, repeat_disable;
 uniform vec4 aerial_observer;
 uniform float aerial_max_distance = 1.0;
-uniform bool sky_reflection_enabled = true;
 uniform float sky_reflection_strength : hint_range(0.0, 2.0) = 1.0;
 uniform float sky_reflection_f0 : hint_range(0.0, 0.12) = 0.02;
 uniform float sun_specular_strength : hint_range(0.0, 4.0) = 1.0;
-// Stochastic glints (see glitter_scale()): facets per square meter of water, 0 = smooth highlight.
-uniform float sun_glitter_density : hint_range(0.0, 10000000.0) = 1000000.0;
-uniform float sun_glitter_rate : hint_range(0.0, 60.0) = 12.0; // glint patterns per second
-// The glint patterns' clock, kept by OceanSystem in double precision (TIME wraps every
-// hour): the current pattern's index and the crossfade toward the next one (0-1).
-uniform int glitter_pattern = 0;
-uniform float glitter_pattern_blend = 0.0;
 uniform int water_debug_view : hint_range(0, 15) = 0;
 // The camera's exposure (CameraAttributes.exposure_multiplier, or the world's), set
 // every frame by OceanSystem. The reflections are summed pre-exposed, as the sky source's
@@ -209,8 +205,12 @@ uniform vec4 interaction_window = vec4(0.0); // window center x, center z, fade 
 uniform float interaction_inv_extent = 0.0;  // 1 / window size (m)
 uniform float interaction_cell_size = 0.5;
 
+// Height of the still water (OceanSystem.water_level): the surface is drawn here, as
+// queries, buoyancy and reflections see it.
+uniform float water_level = 0.0;
+
 group_uniforms cascade_data;
-uniform vec4 map_scales[MAX_CASCADES];               // Scales for displacement/normal maps. Packed: [uv scale, displacement scale, normal scale]
+uniform vec4 map_scales[MAX_CASCADES];               // Packed: [uv scale xy (1 / tile length), displacement scale, unused]
 uniform vec4 spectrum_blend_states[MAX_CASCADES];    // Packed: [active layer, pending layer, active weight, pending weight]; pending weight is 0 unless a spectrum crossfade is running
 uniform int num_cascades = 0;
 // Two maps of each kind, A and B, hold every cascade's two latest FFT frames in either order
@@ -230,11 +230,6 @@ varying vec3 water_world_position;
 varying float light_specular_scale;
 // Fragment -> light(): view-ray transmission for crest_scatter() (Fresnel, foam covers it).
 varying float crest_transmission;
-// Fragment -> light(), for glitter_scale(): random numbers of the pixel's glint cells, for
-// (fine level, coarse level) x (current pattern, next pattern).
-varying vec4 glitter_random;
-// Facets in a fine and in a coarse cell, fine-to-coarse blend, current-to-next pattern blend.
-varying vec4 glitter_cells;
 
 /*
  * How far the water at world XZ is drawn below the plane touching the sphere under
@@ -352,7 +347,7 @@ void vertex() {
 		int level = int(INSTANCE_CUSTOM.w + 0.5);
 		vertex_spacing = INSTANCE_CUSTOM.z;
 		vec2 xz = INSTANCE_CUSTOM.xy + UV * vertex_spacing;
-		float camera_distance = distance(CAMERA_POSITION_WORLD, vec3(xz.x, VERTEX.y, xz.y));
+		float camera_distance = distance(CAMERA_POSITION_WORLD, vec3(xz.x, water_level, xz.y));
 		// Geomorphing: with distance, odd lattice vertices slide onto their even
 		// neighbours, i.e. onto the next level's lattice, and on through coarser
 		// levels. Positions then depend only on the world position, so nodes of
@@ -370,6 +365,8 @@ void vertex() {
 		}
 		VERTEX.xz = xz;
 	}
+	// The sea's height is water_level, wherever the node is (OceanSystem warns when moved).
+	VERTEX.y = water_level;
 	UV = VERTEX.xz;
 
 	// Read displacements from displacement maps, prefiltered to the vertex spacing
@@ -435,26 +432,35 @@ vec4 texture_bicubic(in sampler2DArray sampler, in vec3 uvw) {
 }
 
 /*
- * One spectrum layer's (mean slope xy, unresolved slope variance, foam), blended between its two
- * FFT frames in maps A and B by b_weight. Trilinear at mip lod (explicit, so it may run after the
- * hull discard). bilinear_weight 1 skips the bicubic filter (8 extra reads), which only helps
- * under magnification.
+ * One spectrum layer's (mean slope xy, unresolved slope variance, foam) over a pixel's
+ * footprint, blended between its two FFT frames in maps A and B by b_weight. The footprint
+ * (tile coordinates) is centered on uv and read as `taps` trilinear reads at mip lod spread
+ * along its long axis `axis` (anisotropic filtering); explicit LOD, so it may run after the
+ * hull discard. variance_weight scales the slope variance the reads average away.
+ * bilinear_weight 1 skips the bicubic filter of a single read (8 extra reads), which only
+ * helps under magnification.
  */
-vec4 sample_normal_layer(vec3 coords, float lod, float bilinear_weight, float b_weight) {
-	vec4 sample_a = textureLod(normals_a, coords, lod);
-	vec4 sample_b = textureLod(normals_b, coords, lod);
-	if (use_bicubic_normals && bilinear_weight < 1.0) {
-		sample_a = mix(texture_bicubic(normals_a, coords), sample_a, bilinear_weight);
-		sample_b = mix(texture_bicubic(normals_b, coords), sample_b, bilinear_weight);
+vec4 sample_normal_layer(vec2 uv, float layer, vec2 axis, int taps, float lod, float variance_weight, float bilinear_weight, float b_weight) {
+	vec4 sample_a = vec4(0.0);
+	vec4 sample_b = vec4(0.0);
+	for (int t = 0; t < taps; ++t) {
+		vec3 coords = vec3(uv + axis * ((float(t) + 0.5) / float(taps) - 0.5), layer);
+		sample_a += textureLod(normals_a, coords, lod);
+		sample_b += textureLod(normals_b, coords, lod);
 	}
-	// Slopes the filter averaged away: E|g|^2 - |E g|^2 (mip_chain.glsl), per frame, as
-	// blending two frames' slopes is not roughness. Interpolating texels with different slopes
-	// also raises it, but while a pixel covers less than a texel that spread is drawn (the
-	// interpolated slope varies across pixels), not missed: count it from one texel up.
+	sample_a /= float(taps);
+	sample_b /= float(taps);
+	if (taps == 1 && use_bicubic_normals && bilinear_weight < 1.0) {
+		sample_a = mix(texture_bicubic(normals_a, vec3(uv, layer)), sample_a, bilinear_weight);
+		sample_b = mix(texture_bicubic(normals_b, vec3(uv, layer)), sample_b, bilinear_weight);
+	}
+	// Slopes the reads averaged away: E|g|^2 - |E g|^2 (mip_chain.glsl), per frame, as
+	// blending two frames' slopes is not roughness. Every channel averages linearly, so the
+	// mean over the taps is the mean over the footprint and the spread between taps counts.
 	float variance_a = max(sample_a.z - dot(sample_a.xy, sample_a.xy), 0.0);
 	float variance_b = max(sample_b.z - dot(sample_b.xy, sample_b.xy), 0.0);
 	vec4 blended = mix(sample_a, sample_b, b_weight);
-	blended.z = mix(variance_a, variance_b, b_weight) * min(lod, 1.0);
+	blended.z = mix(variance_a, variance_b, b_weight) * variance_weight;
 	return blended;
 }
 
@@ -823,7 +829,7 @@ vec2 cascade_slope(uint i, vec2 rest_xz, float lod) {
 		coords.z = blend_state.y;
 		slope += mix(textureLod(normals_a, coords, lod).xy, textureLod(normals_b, coords, lod).xy, b_weight) * blend_state.w;
 	}
-	return slope * scales.w;
+	return slope;
 }
 
 /*
@@ -842,9 +848,9 @@ float slope_variance_within(vec2 rest_xz, float width) {
 		vec4 a = textureLod(normals_a, vec3(rest_xz * scales.xy, blend_state.x), lod);
 		vec4 b = textureLod(normals_b, vec3(rest_xz * scales.xy, blend_state.x), lod);
 		vec4 m = mix(a, b, wave_frame_blends[i].x);
-		variance += max(m.z - dot(m.xy, m.xy), 0.0) * blend_state.z * blend_state.z * scales.w * scales.w;
+		variance += max(m.z - dot(m.xy, m.xy), 0.0) * blend_state.z * blend_state.z;
 	}
-	return variance * normal_strength * normal_strength;
+	return variance * normal_scale * normal_scale;
 }
 
 /*
@@ -905,7 +911,7 @@ float caustic_light(vec3 hit, vec3 hit_normal, vec3 to_sun, vec3 surface, vec2 r
 		hessian[0] += (cascade_slope(i, entry_rest + dx, lod) - cascade_slope(i, entry_rest - dx, lod)) / (2.0 * e);
 		hessian[1] += (cascade_slope(i, entry_rest + dz, lod) - cascade_slope(i, entry_rest - dz, lod)) / (2.0 * e);
 	}
-	mat2 jacobian = mat2(1.0) - path * k * normal_strength * hessian;
+	mat2 jacobian = mat2(1.0) - path * k * normal_scale * hessian;
 	float focus = inversesqrt(determinant(jacobian) * determinant(jacobian) + CAUSTIC_SOFTENING * CAUSTIC_SOFTENING);
 	return 1.0 + share * (focus - 1.0);
 }
@@ -1011,65 +1017,10 @@ vec3 crest_scatter(vec3 normal, vec3 view, vec3 to_light, vec2 rest_xz, float su
 	return unshadowed * transmission_in * exp(-extinction * light_path);
 }
 
-/* Uniform random number in [0, 1) for integer coordinates (PCG3D hash). */
-float hash_uniform(ivec3 key) {
-	uvec3 v = uvec3(key) * 1664525u + 1013904223u;
-	v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-	v ^= v >> 16u;
-	v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-	return float(v.x >> 8u) / 16777216.0;
-}
-
-/*
- * Glint multiplier of one cell with `facets` facets, of which a share `aligned_fraction` reflects
- * the light into the eye: the aligned count is Poisson distributed (drawn with uniform u), and
- * its ratio to the mean is the multiplier, so the mean highlight stays the GGX one.
- */
-float glint_cell(float facets, float aligned_fraction, float u) {
-	float mean = facets * aligned_fraction;
-	if (mean <= 0.0) {
-		return 1.0;
-	}
-	float count = 0.0;
-	if (mean < 8.0) {
-		// Inverse of the Poisson CDF.
-		float probability = exp(-mean);
-		float cumulative = probability;
-		for (int k = 1; k < 24 && u > cumulative; ++k) {
-			count += 1.0;
-			probability *= mean / count;
-			cumulative += probability;
-		}
-	} else {
-		// Nearly normal: logistic approximation of the normal quantile (std 1).
-		float z = log(max(u, 1e-6) / max(1.0 - u, 1e-6)) * 0.5513;
-		count = max(mean + sqrt(mean) * z, 0.0);
-	}
-	return count / mean;
-}
-
-/*
- * Stochastic sun glitter (after Zirr & Kaplanyan 2016 and Deliot & Belcour 2023). The GGX
- * highlight is the mean over many tiny facets; a pixel holds a finite number of them, and the
- * few that point the light's disk at the eye flash as glints. World cells about a pixel wide
- * (two levels, blended) draw their aligned facet count; patterns change sun_glitter_rate times a
- * second and crossfade.
- */
-float glitter_scale(vec3 normal, vec3 view, vec3 light_direction, float roughness) {
-	vec3 half_vector = safe_normalize_vec3(view + light_direction, normal);
-	float no_h = saturate(dot(normal, half_vector));
-	float vo_h = max(dot(view, half_vector), 0.0001);
-	// Share of facet normals inside the half-vector cone of the light's disk.
-	float aligned_fraction = min(ggx_distribution(no_h, roughness) * no_h * LIGHT_DISK_SOLID_ANGLE / (4.0 * vo_h), 1.0);
-	float fine = mix(glint_cell(glitter_cells.x, aligned_fraction, glitter_random.x), glint_cell(glitter_cells.x, aligned_fraction, glitter_random.y), glitter_cells.w);
-	float coarse = mix(glint_cell(glitter_cells.y, aligned_fraction, glitter_random.z), glint_cell(glitter_cells.y, aligned_fraction, glitter_random.w), glitter_cells.w);
-	return mix(fine, coarse, glitter_cells.z);
-}
-
 /*
  * Glints of the sky's point lights (the planets): each one's irradiance through the
- * sea-level atmosphere and the clouds, reflected by the specular BRDF with the sun's
- * glitter, pre-exposed. Skipped while too faint for the exposure (by day).
+ * sea-level atmosphere and the clouds, reflected by the specular BRDF, pre-exposed.
+ * Skipped while too faint for the exposure (by day).
  */
 vec3 sky_point_glints(vec3 normal, vec3 view, float roughness) {
 	vec3 glints = vec3(0.0);
@@ -1088,8 +1039,7 @@ vec3 sky_point_glints(vec3 normal, vec3 view, float roughness) {
 		}
 		irradiance *= 1.0 - sample_clouds(direction, 0.0).a;
 		float no_l = saturate(dot(normal, direction));
-		float glitter = glitter_cells.x > 0.0 ? glitter_scale(normal, view, direction, roughness) : 1.0;
-		glints += irradiance * (water_specular_brdf(normal, view, direction, roughness) * no_l * glitter);
+		glints += irradiance * (water_specular_brdf(normal, view, direction, roughness) * no_l);
 	}
 	return glints;
 }
@@ -1111,10 +1061,23 @@ vec3 planar_reflection_project(vec4 point) {
 
 void fragment() {
 	// Screen-space derivatives of the world XZ position, taken before any discard:
-	// the pixel footprint for normal map filtering.
+	// the pixel footprint for normal map and foam pattern filtering.
 	vec2 uv_dx = dFdx(UV);
 	vec2 uv_dy = dFdy(UV);
-	float meters_per_screen_pixel = max(abs(uv_dx.x) + abs(uv_dy.x), abs(uv_dx.y) + abs(uv_dy.y));
+	// The pixel footprint on the water (m): grazing views stretch it along the view
+	// direction, many times longer than wide. The normal maps are read with taps along
+	// its long axis, each at the mip of the wider of its short axis and the tap
+	// spacing, so slopes are averaged over the footprint's real shape and what they
+	// average away becomes roughness. An isotropic mip of the footprint's area leaves
+	// the long axis under-filtered (waves alias into crawling, squeezed bands); one of
+	// its long axis blurs the short axis too (milky water).
+	float dx_length = length(uv_dx);
+	float dy_length = length(uv_dy);
+	vec2 footprint_axis = dx_length > dy_length ? uv_dx : uv_dy;
+	float footprint_major = max(dx_length, dy_length);
+	float footprint_minor = min(dx_length, dy_length);
+	int footprint_taps = clamp(int(ceil(footprint_major / max(footprint_minor, 1e-6) - 0.5)), 1, NORMAL_ANISOTROPY_TAPS);
+	float footprint_width = max(footprint_minor, footprint_major / float(footprint_taps));
 
 	// Hide water inside nearby hulls. The test runs on the water-surface point
 	// itself, so it is view-independent; pitch and roll come from the transform.
@@ -1178,33 +1141,34 @@ void fragment() {
 		for (uint i = 0U; i < cascade_count; ++i) {
 			vec4 scales = map_scales[i];
 			vec4 blend_state = spectrum_blend_states[i];
-			// Mix between bicubic and bilinear filtering depending on the world space pixels per meter.
-			// This is dependent on the tile size as well as displacement/normal map resolution.
-			// Where one screen pixel covers two or more texels (minification) bicubic adds nothing.
-			float pixels_per_meter = map_size * min(scales.x, scales.y);
-			float bilinear_weight = max(min(1.0, pixels_per_meter * 0.1), smoothstep(1.0, 2.0, meters_per_screen_pixel * pixels_per_meter));
-			// Isotropic mip covering the pixel footprint's area. The slopes it averages
-			// away become roughness (slope variance) instead of aliasing into sparkle.
-			// Sizing it by the footprint's longer axis instead counts every slope along
-			// a grazing footprint as round blur, which turns the water milky.
-			float footprint = sqrt(length(uv_dx * scales.xy) * length(uv_dy * scales.xy)) * map_size;
-			float lod = log2(max(footprint, 1.0));
+			float texels_per_meter = map_size * max(scales.x, scales.y);
+			// A single read (round footprint) of a coarse tile (under 10 texels per meter)
+			// mixes in the bicubic filter under magnification; where the footprint covers
+			// two or more texels it adds nothing.
+			float bilinear_weight = footprint_taps > 1 ? 1.0 : max(min(1.0, texels_per_meter * 0.1), smoothstep(1.0, 2.0, footprint_major * texels_per_meter));
+			float lod = log2(max(footprint_width * texels_per_meter, 1.0));
+			// Interpolating texels with different slopes also raises the variance, but while
+			// the footprint is shorter than a texel that spread is drawn (the interpolated
+			// slope varies across pixels), not missed: count it from one texel up.
+			float variance_weight = min(log2(max(footprint_major * texels_per_meter, 1.0)), 1.0);
+			vec2 tile_uv = UV * scales.xy;
+			vec2 tile_axis = footprint_axis * scales.xy;
 			float b_weight = wave_frame_blends[i].x;
-			vec4 active_sample = sample_normal_layer(vec3(UV*scales.xy, blend_state.x), lod, bilinear_weight, b_weight);
+			vec4 active_sample = sample_normal_layer(tile_uv, blend_state.x, tile_axis, footprint_taps, lod, variance_weight, bilinear_weight, b_weight);
 			vec2 cascade_gradient = active_sample.xy * blend_state.z;
 			float cascade_variance = active_sample.z * blend_state.z * blend_state.z;
 			float cascade_foam = active_sample.w;
 			// Uniform branch: the pending spectrum is only sampled during a crossfade.
 			if (blend_state.w > 0.0) {
-				vec4 pending_sample = sample_normal_layer(vec3(UV*scales.xy, blend_state.y), lod, bilinear_weight, b_weight);
+				vec4 pending_sample = sample_normal_layer(tile_uv, blend_state.y, tile_axis, footprint_taps, lod, variance_weight, bilinear_weight, b_weight);
 				cascade_gradient += pending_sample.xy * blend_state.w;
 				// The two spectra are independent, so their variances add with squared weights.
 				cascade_variance += pending_sample.z * blend_state.w * blend_state.w;
 				// Foam is a non-negative mask, so it crossfades linearly rather than by equal power.
 				cascade_foam = mix(active_sample.w, pending_sample.w, blend_state.w / (blend_state.z + blend_state.w));
 			}
-			gradient += cascade_gradient * scales.w;
-			slope_variance += cascade_variance * scales.w * scales.w;
+			gradient += cascade_gradient;
+			slope_variance += cascade_variance;
 			foam_signal += cascade_foam;
 		}
 
@@ -1212,8 +1176,8 @@ void fragment() {
 		// each texel: right at every distance, with no fade.
 		foam_factor = saturate(foam_signal * foam_intensity);
 
-		gradient = (gradient + interaction_gradient) * normal_strength;
-		slope_variance *= normal_strength * normal_strength;
+		gradient = (gradient + interaction_gradient) * normal_scale;
+		slope_variance *= normal_scale * normal_scale;
 		world_normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
 	}
 	world_normal = earth_curvature_tilt(world_normal, water_world_position.xz, CAMERA_POSITION_WORLD);
@@ -1224,7 +1188,7 @@ void fragment() {
 	// water. Once the pattern's texels shrink below a pixel its mips flatten toward
 	// 0.5 and the threshold no longer keeps the area; there plain coverage takes over.
 	// Explicit LOD: this follows the hull discard.
-	float detail_texels = max(length(uv_dx), length(uv_dy)) / foam_detail_tile_size * float(textureSize(foam_detail, 0).x);
+	float detail_texels = footprint_major / foam_detail_tile_size * float(textureSize(foam_detail, 0).x);
 	float detail_lod = log2(max(detail_texels, 1.0));
 	float detail = textureLod(foam_detail, UV / foam_detail_tile_size, detail_lod).r;
 	const float FOAM_EDGE = 0.12;
@@ -1368,11 +1332,9 @@ void fragment() {
 			planar_coverage = hit.z;
 		}
 	}
-	if (sky_reflection_enabled) {
-		// Seen from the bottom of the atmosphere; the camera's own path to the water is
-		// hazed afterwards, with the rest of the scene (the sky source's aerial perspective).
-		reflected_sky_color = sample_rough_procedural_environment(reflection_direction, effective_reflection_roughness, 1.0 - planar_coverage);
-	}
+	// Seen from the bottom of the atmosphere; the camera's own path to the water is
+	// hazed afterwards, with the rest of the scene (the sky source's aerial perspective).
+	reflected_sky_color = sample_rough_procedural_environment(reflection_direction, effective_reflection_roughness, 1.0 - planar_coverage);
 	// Reflected scene geometry hides the sky behind it (alpha: geometry coverage).
 	vec3 reflected_color = reflected_sky_color * (1.0 - planar_coverage * planar_sample.a) + planar_sample.rgb * planar_coverage;
 	vec3 reflection_radiance = reflected_color * sky_reflection_amount;
@@ -1426,7 +1388,6 @@ void fragment() {
 		FOG = vec4(0.0);
 		light_specular_scale = 0.0;
 		crest_transmission = 0.0;
-		glitter_cells = vec4(0.0);
 	} else {
 		ALBEDO = base_albedo;
 		METALLIC = 0.0;
@@ -1438,24 +1399,6 @@ void fragment() {
 		FOG = aerial_perspective_enabled ? aerial_perspective_fog(drawn_position) : vec4(0.0);
 		light_specular_scale = sun_specular_strength * clear_water_mask;
 		crest_transmission = (1.0 - sky_fresnel) * (1.0 - foam_factor);
-
-		// Glint cells on the rest-position grid (UV), so patterns ride with the water.
-		// Cell sides are powers of two around the pixel footprint's size.
-		float footprint_area = max(abs(uv_dx.x * uv_dy.y - uv_dx.y * uv_dy.x), 1e-8);
-		float cell_level = 0.5 * log2(footprint_area);
-		float fine_level = floor(cell_level);
-		float fine_size = exp2(fine_level);
-		ivec2 fine_cell = ivec2(floor(UV / fine_size));
-		ivec2 coarse_cell = ivec2(floor(UV / (2.0 * fine_size)));
-		int pattern = glitter_pattern;
-		int level_key = int(fine_level) * 65536;
-		glitter_random = vec4(
-			hash_uniform(ivec3(fine_cell, level_key + pattern)),
-			hash_uniform(ivec3(fine_cell, level_key + pattern + 1)),
-			hash_uniform(ivec3(coarse_cell, level_key + 65536 + pattern)),
-			hash_uniform(ivec3(coarse_cell, level_key + 65536 + pattern + 1)));
-		float fine_facets = sun_glitter_density * fine_size * fine_size;
-		glitter_cells = vec4(fine_facets, fine_facets * 4.0, cell_level - fine_level, glitter_pattern_blend);
 #ifndef WATER_NO_SKY_POINTS
 		if (sky_point_count > 0) {
 			EMISSION += sky_point_glints(world_normal, view_direction_world, effective_reflection_roughness) * light_specular_scale / scene_exposure;
@@ -1492,11 +1435,6 @@ void light() {
 		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION / PI * crest * crest_transmission;
 	}
 	if (no_l > 0.0) {
-#ifdef WATER_NO_GLITTER
-		float glitter = 1.0;
-#else
-		float glitter = glitter_cells.x > 0.0 ? glitter_scale(NORMAL, VIEW, LIGHT, ROUGHNESS) : 1.0;
-#endif
-		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * (no_l / PI) * water_specular_brdf(NORMAL, VIEW, LIGHT, ROUGHNESS) * light_specular_scale * glitter;
+		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * (no_l / PI) * water_specular_brdf(NORMAL, VIEW, LIGHT, ROUGHNESS) * light_specular_scale;
 	}
 }

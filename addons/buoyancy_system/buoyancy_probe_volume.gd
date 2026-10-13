@@ -1,8 +1,11 @@
 @tool
 class_name BuoyancyProbeVolume
 extends Node3D
-## Probe-based displacement source. It generates physical buoyancy probes inside
-## the design waterline and separate FX/contact probes on the waterline edge.
+## A body's buoyancy probes (BuoyancyProbeNode and BuoyancyFxProbeNode children),
+## which BuoyantBody samples. In the editor it generates physical probes inside the
+## hull's design waterline and contact (FX) probes along its edge, from the meshes
+## under source_paths; save the scene to keep them. Probes are never generated at
+## runtime.
 
 ## Emitted when probes are added, removed, enabled, disabled or edited, or the
 ## volume itself is toggled. BuoyantBody rebuilds its probe cache on it.
@@ -11,8 +14,6 @@ signal probes_changed
 const GENERATED_PROBES_NAME := "GeneratedProbes"
 const DEBUG_NODE_NAME := "DebugDraw"
 const EPSILON := 0.0001
-const PHYSICAL_PROBE_SCRIPT := preload("res://addons/buoyancy_system/buoyancy_probe_node.gd")
-const FX_PROBE_SCRIPT := preload("res://addons/buoyancy_system/buoyancy_fx_probe_node.gd")
 
 const PHYSICAL_COLOR := Color(0.1, 0.8, 1.0, 0.9)
 const FX_COLOR := Color(1.0, 0.62, 0.14, 0.9)
@@ -35,8 +36,9 @@ const DEBUG_SHOW_WATERLINE_CONVEX_HULL := true
 		enabled = value
 		probes_changed.emit()
 
-@export_group("Waterline Generation")
-## Mesh roots used by the editor generator to find the design waterline outline.
+@export_group("Generation")
+## Mesh roots the generator slices at design_waterline_y for the hull's waterline
+## outline. Empty: the parent's meshes.
 @export var source_paths : Array[NodePath] = []
 ## Local-space height of the static design waterline used by probe generation.
 @export var design_waterline_y := 0.0 :
@@ -53,45 +55,46 @@ const DEBUG_SHOW_WATERLINE_CONVEX_HULL := true
 @export_range(1, 256, 1) var physical_probe_count := 12
 ## Target number of generated FX/contact probes around the waterline edge.
 @export_range(0, 256, 1) var fx_probe_count := 24
-## Default fully-submerged volume assigned to each generated physical probe.
-@export_range(0.001, 100000.0, 0.001, "or_greater") var generated_probe_volume_cubic_meters := 1.0
-## Default vertical water column height assigned to each generated physical probe,
-## generated_probe_freeboard included.
-@export_range(0.01, 100.0, 0.01, "or_greater") var generated_probe_buoyancy_height := 1.2
-## Height of each generated physical probe's column top above design_waterline_y.
-## The hull above the waterline (up to the deck or gunwale) is reserve buoyancy: with
-## the column ending at the waterline, waves above it cannot lift the hull.
-@export_range(0.0, 100.0, 0.01, "or_greater") var generated_probe_freeboard := 0.0
 ## Fraction of hull length skipped near bow and stern when placing physical probes.
 @export_range(0.0, 0.45, 0.01) var longitudinal_margin_fraction := 0.08
-## Editor-only display radius assigned to generated FX/contact probes.
-@export_range(0.01, 5.0, 0.01, "or_greater") var generated_fx_probe_display_radius := 0.12
-## Automatically generates probes in the editor when this volume has no saved probes.
+## Generates the physical probes in the editor when this volume has none yet.
 @export var editor_auto_generate_if_empty := true
-## Regenerates physical probes from source_paths.
-@export_tool_button("Generate Physical Probes", "Reload") var generate_physical_probes_action := generate_physical_probes_from_source
-## Regenerates FX/contact probes from source_paths.
-@export_tool_button("Generate FX Probes", "Reload") var generate_fx_probes_action := generate_fx_probes_from_source
-## Regenerates both physical and FX/contact probes.
-@export_tool_button("Generate All Probes", "Reload") var generate_all_probes_action := generate_all_probes_from_source
-
-@export_group("Probe Defaults")
-## Default forward/back water drag multiplier assigned to generated physical probes.
+## Replaces the generated physical probes (generate_probes()).
+@export_tool_button("Generate Physical Probes", "Reload") var generate_physical_probes_action := generate_probes.bind(true, false)
+## Replaces the generated contact (FX) probes (generate_probes()).
+@export_tool_button("Generate FX Probes", "Reload") var generate_fx_probes_action := generate_probes.bind(false, true)
+## Replaces all generated probes (generate_probes()).
+@export_tool_button("Generate All Probes", "Reload") var generate_all_probes_action := generate_probes
+@export_subgroup("New Probes")
+## Volume (m³) each new physical probe displaces when fully submerged. Together they
+## should hold well over the body's weight (its mass / water density).
+@export_range(0.001, 100000.0, 0.001, "or_greater", "suffix:m³") var generated_probe_volume := 1.0
+## Height of each new physical probe's water column, generated_probe_freeboard included.
+@export_range(0.01, 100.0, 0.01, "or_greater", "suffix:m") var generated_probe_buoyancy_height := 1.2
+## Height of each new physical probe's column top above design_waterline_y.
+## The hull above the waterline (up to the deck or gunwale) is reserve buoyancy: with
+## the column ending at the waterline, waves above it cannot lift the hull.
+@export_range(0.0, 100.0, 0.01, "or_greater", "suffix:m") var generated_probe_freeboard := 0.0
+## Forward/back drag multiplier of each new physical probe.
 @export_range(0.0, 100.0, 0.01, "or_greater") var generated_probe_longitudinal_drag_multiplier := 1.0
-## Default side-to-side water drag multiplier assigned to generated physical probes.
+## Side-to-side drag multiplier of each new physical probe.
 @export_range(0.0, 100.0, 0.01, "or_greater") var generated_probe_lateral_drag_multiplier := 1.0
+## Editor display radius of each new contact (FX) probe.
+@export_range(0.01, 5.0, 0.01, "or_greater", "suffix:m") var generated_fx_probe_display_radius := 0.12
 
 @export_group("Contact Events")
-## Depth above the sampled water surface required to emit an entered-water event.
-@export_range(-10.0, 10.0, 0.001) var enter_depth_threshold := 0.03
-## Depth below the sampled water surface required to emit an exited-water event.
-@export_range(-10.0, 10.0, 0.001) var exit_depth_threshold := -0.03
-## Minimum seconds between repeated enter/exit events for the same probe.
-@export_range(0.0, 10.0, 0.001, "or_greater") var min_event_interval := 0.08
+## Depth (m) under the water at which a dry probe becomes wet: for the physical
+## probes, and copied into new contact probes (each has its own).
+@export_range(-10.0, 10.0, 0.001, "suffix:m") var enter_depth_threshold := 0.03
+## Depth (m) at which a wet probe becomes dry again; below enter_depth_threshold.
+@export_range(-10.0, 10.0, 0.001, "suffix:m") var exit_depth_threshold := -0.03
+## Minimum seconds between two wet/dry changes of a probe.
+@export_range(0.0, 10.0, 0.001, "or_greater", "suffix:s") var min_event_interval := 0.08
 
 @export_group("Debug Draw")
-## Shows generated probes, water contact lines, waterline helpers, and force vectors.
-@export var debug_enabled := true :
+## Draws the probes, their water contact, the waterline outline and the forces, in
+## the editor and at runtime.
+@export var debug_enabled := false :
 	set(value):
 		debug_enabled = value
 		if not debug_enabled:
@@ -139,7 +142,7 @@ func _notification(what: int) -> void:
 func _ready() -> void:
 	if _get_physical_probes().is_empty() and _get_fx_probes().is_empty():
 		if editor_auto_generate_if_empty and Engine.is_editor_hint():
-			generate_physical_probes_from_source()
+			generate_probes(true, false)
 		elif not Engine.is_editor_hint():
 			_warn_missing_runtime_probes_once()
 	_connect_probe_signals()
@@ -148,52 +151,25 @@ func _ready() -> void:
 	_queue_debug_rebuild()
 
 
-## Editor only: replaces the generated physical and contact probes with new ones from the
-## waterline outline of the meshes under source_paths. Save the scene to keep them.
-func generate_all_probes_from_source() -> void:
+## Editor only: replaces the generated physical and/or contact (FX) probes with new
+## ones from the waterline outline of the meshes under source_paths. Save the scene to
+## keep them. The Generate buttons call it.
+func generate_probes(physical := true, fx := true) -> void:
 	if not Engine.is_editor_hint():
-		push_warning("Buoyancy probes can only be generated in the editor. Generate and save probes before running the scene.")
+		push_error("BuoyancyProbeVolume %s: probes can only be generated in the editor; generate and save them before running." % get_path())
 		return
 	var start_usec := Time.get_ticks_usec()
 	var context := _get_generation_context()
 	var root := _get_or_create_generated_root()
-	_clear_generated_physical_probes(root)
-	_clear_generated_fx_probes(root)
-	var physical_count := _generate_physical_probes(root, context)
-	var fx_count := _generate_fx_probes(root, context)
+	var counts := PackedStringArray()
+	if physical:
+		_clear_generated_probes(root, false)
+		counts.push_back("%d physical" % _generate_physical_probes(root, context))
+	if fx:
+		_clear_generated_probes(root, true)
+		counts.push_back("%d FX" % _generate_fx_probes(root, context))
 	_finalize_generation()
-	var elapsed_msec := float(Time.get_ticks_usec() - start_usec) / 1000.0
-	print("BuoyancyProbeVolume generated %d physical probes and %d FX probes from %d waterline segments in %.2f ms: %s" % [physical_count, fx_count, int(context.get("segment_count", 0)), elapsed_msec, str(get_path())])
-
-
-## Editor only: replaces only the generated physical (force) probes.
-func generate_physical_probes_from_source() -> void:
-	if not Engine.is_editor_hint():
-		push_warning("Buoyancy probes can only be generated in the editor. Generate and save probes before running the scene.")
-		return
-	var start_usec := Time.get_ticks_usec()
-	var context := _get_generation_context()
-	var root := _get_or_create_generated_root()
-	_clear_generated_physical_probes(root)
-	var physical_count := _generate_physical_probes(root, context)
-	_finalize_generation()
-	var elapsed_msec := float(Time.get_ticks_usec() - start_usec) / 1000.0
-	print("BuoyancyProbeVolume generated %d physical probes from %d waterline segments in %.2f ms: %s" % [physical_count, int(context.get("segment_count", 0)), elapsed_msec, str(get_path())])
-
-
-## Editor only: replaces only the generated contact (FX) probes.
-func generate_fx_probes_from_source() -> void:
-	if not Engine.is_editor_hint():
-		push_warning("FX probes can only be generated in the editor. Generate and save probes before running the scene.")
-		return
-	var start_usec := Time.get_ticks_usec()
-	var context := _get_generation_context()
-	var root := _get_or_create_generated_root()
-	_clear_generated_fx_probes(root)
-	var fx_count := _generate_fx_probes(root, context)
-	_finalize_generation()
-	var elapsed_msec := float(Time.get_ticks_usec() - start_usec) / 1000.0
-	print("BuoyancyProbeVolume generated %d FX probes from %d waterline segments in %.2f ms: %s" % [fx_count, int(context.get("segment_count", 0)), elapsed_msec, str(get_path())])
+	print("BuoyancyProbeVolume generated %s probes from %d waterline segments in %.2f ms: %s" % [" and ".join(counts), int(context["segment_count"]), float(Time.get_ticks_usec() - start_usec) / 1000.0, get_path()])
 
 
 func _get_generation_context() -> Dictionary:
@@ -223,13 +199,13 @@ func _generate_physical_probes(root: Node, context: Dictionary) -> int:
 	var generated_owner : Node = context.get("owner", _get_generated_node_owner())
 	var physical_count := 0
 	for spec in physical_specs:
-		var probe : Node3D = PHYSICAL_PROBE_SCRIPT.new()
+		var probe := BuoyancyProbeNode.new()
 		probe.name = "Probe_%03d" % physical_count
 		probe.position = Vector3(float(spec["x"]), design_waterline_y + generated_probe_freeboard, float(spec["z"]))
-		probe.set(&"max_submerged_volume_cubic_meters", generated_probe_volume_cubic_meters)
-		probe.set(&"buoyancy_height", generated_probe_buoyancy_height)
-		probe.set(&"longitudinal_water_drag_multiplier", generated_probe_longitudinal_drag_multiplier)
-		probe.set(&"lateral_water_drag_multiplier", generated_probe_lateral_drag_multiplier)
+		probe.volume = generated_probe_volume
+		probe.buoyancy_height = generated_probe_buoyancy_height
+		probe.longitudinal_drag_multiplier = generated_probe_longitudinal_drag_multiplier
+		probe.lateral_drag_multiplier = generated_probe_lateral_drag_multiplier
 		root.add_child(probe)
 		probe.owner = generated_owner
 		physical_count += 1
@@ -243,13 +219,13 @@ func _generate_fx_probes(root: Node, context: Dictionary) -> int:
 	var generated_owner : Node = context.get("owner", _get_generated_node_owner())
 	var fx_count := 0
 	for spec in fx_specs:
-		var probe : Node3D = FX_PROBE_SCRIPT.new()
+		var probe := BuoyancyFxProbeNode.new()
 		probe.name = "FxProbe_%03d_%s" % [fx_count, str(spec.get("tag", "side")).capitalize()]
 		probe.position = Vector3(float(spec["x"]), design_waterline_y, float(spec["z"]))
-		probe.set(&"display_radius", generated_fx_probe_display_radius)
-		probe.set(&"tag", str(spec.get("tag", "side")))
-		probe.set(&"enter_depth_threshold", enter_depth_threshold)
-		probe.set(&"exit_depth_threshold", exit_depth_threshold)
+		probe.display_radius = generated_fx_probe_display_radius
+		probe.tag = str(spec.get("tag", "side"))
+		probe.enter_depth_threshold = enter_depth_threshold
+		probe.exit_depth_threshold = exit_depth_threshold
 		root.add_child(probe)
 		probe.owner = generated_owner
 		fx_count += 1
@@ -526,26 +502,12 @@ func _get_source_roots() -> Array[Node3D]:
 
 func _get_source_mesh_instances() -> Array[MeshInstance3D]:
 	var mesh_instances : Array[MeshInstance3D] = []
-	var seen := {}
 	for source_root in _get_source_roots():
-		for mesh_instance in _find_mesh_instances(source_root):
-			var instance_id := mesh_instance.get_instance_id()
-			if seen.has(instance_id):
-				continue
-			seen[instance_id] = true
-			mesh_instances.push_back(mesh_instance)
+		for mesh_instance in HullSlicer.collect_mesh_instances(source_root):
+			# The probes (and the debug draw) are meshes too, but not the hull's.
+			if not is_ancestor_of(mesh_instance) and not mesh_instances.has(mesh_instance):
+				mesh_instances.push_back(mesh_instance)
 	return mesh_instances
-
-
-func _find_mesh_instances(root: Node) -> Array[MeshInstance3D]:
-	var results : Array[MeshInstance3D] = []
-	if root == self:
-		return results
-	if root is MeshInstance3D and not _is_physical_probe(root) and not _is_fx_probe(root) and root.name != DEBUG_NODE_NAME:
-		results.push_back(root)
-	for child in root.get_children():
-		results.append_array(_find_mesh_instances(child))
-	return results
 
 
 func _get_source_bounds_in_local_space(mesh_instances: Array[MeshInstance3D]) -> AABB:
@@ -605,16 +567,11 @@ func _get_or_create_generated_root() -> Node3D:
 	return root
 
 
-func _clear_generated_physical_probes(root: Node) -> void:
+## Removes root's physical probes, or its contact probes when fx.
+func _clear_generated_probes(root: Node, fx : bool) -> void:
 	for child in root.get_children():
-		if _is_physical_probe(child):
-			root.remove_child(child)
-			child.queue_free()
-
-
-func _clear_generated_fx_probes(root: Node) -> void:
-	for child in root.get_children():
-		if child is Node3D and child.get_script() == FX_PROBE_SCRIPT:
+		var is_kind := _is_fx_probe(child) if fx else _is_physical_probe(child)
+		if is_kind:
 			root.remove_child(child)
 			child.queue_free()
 
@@ -640,11 +597,11 @@ func _get_fx_probes() -> Array[Node3D]:
 
 
 func _is_physical_probe(node: Node) -> bool:
-	return node is Node3D and node.get_script() == PHYSICAL_PROBE_SCRIPT
+	return node is BuoyancyProbeNode
 
 
 func _is_fx_probe(node: Node) -> bool:
-	return node is Node3D and node.get_script() == FX_PROBE_SCRIPT
+	return node is BuoyancyFxProbeNode
 
 
 func _rebuild_probe_cache() -> void:
