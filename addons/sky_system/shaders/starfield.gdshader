@@ -30,8 +30,12 @@ uniform vec3 planet_light[5];
 // SkySystem.sea_level. Cameras below it (the ocean's mirrored reflection camera) draw no
 // planets: the water reflects them itself, as glints (SkySystem.get_planet_*()).
 uniform float sea_level = 0.0;
-// Clouds hide the stars; set by SkySystem like the sky shader's cloud uniforms.
+// Clouds hide the stars; set by SkySystem like the sky shader's cloud uniforms. The
+// cubemap is the clouds seen from the sea (CloudRenderer.sea_cubemap). With
+// screen_clouds, VolumetricCloudEffect draws the clouds over the camera's view, stars
+// included; only cameras below sea_level (the mirrored one) use the cubemap then.
 uniform bool clouds_enabled = false;
+uniform bool screen_clouds = false;
 uniform samplerCube cloud_cubemap : filter_linear;
 
 // Pre-exposed radiance at the footprint's centre.
@@ -79,7 +83,7 @@ void vertex() {
 			atmosphere_along(direction, -1.0, transmittance, inscatter);
 			radiance *= transmittance;
 		}
-		if (clouds_enabled) {
+		if (clouds_enabled && (!screen_clouds || CAMERA_POSITION_WORLD.y < sea_level)) {
 			radiance *= 1.0 - textureLod(cloud_cubemap, direction, 0.0).a;
 		}
 		// Twinkling grows with the air mass (Young 1967: variance ~ X^3) and turns

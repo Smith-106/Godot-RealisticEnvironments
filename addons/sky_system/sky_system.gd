@@ -4,7 +4,7 @@ extends Node3D
 ## Day/night sky for an open sea: places the sun and moon for latitude, date and time
 ## and drives their DirectionalLight3Ds, renders a physical atmosphere (blue sky,
 ## twilight, sea haze and fog, distance haze on the scene), volumetric clouds with
-## weather presets, the stars, the Milky Way, airglow and planets, and meters the
+## weather presets (the camera can fly into and above them), the stars, the Milky Way, airglow and planets, and meters the
 ## scene's light for an exposure controller. Instance sky_system.tscn; see
 ## addons/sky_system/README.md.
 ##
@@ -232,7 +232,8 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 			_setup_starfield()
 
 @export_group("Clouds")
-## Renders volumetric clouds into the sky, the starfield and (through
+## Renders volumetric clouds: over the camera's view (VolumetricCloudEffect in the
+## WorldEnvironment's compositor), in the sky's ambient light and (through
 ## get_cloud_cubemap()) the ocean's sky reflection. Needs a RenderingDevice
 ## (Forward+ or Mobile renderer) and a cloud_preset.
 @export var clouds_enabled := true :
@@ -278,16 +279,19 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 		if is_node_ready():
 			_update_sky()
 @export_subgroup("Cloud Quality")
-## Edge length in texels of the cloud cubemap faces.
+## Edge length in texels of the faces of the cloud cubemap the water reflects
+## (the clouds seen from the sea, get_cloud_cubemap()).
 @export_range(256, 2048, 128) var cloud_cubemap_size := 1024 :
 	set(value):
 		cloud_cubemap_size = value
 		if is_node_ready():
 			_setup_clouds()
-## Each frame re-renders one cloud texel in every stride x stride block. Higher
-## is cheaper; the clouds then take stride^2 frames to fully update.
+## Each frame re-renders one texel in every stride x stride block of the cloud
+## cubemaps (reflections and ambient light). Higher is cheaper; they then take
+## stride^2 frames to fully update. The camera's view always traces a quarter of
+## its cloud pixels per frame.
 @export_enum("1:1", "2:2", "4:4") var cloud_update_stride := 4
-## Raymarch steps along each view ray.
+## Raymarch steps along each view ray (cubemaps and the camera's view).
 @export_range(8, 256, 1) var cloud_view_steps := 64
 ## Raymarch steps from each cloud sample toward the sun or moon.
 @export_range(1, 16, 1) var cloud_light_steps := 6
@@ -378,6 +382,9 @@ var _cloud_wind_source : Node
 var _cloud_wind_offset := Vector2.ZERO
 var _cloud_evolution_time := 0.0
 var _cloud_frames_until_material_push := 0
+## Share of the sun's and the moon's light the clouds let through to the camera
+## (_get_scene_cloud_light_scale()), as the lights were last set.
+var _scene_cloud_light_scale := 1.0
 
 ## Internal child drawing star_catalog; not saved with the scene.
 var _starfield : MeshInstance3D
@@ -449,6 +456,8 @@ func _get_configuration_warnings() -> PackedStringArray:
 			warnings.push_back("No ExposureController reads this sky (light_source_path): light levels are physical, so nights and overcast render near black. Add one (exposure_system), or ignore this if your own exposure reads get_scene_illuminance().")
 	if not cloud_wind_source_path.is_empty() and not WindSource.is_valid(get_node_or_null(cloud_wind_source_path)):
 		warnings.push_back("cloud_wind_source_path does not point to a wind source (e.g. a WindSystem); the clouds use cloud_wind_speed.")
+	if clouds_enabled and is_node_ready() and _get_cloud_effect() == null:
+		warnings.push_back("The WorldEnvironment's compositor has no VolumetricCloudEffect: the camera sees the clouds only as a blurred backdrop and cannot fly into them. Keep the one sky_system.tscn has.")
 	return warnings
 
 
@@ -483,6 +492,8 @@ func _process(delta : float) -> void:
 		_process_weather_transition(delta)
 	if _cloud_renderer:
 		_process_clouds(delta)
+		if absf(_get_scene_cloud_light_scale() - _scene_cloud_light_scale) > 0.02:
+			_update_sky()
 	if _atmosphere_renderer:
 		_process_atmosphere()
 
@@ -507,7 +518,7 @@ func get_moon_direction() -> Vector3:
 	return _moon_direction
 
 
-## How much of the sun reaches the scene: the share of its disk above the horizon
+## How much of the sun reaches the sea: the share of its disk above the horizon
 ## times cloud cover.
 func get_sun_visibility() -> float:
 	return _sun_visibility * _get_cloud_sun_light_scale()
@@ -529,11 +540,11 @@ func get_moon_phase() -> float:
 	return _moon_phase
 
 
-## The cloud cubemap (rgb: premultiplied cloud radiance, a: opacity, upper
-## hemisphere only), or null while clouds are off. The object changes when the
-## clouds are rebuilt; lighting_changed fires then.
+## The clouds seen from the sea surface below the camera (rgb: premultiplied cloud
+## radiance, a: opacity, upper hemisphere only, full mips), or null while clouds are
+## off. The object changes when the clouds are rebuilt; lighting_changed fires then.
 func get_cloud_cubemap() -> Texture:
-	return _cloud_renderer.cubemap if _cloud_renderer else null
+	return _cloud_renderer.sea_cubemap if _cloud_renderer else null
 
 
 ## The stars for consumers that draw their own sky (the ocean's reflection): a cubemap
@@ -678,14 +689,19 @@ func _update_sky() -> void:
 	_update_lighting_state()
 	if not is_inside_tree():
 		return
+	# The atmosphere's lights as under the clouds at the sea; the scene's by the clouds
+	# between the camera and the sky (the camera may be inside or above them).
 	var cloud_light_scale := _get_cloud_sun_light_scale()
 	var sun_energy := _get_sun_energy() * cloud_light_scale
 	var moon_energy := _get_moon_energy() * cloud_light_scale
+	_scene_cloud_light_scale = _get_scene_cloud_light_scale()
+	var scene_sun_energy := _get_sun_energy() * _scene_cloud_light_scale
+	var scene_moon_energy := _get_moon_energy() * _scene_cloud_light_scale
 	# The lights reach the scene through the atmosphere between space and the sea.
-	_update_light(_sun_light, _sun_direction, sun_energy, _sun_transmittance)
-	_update_light(_moon_light, _moon_direction, moon_energy, _moon_transmittance)
-	var sun_irradiance := _level_irradiance(sun_energy, _sun_transmittance, _sun_direction)
-	var moon_irradiance := _level_irradiance(moon_energy, _moon_transmittance, _moon_direction)
+	_update_light(_sun_light, _sun_direction, scene_sun_energy, _sun_transmittance)
+	_update_light(_moon_light, _moon_direction, scene_moon_energy, _moon_transmittance)
+	var sun_irradiance := _level_irradiance(scene_sun_energy, _sun_transmittance, _sun_direction)
+	var moon_irradiance := _level_irradiance(scene_moon_energy, _moon_transmittance, _moon_direction)
 	_direct_irradiance = sun_irradiance + moon_irradiance
 	if _moon_light and moon_irradiance < NEGLIGIBLE_LIGHT_SHARE * sun_irradiance:
 		_moon_light.visible = false
@@ -868,6 +884,11 @@ func _push_atmosphere_parameters() -> void:
 		effect.active = _haze_density > 0.0
 		effect.light_direction = _haze_light_direction
 		effect.phase_g = _haze_anisotropy
+	var cloud_effect := _get_cloud_effect()
+	if cloud_effect:
+		cloud_effect.light_direction = _haze_light_direction
+		cloud_effect.phase_g = _haze_anisotropy
+		cloud_effect.sea_level = sea_level
 
 
 func _get_aerial_perspective_effect() -> AerialPerspectiveEffect:
@@ -875,6 +896,15 @@ func _get_aerial_perspective_effect() -> AerialPerspectiveEffect:
 		return null
 	for effect in _world_environment.compositor.compositor_effects:
 		if effect is AerialPerspectiveEffect:
+			return effect
+	return null
+
+
+func _get_cloud_effect() -> VolumetricCloudEffect:
+	if _world_environment == null or _world_environment.compositor == null:
+		return null
+	for effect in _world_environment.compositor.compositor_effects:
+		if effect is VolumetricCloudEffect:
 			return effect
 	return null
 
@@ -1261,6 +1291,10 @@ func _setup_clouds() -> void:
 				push_error("SkySystem: the clouds' GPU resources failed; clouds are off: %s" % get_path())
 				_cloud_renderer.release()
 				_cloud_renderer = null
+	var cloud_effect := _get_cloud_effect()
+	if cloud_effect and _cloud_renderer:
+		cloud_effect.cloud_resources = _cloud_renderer.get_trace_resources()
+		cloud_effect.active = true
 	_push_cloud_material_parameters()
 	_update_sky()
 
@@ -1270,7 +1304,11 @@ func _release_clouds() -> void:
 		return
 	var renderer := _cloud_renderer
 	_cloud_renderer = null
-	# Unbind the cubemap before its texture is freed.
+	# Unbind the cubemaps and the trace resources before they are freed.
+	var cloud_effect := _get_cloud_effect()
+	if cloud_effect:
+		cloud_effect.active = false
+		cloud_effect.cloud_resources = []
 	_push_cloud_material_parameters()
 	renderer.release()
 
@@ -1325,8 +1363,9 @@ func _process_clouds(delta : float) -> void:
 	_cloud_renderer.view_steps = cloud_view_steps
 	_cloud_renderer.light_steps = cloud_light_steps
 	_cloud_renderer.max_distance = cloud_max_distance
-	_cloud_renderer.render(_get_cloud_camera_position(), _cloud_state, _cloud_wind_offset, _cloud_evolution_time,
-		light_direction, light_color, cloud_ambient_intensity)
+	var camera_position := _get_cloud_camera_position()
+	_cloud_renderer.render(Vector3(camera_position.x, camera_position.y - sea_level, camera_position.z), _cloud_state,
+		_cloud_wind_offset, _cloud_evolution_time, light_direction, light_color, cloud_ambient_intensity)
 
 	# Re-sending the parameters once per full refresh also makes the sky
 	# re-render its radiance map, so ambient light and reflections follow the clouds.
@@ -1337,15 +1376,23 @@ func _process_clouds(delta : float) -> void:
 
 
 ## Cloud uniforms go through the RenderingServer so the runtime texture is never
-## stored in (and saved with) the sky or starfield material resources.
+## stored in (and saved with) the sky or starfield material resources. The sky shows
+## the clouds seen from the camera, the starfield those seen from the sea (for the
+## mirrored camera); with a VolumetricCloudEffect neither draws them over the camera's
+## own view.
 func _push_cloud_material_parameters() -> void:
 	var enabled := _cloud_renderer != null
-	var texture_rid := _cloud_renderer.cubemap.get_rid() if enabled else RID()
-	for material : Material in [_world_environment.environment.sky.sky_material, _starfield_material]:
-		RenderingServer.material_set_param(material.get_rid(), &"clouds_enabled", enabled)
-		RenderingServer.material_set_param(material.get_rid(), &"cloud_cubemap", texture_rid)
+	var screen_clouds := enabled and _get_cloud_effect() != null
+	var sky_rid := _world_environment.environment.sky.sky_material.get_rid()
+	var starfield_rid := _starfield_material.get_rid()
+	RenderingServer.material_set_param(sky_rid, &"cloud_cubemap", _cloud_renderer.camera_cubemap.get_rid() if enabled else RID())
+	RenderingServer.material_set_param(starfield_rid, &"cloud_cubemap", _cloud_renderer.sea_cubemap.get_rid() if enabled else RID())
+	for material_rid in [sky_rid, starfield_rid]:
+		RenderingServer.material_set_param(material_rid, &"clouds_enabled", enabled)
+		RenderingServer.material_set_param(material_rid, &"screen_clouds", screen_clouds)
 	if enabled:
-		RenderingServer.material_set_param(_world_environment.environment.sky.sky_material.get_rid(), &"cloud_base_altitude", _cloud_state.base_altitude)
+		RenderingServer.material_set_param(sky_rid, &"cloud_base_altitude", _cloud_state.base_altitude)
+		RenderingServer.material_set_param(sky_rid, &"cloud_top_altitude", _cloud_state.base_altitude + _cloud_state.thickness)
 	_radiance_observer_altitude = _get_atmosphere_observer_altitude()
 
 
@@ -1369,10 +1416,10 @@ func _setup_atmosphere() -> void:
 	for i in volumes.size():
 		RenderingServer.global_shader_parameter_set(AtmosphereGlobals.VIEW_TEXTURES[i], volumes[i])
 		volume_rids.push_back(volumes[i].texture_rd_rid)
-	var effect := _get_aerial_perspective_effect()
-	if effect:
-		effect.view_textures = volume_rids
-		effect.max_distance = AtmosphereRenderer.MAX_DISTANCE
+	for effect in [_get_aerial_perspective_effect(), _get_cloud_effect()]:
+		if effect:
+			effect.view_textures = volume_rids
+			effect.max_distance = AtmosphereRenderer.MAX_DISTANCE
 	_update_sky()
 	# Consumers start reading once the volumes hold this frame's atmosphere.
 	_process_atmosphere()
@@ -1397,6 +1444,9 @@ func _release_atmosphere() -> void:
 	if effect:
 		effect.active = false
 		effect.view_textures = []
+	var cloud_effect := _get_cloud_effect()
+	if cloud_effect:
+		cloud_effect.view_textures = []
 	var renderer := _atmosphere_renderer
 	_atmosphere_renderer = null
 	_sky_irradiance = -1.0
@@ -1410,16 +1460,17 @@ func _release_atmosphere() -> void:
 func _process_atmosphere() -> void:
 	var camera_position := _get_cloud_camera_position()
 	var observer_altitude := _get_atmosphere_observer_altitude()
-	var cloud_cubemap := _cloud_renderer.cubemap.texture_rd_rid if _cloud_renderer else RID()
-	_atmosphere_renderer.render(camera_position.y - sea_level, cloud_cubemap, _exposure)
+	var sea_clouds := _cloud_renderer.sea_cubemap.texture_rd_rid if _cloud_renderer else RID()
+	var camera_clouds := _cloud_renderer.camera_cubemap.texture_rd_rid if _cloud_renderer else RID()
+	_atmosphere_renderer.render(camera_position.y - sea_level, sea_clouds, camera_clouds, _exposure)
 	_read_camera_sky_light()
 	_atmosphere_observer = Vector4(camera_position.x, camera_position.y, camera_position.z, observer_altitude)
 	if _global_atmosphere_owner == self:
 		RenderingServer.global_shader_parameter_set(AtmosphereGlobals.OBSERVER, _atmosphere_observer)
-	var effect := _get_aerial_perspective_effect()
-	if effect:
-		effect.observer_position = camera_position
-		effect.observer_altitude = observer_altitude
+	for effect in [_get_aerial_perspective_effect(), _get_cloud_effect()]:
+		if effect:
+			effect.observer_position = camera_position
+			effect.observer_altitude = observer_altitude
 	if absf(observer_altitude - _radiance_observer_altitude) > maxf(2.0, RADIANCE_ALTITUDE_TOLERANCE * _radiance_observer_altitude):
 		_refresh_sky_radiance()
 
@@ -1475,8 +1526,20 @@ func _refresh_sky_radiance() -> void:
 	RenderingServer.material_set_param(material.get_rid(), &"sun_direction", _sun_direction)
 
 
+## Share of the sun's and the moon's light the clouds let through to the sea
+## (CloudPreset.sun_light_scale).
 func _get_cloud_sun_light_scale() -> float:
 	return _cloud_state.sun_light_scale if _cloud_renderer else 1.0
+
+
+## The same for the camera: the sea's share below the cloud layer, rising to all of it
+## at the layer's top.
+func _get_scene_cloud_light_scale() -> float:
+	if _cloud_renderer == null:
+		return 1.0
+	var altitude := _get_cloud_camera_position().y - sea_level
+	var above := smoothstep(_cloud_state.base_altitude, _cloud_state.base_altitude + _cloud_state.thickness, altitude)
+	return lerpf(_cloud_state.sun_light_scale, 1.0, above)
 
 
 ## The clouds use cloud_wind_speed / cloud_wind_direction while there is no valid source.

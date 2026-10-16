@@ -14,17 +14,18 @@
  * toward the light, times the phase's integral, 1) goes to the hemisphere holding the
  * light.
  *
- * With use_clouds, the clouds cover the sky: each direction shows its ray's end through
- * the clouds' gaps plus the clouds' own light (the air in front of them is not split
- * off: close enough for a meter). The volume at the cloud layer must not use them.
+ * With use_clouds, the clouds seen from the observer (CloudRenderer.camera_cubemap, above
+ * or below it) cover the sky: each direction shows its ray's end through the clouds'
+ * gaps plus the clouds' own light (the air in front of them is not split off: close
+ * enough for a meter). The volume at the cloud layer must not use them.
  */
 
 #include "atmosphere_common.glslinc"
 
 #define THREADS 256
 // Cloud cubemap level read per texel: about the volume's azimuth texel (pi / 32 rad)
-// for 1024 faces.
-#define CLOUD_LOD 5.0
+// for the camera cubemap's 256 faces (CloudRenderer.CAMERA_CUBEMAP_SIZE).
+#define CLOUD_LOD 3.0
 
 layout(local_size_x = THREADS, local_size_y = 1, local_size_z = 1) in;
 
@@ -86,7 +87,7 @@ void main() {
 		float mu_bottom = atmosphere_view_mu(h, float(y + 1) / float(size.y));
 		float mu = atmosphere_view_mu(h, (float(y) + 0.5) / float(size.y));
 		vec3 radiance = texelFetch(inscatter_volume, ivec3(x, y, slice), 0).rgb;
-		if (pc.use_clouds > 0.5 && mu > 0.0) {
+		if (pc.use_clouds > 0.5) {
 			vec4 cloud = clouds_toward(float(x) * azimuth_step, mu);
 			radiance = radiance * (1.0 - cloud.a) + cloud.rgb;
 		}
@@ -118,7 +119,7 @@ void main() {
 		vec3 uvw = vec3(atmosphere_unit_to_uv(0.0, size_f.x),
 				clamp(atmosphere_view_y(h, light_y), 0.5 / size_f.y, 1.0 - 0.5 / size_f.y), (float(slice) + 0.5) / size_f.z);
 		vec3 lobe = textureLod(inscatter_lobe_volume, uvw, 0.0).rgb;
-		if (pc.use_clouds > 0.5 && light_y > 0.0) {
+		if (pc.use_clouds > 0.5) {
 			lobe *= 1.0 - textureLod(cloud_cubemap, pc.light_direction, CLOUD_LOD).a;
 		}
 		vec3 total_above = shared_above[0] + (light_y >= 0.0 ? lobe : vec3(0.0));

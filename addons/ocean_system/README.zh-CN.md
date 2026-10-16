@@ -93,7 +93,7 @@ uniform（1–15），可以单独显示某一项着色。
 | --- | --- |
 | `get_sun_direction()` | 指向太阳的方向（世界空间）。 |
 | `get_sun_visibility()` | 到达海面的阳光比例（0–1）。 |
-| `get_cloud_cubemap()` | 云：rgb 为云处预乘的辐亮度，a 为不透明度，带完整 mip；`null` 表示没有云。 |
+| `get_cloud_cubemap()` | 从海面看到的云：rgb 为云处预乘的辐亮度，a 为不透明度，带完整 mip；`null` 表示没有云。 |
 | `get_star_cubemap()`、`get_star_basis()`、`get_star_radiance_scale()` | 星星：辐亮度立方体贴图、从世界到立方体贴图的旋转、换算到场景辐亮度的系数。 |
 | `get_planet_directions()`、`get_planet_irradiance()` | 最多 8 个点光源，在水面上反射成闪光。 |
 | `get_atmosphere_sky_volumes()`、`get_atmosphere_light()` | 从海面看出去、透过大气的天空。没有它们时，水面反射从 `manual_sky_top_color` 到 `manual_sky_horizon_color` 的渐变。 |

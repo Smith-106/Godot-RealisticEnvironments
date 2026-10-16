@@ -113,8 +113,9 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `manual_sky_*` gradient). With a `lighting_changed` signal it is read only
   when that fires, so emit it after every lighting change and before freeing
   textures it handed out. Optional:
-  - `get_cloud_cubemap()`: rgb premultiplied cloud radiance at the cloud, a
-    opacity, full mips; `null` = no clouds.
+  - `get_cloud_cubemap()`: the clouds seen from the sea below the camera, rgb
+    premultiplied cloud radiance at the cloud, a opacity, full mips; `null` =
+    no clouds.
   - `get_star_cubemap()`, `get_star_basis()`, `get_star_radiance_scale()`: the
     water reflects them weighted by `1 − planar coverage` (the mirrored camera
     draws its own starfield), so stars never count twice.
@@ -169,7 +170,8 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   keep `mat_water.tres` free of runtime values.
 - Push constants (`RenderingContext.create_push_constant()`) are packed at the
   shader's exact size, 4 bytes per value, no padding: edit GLSL and packing
-  together. Same for `CloudRenderer`'s push constants and Params buffer.
+  together. Same for `CloudRenderer`'s push constants and Params buffer, and
+  `VolumetricCloudEffect`'s Frame buffer (`cloud_screen_common.glslinc`).
 - Storage images are `readonly`/`writeonly`; descriptor sets bind by array
   index, so order matches binding numbers.
 - One `WaveSpectrum` (`OceanSystem.spectrum`: wind, fetch, depth, shape,
@@ -224,7 +226,10 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   enough). `ocean_sampling.glslinc` → `surface_query.glsl`,
   `iwave_pressure.glsl`; `iwave_common.glslinc` → every `iwave_*.glsl`;
   `atmosphere_common.glslinc` → `atmosphere_*.glsl`, `aerial_perspective.glsl`;
-  `cloud_noise.glslinc` → `cloud_noise_bake.glsl`, `cloud_weather.glsl`.
+  `cloud_noise.glslinc` → `cloud_noise_bake.glsl`, `cloud_weather.glsl`;
+  `cloud_common.glslinc` → `cloud_raymarch.glsl`, `cloud_trace.glsl`;
+  `cloud_screen_common.glslinc` → `cloud_trace.glsl`, `cloud_reconstruct.glsl`,
+  `cloud_composite.glsl` (which also includes `atmosphere_common.glslinc`).
 - Interaction sim (`WaterInteractionSim`, runtime only) simulates `η = h + p`.
   Render texture `(h, η, foam, hull coverage)`. Queries add `η · (1 −
   coverage)`, except for owners on a wave-making body, which read FFT waves
@@ -243,16 +248,29 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   window resizes.
 
 ## Sky invariants
-- `CloudRenderer` renders clouds as seen at the cloud into a cubemap's upper
-  half; sky shader, starfield and water composite it inside the atmosphere
-  (`atmosphere_sky_with_clouds()`). Change the encoding everywhere together.
-  Camera is assumed below the cloud base.
+- The clouds are a real volume the camera can fly through: one density field and
+  light model (`cloud_common.glslinc`, cloud altitudes above `sea_level`, any
+  observer altitude), marched three ways. Change the encoding (rgb premultiplied
+  radiance at the cloud, a opacity) everywhere together:
+  - `VolumetricCloudEffect` (in `sky_system.tscn`'s compositor, after the
+    transparent pass, no exported state): the camera's view, traced on a
+    half-size buffer (a quarter of it per frame), reprojected by cloud distance
+    and composited inside the atmosphere in front of each pixel's surface.
+    History and upsampling match pixels by scene distance (moving objects, MSAA
+    edges); the buffers live in the viewport's render buffers.
+  - `CloudRenderer.sea_cubemap`: seen from the sea below the camera (observer
+    clamped under the base): the water's reflection, the atmosphere's cloud
+    shadows and dome light, the mirrored camera's starfield.
+  - `CloudRenderer.camera_cubemap`: seen from the camera, all faces: the sky's
+    radiance map (`AT_CUBEMAP_PASS`) and the camera's light meter.
+  With the effect present the sky and starfield leave the camera's own view to
+  it (`screen_clouds`).
 - Sky/starfield cloud uniforms go only through
   `RenderingServer.material_set_param`, never `set_shader_parameter`.
 - The sky shader must not read `POSITION` or `TIME` (forces radiance re-renders);
   the `Sky` is INCREMENTAL and `SkySystem._refresh_sky_radiance()` refreshes it.
-- The weather map is written only by `cloud_weather.glsl`; the raymarcher is a
-  pure reader. Noise percentile constants in `cloud_noise_bake.glsl` must be
+- The weather map is written only by `cloud_weather.glsl`; the raymarchers are
+  pure readers. Its `a` channel warps the shape noise so its tiles do not line up. Noise percentile constants in `cloud_noise_bake.glsl` must be
   recomputed when the noise changes.
 - `CloudPreset` fields interpolate and are listed in `BLENDED_PROPERTIES`
   (`haze_visibility` also in `GEOMETRIC_BLENDED_PROPERTIES`).

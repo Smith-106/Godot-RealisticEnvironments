@@ -51,7 +51,7 @@ RigidBody3D
    - `design_waterline_y`: where the hull should float (local);
    - `physical_probe_count` and `fx_probe_count`;
    - **New Probes**: `generated_probe_volume`, the column height and
-     `generated_probe_freeboard`. Freeboard is the deck's height above the
+	 `generated_probe_freeboard`. Freeboard is the deck's height above the
      waterline, so waves above the waterline still lift the hull.
 3. Press **Generate All Probes** and save the scene. Probes are ordinary nodes:
    move, delete or duplicate them as you like.

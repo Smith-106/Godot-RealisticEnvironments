@@ -25,10 +25,15 @@ Requires `core` and a `RenderingDevice` (Forward+).
 
   The sky's colours, twilight and the earth's shadow all come from this one
   model. There are no hand-made gradients.
-- **Clouds.** A weather pass builds a coverage, type and density map around the
-  camera from noise. A raymarcher renders the clouds into a cubemap, refreshing
-  1/4, 1/16 or every texel per frame (`cloud_update_stride`). The sky, the
-  starfield and the ocean's reflection read that cubemap. A `CloudPreset`
+- **Clouds.** The clouds are a volume you can fly into and above. A weather
+  pass builds a coverage, type and density map around the camera from noise.
+  The camera's view is raymarched on screen at half resolution, a quarter of
+  those pixels per frame. Earlier frames fill in the rest
+  (`VolumetricCloudEffect`, in the scene's compositor). Each pixel's clouds are
+  drawn in front of its surface and inside the atmosphere's haze. Two cubemaps
+  hold the clouds for everything else: one seen from the sea for the ocean's
+  reflection, one seen from the camera for the ambient light. They refresh
+  1/4, 1/16 or every texel per frame (`cloud_update_stride`). A `CloudPreset`
   holds one weather state (clouds and haze), and presets blend smoothly into
   each other. The clouds drift with the wind and change shape over time.
 - **Night sky.** The 9,096 naked-eye stars of the Bright Star Catalogue are
@@ -94,8 +99,9 @@ Opaque materials must not write `FOG`.
 
 ## Limits
 
-- The camera must stay below the cloud base. Clouds cast no shadows on the
-  scene.
+- Clouds cast no shadows on the scene. The sun light dims as the camera goes
+  down into the cloud layer, for the whole scene at once.
+- Transparent surfaces that write no depth are drawn behind the clouds.
 - The atmosphere is the same everywhere horizontally. Points beyond 100 km are
   hazed as if they were at 100 km.
 - Fast changes (jumping between presets, fast day cycles) take about half a

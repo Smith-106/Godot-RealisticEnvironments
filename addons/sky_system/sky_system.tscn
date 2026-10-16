@@ -4,6 +4,7 @@
 [ext_resource type="Material" uid="uid://dn2e5gtbc2jx4" path="res://addons/sky_system/materials/sky.tres" id="2_sky"]
 [ext_resource type="Resource" uid="uid://cslcbjx6mnkne" path="res://addons/sky_system/cloud_presets/fair.tres" id="5_cloud_preset"]
 [ext_resource type="Script" uid="uid://fi3uxaroikar" path="res://addons/sky_system/aerial_perspective_effect.gd" id="6_aerial_perspective"]
+[ext_resource type="Script" uid="uid://dmxfobajw4b6e" path="res://addons/sky_system/volumetric_cloud_effect.gd" id="7_volumetric_clouds"]
 
 [sub_resource type="Sky" id="Sky_dynamic"]
 sky_material = ExtResource("2_sky")
@@ -31,8 +32,17 @@ needs_motion_vectors = false
 needs_normal_roughness = false
 script = ExtResource("6_aerial_perspective")
 
+[sub_resource type="CompositorEffect" id="CompositorEffect_volumetric_clouds"]
+resource_local_to_scene = false
+resource_name = ""
+enabled = true
+effect_callback_type = 4
+needs_motion_vectors = false
+needs_normal_roughness = false
+script = ExtResource("7_volumetric_clouds")
+
 [sub_resource type="Compositor" id="Compositor_atmosphere"]
-compositor_effects = Array[CompositorEffect]([SubResource("CompositorEffect_aerial_perspective")])
+compositor_effects = Array[CompositorEffect]([SubResource("CompositorEffect_aerial_perspective"), SubResource("CompositorEffect_volumetric_clouds")])
 
 [node name="SkySystem" type="Node3D" unique_id=356109582]
 script = ExtResource("1_sky_system")

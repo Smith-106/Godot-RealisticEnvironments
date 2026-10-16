@@ -2,7 +2,8 @@ shader_type sky;
 /*
  * The sky: space (the sun's and the moon's disks) seen through the atmosphere, whose
  * view volume holds everything else (the blue sky, twilight, the haze's glow, the sea
- * below the horizon), with the clouds inside it at their base's distance.
+ * below the horizon), with the clouds inside it where the ray enters their layer. The
+ * camera's own view leaves the clouds to VolumetricCloudEffect (screen_clouds).
  */
 
 #include "res://addons/sky_system/shaders/atmosphere.gdshaderinc"
@@ -33,13 +34,18 @@ uniform float moon_phase : hint_range(0.0, 1.0) = 1.0;
 // away from full (SkySystem._lunar_phase_brightness() over the lit share).
 uniform float moon_surface_brightness : hint_range(0.0, 1.0) = 1.0;
 
-// Volumetric clouds rendered by CloudRenderer: rgb is premultiplied radiance,
-// a is opacity. SkySystem sets both through the RenderingServer so the runtime
-// texture is never saved into the material. The sky shows mip 0.
+// Volumetric clouds seen from the camera (CloudRenderer.camera_cubemap): rgb is
+// premultiplied radiance, a is opacity. SkySystem sets the cloud uniforms through the
+// RenderingServer so the runtime texture is never saved into the material. The
+// radiance map (ambient light and reflections) shows them; the camera's own view does
+// only without screen_clouds.
 uniform bool clouds_enabled = false;
-// Altitude (m) of the cloud layer's base, where the atmosphere in front of the clouds
-// ends; sent with the cloud uniforms.
+// VolumetricCloudEffect draws the clouds over the camera's view: the sky leaves them out.
+uniform bool screen_clouds = false;
+// Altitudes (m above the sea) of the cloud layer's base and top: the atmosphere in front
+// of the clouds ends where the ray enters the layer.
 uniform float cloud_base_altitude = 1500.0;
+uniform float cloud_top_altitude = 4500.0;
 uniform samplerCube cloud_cubemap : filter_linear_mipmap;
 
 // The Milky Way (stars/milky_way.exr: rgb in ucd/m2, plate carree in J2000 right
@@ -96,6 +102,26 @@ vec3 milky_way_radiance(vec3 direction, float lod) {
 	return textureLod(milky_way, uv, lod).rgb * milky_way_scale;
 }
 
+/*
+ * Distance (m) along direction to where it enters the cloud layer: its base from below,
+ * its top from above; 0 inside it, or for a ray from above that misses it.
+ */
+float cloud_distance(vec3 direction) {
+	float h = atmosphere_observer.w;
+	if (h < cloud_base_altitude) {
+		return atmosphere_distance_to_altitude(direction, cloud_base_altitude);
+	}
+	if (h <= cloud_top_altitude) {
+		return 0.0;
+	}
+	// From above: the nearer root of the top's sphere, if the ray meets it.
+	float r = ATMOSPHERE_EARTH_RADIUS + h;
+	float b = r * direction.y;
+	float c = (h - cloud_top_altitude) * (2.0 * ATMOSPHERE_EARTH_RADIUS + h + cloud_top_altitude);
+	float discriminant = b * b - c;
+	return discriminant >= 0.0 && b < 0.0 ? c / (-b + sqrt(discriminant)) : 0.0;
+}
+
 void sky() {
 	float sun_disk = body_disk(EYEDIR, sun_direction, sun_disk_size);
 	float sun_halo = body_halo(EYEDIR, sun_direction, sun_halo_size) * 0.32;
@@ -126,13 +152,14 @@ void sky() {
 		space += milky_way_radiance(EYEDIR, AT_CUBEMAP_PASS ? 2.0 : 0.0);
 	}
 
-	vec4 cloud = clouds_enabled ? textureLod(cloud_cubemap, EYEDIR, 0.0) : vec4(0.0);
+	bool show_clouds = clouds_enabled && (AT_CUBEMAP_PASS || !screen_clouds);
+	vec4 cloud = show_clouds ? textureLod(cloud_cubemap, EYEDIR, 0.0) : vec4(0.0);
 	if (atmosphere_enabled) {
 		// The camera's altitude comes from the atmosphere, not POSITION: a sky that reads
 		// POSITION re-renders its radiance map whenever the camera moves (SkySystem
 		// refreshes it instead, see _refresh_sky_radiance()). The atmosphere and the
 		// clouds are pre-exposed; Godot exposes the sky's output itself.
-		COLOR = atmosphere_sky_with_clouds(EYEDIR, cloud, atmosphere_distance_to_altitude(EYEDIR, cloud_base_altitude), space * atmosphere_exposure) / atmosphere_exposure;
+		COLOR = atmosphere_sky_with_clouds(EYEDIR, cloud, cloud_distance(EYEDIR), space * atmosphere_exposure) / atmosphere_exposure;
 		// Godot renders the radiance map exposed, then exposes the light it gives again
 		// (Godot 4.8): the map gets the sky unexposed.
 		if (AT_CUBEMAP_PASS) {

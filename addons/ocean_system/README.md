@@ -107,7 +107,7 @@ for missing ones.
 | --- | --- |
 | `get_sun_direction()` | Direction toward the sun (world space). |
 | `get_sun_visibility()` | Share of the sun reaching the sea (0–1). |
-| `get_cloud_cubemap()` | Clouds: rgb premultiplied radiance at the cloud, a opacity, full mips; `null` = none. |
+| `get_cloud_cubemap()` | Clouds seen from the sea: rgb premultiplied radiance at the cloud, a opacity, full mips; `null` = none. |
 | `get_star_cubemap()`, `get_star_basis()`, `get_star_radiance_scale()` | Stars: radiance cubemap, world-to-cubemap rotation, scale to scene radiance. |
 | `get_planet_directions()`, `get_planet_irradiance()` | Up to 8 point lights, reflected as glints. |
 | `get_atmosphere_sky_volumes()`, `get_atmosphere_light()` | The sky seen from the sea, through the atmosphere. Without them the water reflects a gradient from `manual_sky_top_color` to `manual_sky_horizon_color`. |
