@@ -54,6 +54,10 @@ const CASCADE_BAND_WAVES_PER_TILE := 6.0
 ## ... as long as they span at least this many of its texels; otherwise the smaller
 ## cascade starts at that length instead.
 const CASCADE_BAND_MIN_TEXELS := 4.0
+## The largest tile should hold at least this many of the spectrum's peak wavelengths:
+## waves longer than a tile cannot be drawn, and with a shorter tile a sizeable share of
+## the sea's energy (all of it beyond the peak's long side) is missing.
+const _LARGEST_TILE_PEAK_WAVELENGTHS := 1.5
 
 ## Height of the still water in world units. The surface is drawn here, and water
 ## queries, buoyancy, hull cutouts and planar reflections use it; the node's own
@@ -147,7 +151,7 @@ const CASCADE_BAND_MIN_TEXELS := 4.0
 		_update_micro_roughness()
 ## Multiplies the slopes of every wave in the shading (normals, roughness, caustics),
 ## the interaction simulation's included. 1 is the physical slope of the waves as
-## generated (before WaveSpectrum.displacement_scale); lower is calmer-looking water.
+## drawn (WaveSpectrum.displacement_scale included); lower is calmer-looking water.
 ## The mesh and water queries do not change.
 @export_range(0.0, 2.0, 0.01) var normal_scale := 1.0 :
 	set(value):
@@ -485,6 +489,9 @@ var _parameter_cache := {}
 var _surface_queries : OceanSurfaceQueries
 ## True once every cascade has a frame.
 var _has_wave_output := false
+## Whether the spectrum's peak wave has been reported as too long for the largest tile
+## (_check_peak_wavelength()); cleared once it fits again, so it is reported once per episode.
+var _peak_wavelength_reported := false
 ## This frame's cascade records for the compute shaders (_pack_cascade_data()),
 ## shared by the surface queries and the interaction simulation's ticks.
 var _cascade_data := PackedByteArray()
@@ -745,6 +752,7 @@ func _update_micro_roughness() -> void:
 func _update_waves(frame_delta : float) -> void:
 	var wind_speed := get_wind_speed()
 	var wind_direction := get_wind_direction_degrees()
+	_check_peak_wavelength(wind_speed)
 	var all_have_frames := true
 	for i in cascades.size():
 		var state := _cascade_states[i]
@@ -760,6 +768,28 @@ func _update_waves(frame_delta : float) -> void:
 			state.frame_count += 1
 		all_have_frames = all_have_frames and state.frame_count > 0
 	_has_wave_output = all_have_frames
+
+## Reports (once until it fits again) a sea whose peak wave is too long for the largest
+## tile: the waves past it are not drawn, so the sea looks calmer than its wind.
+func _check_peak_wavelength(wind_speed : float) -> void:
+	var problem := _get_peak_wavelength_problem(wind_speed)
+	if problem.is_empty():
+		_peak_wavelength_reported = false
+	elif not _peak_wavelength_reported:
+		_peak_wavelength_reported = true
+		push_warning("OceanSystem %s: %s" % [get_path(), problem])
+
+## Why the largest tile cannot hold the spectrum's peak at wind_speed (m/s), or "".
+func _get_peak_wavelength_problem(wind_speed : float) -> String:
+	if cascades.is_empty():
+		return ""
+	var largest := 0.0
+	for cascade in cascades:
+		largest = maxf(largest, cascade.tile_length)
+	var peak := WaveGenerator.peak_wavelength(maxf(wind_speed, 0.0001), spectrum.fetch_length * 1e3, spectrum.water_depth)
+	if largest >= _LARGEST_TILE_PEAK_WAVELENGTHS * peak:
+		return ""
+	return "the waves of a %.1f m/s wind over %s km peak at %d m, too long for the largest wave cascade (tile_length %s m), so the longest waves are missing and the sea looks calmer. Use a largest tile_length of at least %d m." % [wind_speed, spectrum.fetch_length, int(peak), largest, ceili(_LARGEST_TILE_PEAK_WAVELENGTHS * peak)]
 
 ## Seconds between a cascade's FFT updates: its shortest wave (two texels, or its
 ## band's end) may travel max_wave_phase_step of its length, at deep-water phase
@@ -1032,6 +1062,10 @@ func _get_configuration_warnings() -> PackedStringArray:
 		var smaller := cascades[order[n + 1]]
 		if _get_shortest_resolved_wavelength(larger) > smaller.tile_length:
 			warnings.push_back("Wave cascades %d and %d: tile lengths %s and %s m are too far apart for simulation_map_size %d, so waves between them are missing. Use tiles at most %d times apart, or a larger map." % [order[n], order[n + 1], larger.tile_length, smaller.tile_length, simulation_map_size, int(simulation_map_size / CASCADE_BAND_MIN_TEXELS)])
+	var wind_node := get_node_or_null(wind_source_path) if not wind_source_path.is_empty() else null
+	var peak_problem := _get_peak_wavelength_problem(WindSource.get_speed(wind_node) if WindSource.is_valid(wind_node) else spectrum.wind_speed)
+	if not peak_problem.is_empty():
+		warnings.push_back(peak_problem.substr(0, 1).to_upper() + peak_problem.substr(1))
 	if not global_basis.is_equal_approx(Basis.IDENTITY) or not is_zero_approx(global_position.y):
 		warnings.push_back("The ocean ignores its own transform: it is drawn level at water_level, and its waves, queries and reflections assume an unrotated, unscaled node. Keep it (and its parents) at height 0 without rotation or scale, and set water_level instead (OceanEnvironment.sea_level in the drop-in environment).")
 	if not sky_source_path.is_empty():

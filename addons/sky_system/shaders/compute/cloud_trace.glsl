@@ -17,6 +17,8 @@ msaa = "#define USE_MSAA";
 
 VERSION_DEFINES
 
+#define CLOUD_TRANSMITTANCE_BINDING 10
+#include "atmosphere_common.glslinc"
 #include "cloud_common.glslinc"
 #define FRAME_BINDING 6
 #define DEPTH_BINDING 7

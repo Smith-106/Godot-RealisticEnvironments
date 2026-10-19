@@ -19,6 +19,8 @@
  * the cloud.
  */
 
+#define CLOUD_TRANSMITTANCE_BINDING 6
+#include "atmosphere_common.glslinc"
 #include "cloud_common.glslinc"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;

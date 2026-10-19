@@ -155,10 +155,6 @@ func _update_view_projection() -> void:
 	var view_projection := _camera.get_camera_projection() * Projection(_camera.global_transform.affine_inverse())
 	_set_parameter.call(&"planar_reflection_view_projection", view_projection)
 	_set_parameter.call(&"planar_reflection_camera_position", _camera.global_position)
-	# Angle one texel spans at the image center, to pick the mip that blurs the
-	# reflection to the water's roughness. fov is along the kept axis.
-	var kept_side := _viewport.size.y if _camera.keep_aspect == Camera3D.KEEP_HEIGHT else _viewport.size.x
-	_set_parameter.call(&"planar_reflection_texel_angle", 2.0 * tan(deg_to_rad(_camera.fov) * 0.5) / float(kept_side))
 
 
 func _layer_bit(layer: int) -> int:

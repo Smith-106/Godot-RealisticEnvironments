@@ -12,7 +12,7 @@ const BLENDED_PROPERTIES : Array[StringName] = [
 	&"cloud_type", &"type_variation", &"base_altitude", &"thickness",
 	&"shape_scale", &"detail_scale", &"detail_erosion",
 	&"density", &"density_variation", &"scattering_albedo",
-	&"evolution_speed", &"sun_light_scale",
+	&"evolution_speed",
 	&"haze_visibility", &"haze_scale_height", &"haze_anisotropy",
 	&"star_scintillation",
 ]
@@ -62,10 +62,6 @@ const GEOMETRIC_BLENDED_PROPERTIES : Array[StringName] = [&"haze_visibility"]
 ## How fast clouds form, dissipate and change shape, on top of drifting with
 ## the wind. In noise units per second.
 @export_range(0.0, 0.05, 0.0001) var evolution_speed := 0.004
-
-@export_group("Scene Lighting")
-## Multiplies the sun light reaching the scene under this cloud cover.
-@export_range(0.0, 1.0, 0.01) var sun_light_scale := 1.0
 
 @export_group("Haze")
 ## Visibility at sea level in meters: how far a dark object stays visible (2 %

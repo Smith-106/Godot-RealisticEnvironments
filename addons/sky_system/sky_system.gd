@@ -124,6 +124,12 @@ const RADIANCE_ALTITUDE_TOLERANCE := 0.1
 ## A light whose irradiance is below this share of the other's is hidden (the moon by
 ## day, the sun deep in twilight): it would cost a shadowed light for nothing.
 const NEGLIGIBLE_LIGHT_SHARE := 0.001
+## Seconds the scene's lights take to follow a change in the clouds over the sun or the
+## moon (to 1/e): the measurement arrives in steps as the cloud cubemaps refresh.
+const CLOUD_LIGHT_RESPONSE_SECONDS := 0.3
+## Relative change in the clouds' share of a light that updates the scene's lights
+## (shares under 0.01 count as 0.01, so a covered light still settles).
+const CLOUD_LIGHT_UPDATE_THRESHOLD := 0.01
 
 ## World height of the sea surface: keep it equal to OceanSystem.water_level
 ## (OceanEnvironment.sea_level sets both). The sea's horizon lies below eye level by
@@ -382,9 +388,13 @@ var _cloud_wind_source : Node
 var _cloud_wind_offset := Vector2.ZERO
 var _cloud_evolution_time := 0.0
 var _cloud_frames_until_material_push := 0
-## Share of the sun's and the moon's light the clouds let through to the camera
-## (_get_scene_cloud_light_scale()), as the lights were last set.
-var _scene_cloud_light_scale := 1.0
+## Share of the light the clouds let through, measured on the GPU
+## (AtmosphereRenderer.camera_sky_light_buffer): x the sun's and y the moon's to the
+## camera, z the sun's and w the moon's to the sea below it. The target as last read
+## back, the value followed smoothly toward it, and the value the lights were last set with.
+var _cloud_light_target := Vector4.ONE
+var _cloud_light := Vector4.ONE
+var _cloud_light_applied := Vector4.ONE
 
 ## Internal child drawing star_catalog; not saved with the scene.
 var _starfield : MeshInstance3D
@@ -492,8 +502,10 @@ func _process(delta : float) -> void:
 		_process_weather_transition(delta)
 	if _cloud_renderer:
 		_process_clouds(delta)
-		if absf(_get_scene_cloud_light_scale() - _scene_cloud_light_scale) > 0.02:
-			_update_sky()
+	_cloud_light = _cloud_light.lerp(_cloud_light_target, 1.0 - exp(-delta / CLOUD_LIGHT_RESPONSE_SECONDS))
+	var cloud_light_change := (_cloud_light - _cloud_light_applied).abs() / _cloud_light.max(_cloud_light_applied).max(Vector4.ONE * 0.01)
+	if maxf(maxf(cloud_light_change.x, cloud_light_change.y), maxf(cloud_light_change.z, cloud_light_change.w)) > CLOUD_LIGHT_UPDATE_THRESHOLD:
+		_update_sky()
 	if _atmosphere_renderer:
 		_process_atmosphere()
 
@@ -519,9 +531,9 @@ func get_moon_direction() -> Vector3:
 
 
 ## How much of the sun reaches the sea: the share of its disk above the horizon
-## times cloud cover.
+## times the share the clouds over it let through.
 func get_sun_visibility() -> float:
-	return _sun_visibility * _get_cloud_sun_light_scale()
+	return _sun_visibility * _cloud_light.z
 
 
 ## Colour of the sun's light at the sea (brightest channel 1): white light coloured
@@ -689,14 +701,14 @@ func _update_sky() -> void:
 	_update_lighting_state()
 	if not is_inside_tree():
 		return
-	# The atmosphere's lights as under the clouds at the sea; the scene's by the clouds
-	# between the camera and the sky (the camera may be inside or above them).
-	var cloud_light_scale := _get_cloud_sun_light_scale()
-	var sun_energy := _get_sun_energy() * cloud_light_scale
-	var moon_energy := _get_moon_energy() * cloud_light_scale
-	_scene_cloud_light_scale = _get_scene_cloud_light_scale()
-	var scene_sun_energy := _get_sun_energy() * _scene_cloud_light_scale
-	var scene_moon_energy := _get_moon_energy() * _scene_cloud_light_scale
+	# The atmosphere's lights above the clouds (it shades itself under them); the scene's
+	# by the clouds between the camera and the light, as measured (the camera may be
+	# below, inside or above them).
+	var sun_energy := _get_sun_energy()
+	var moon_energy := _get_moon_energy()
+	_cloud_light_applied = _cloud_light
+	var scene_sun_energy := sun_energy * _cloud_light.x
+	var scene_moon_energy := moon_energy * _cloud_light.y
 	# The lights reach the scene through the atmosphere between space and the sea.
 	_update_light(_sun_light, _sun_direction, scene_sun_energy, _sun_transmittance)
 	_update_light(_moon_light, _moon_direction, scene_moon_energy, _moon_transmittance)
@@ -1286,7 +1298,7 @@ func _setup_clouds() -> void:
 		else:
 			if _cloud_state == null:
 				_cloud_state = cloud_preset.duplicate()
-			_cloud_renderer = CloudRenderer.new(device, cloud_cubemap_size, _atmosphere_renderer.sky_ambient_buffer)
+			_cloud_renderer = CloudRenderer.new(device, cloud_cubemap_size, _atmosphere_renderer.sky_ambient_buffer, _atmosphere_renderer.transmittance_lut)
 			if _cloud_renderer.has_failed():
 				push_error("SkySystem: the clouds' GPU resources failed; clouds are off: %s" % get_path())
 				_cloud_renderer.release()
@@ -1347,17 +1359,12 @@ func _process_clouds(delta : float) -> void:
 	_cloud_wind_offset += _get_cloud_wind_velocity() * delta
 	_cloud_evolution_time += _cloud_state.evolution_speed * delta
 
-	# The brighter of the sun and the moon through the atmosphere down to the middle of
-	# the cloud layer: high clouds stay lit after the sea has lost the sun, and the moon
-	# takes over once the sun no longer reaches them.
-	var cloud_altitude := _cloud_state.base_altitude + 0.5 * _cloud_state.thickness
-	var light_direction := _sun_direction
-	var light_color := _get_atmosphere_transmittance(cloud_altitude, _sun_direction, true) * _get_sun_energy()
-	var moon_color := _get_atmosphere_transmittance(cloud_altitude, _moon_direction, true) * _get_moon_energy()
-	if _luminance(moon_color) > _luminance(light_color):
-		light_direction = _moon_direction
-		light_color = moon_color
-	light_color *= cloud_light_intensity * _exposure
+	# The atmosphere's key light (the sun, the moon once the sun is well down), above the
+	# atmosphere: the clouds dim it down to each of their points themselves, so far
+	# clouds toward the sun stay lit after the sea has lost it.
+	var sun_is_key := _sun_direction.y >= MOON_KEY_SUN_HEIGHT
+	var light_direction := _sun_direction if sun_is_key else _moon_direction
+	var light_color := Color.WHITE * ((_get_sun_energy() if sun_is_key else _get_moon_energy()) * cloud_light_intensity * _exposure)
 
 	_cloud_renderer.update_stride = cloud_update_stride
 	_cloud_renderer.view_steps = cloud_view_steps
@@ -1365,7 +1372,7 @@ func _process_clouds(delta : float) -> void:
 	_cloud_renderer.max_distance = cloud_max_distance
 	var camera_position := _get_cloud_camera_position()
 	_cloud_renderer.render(Vector3(camera_position.x, camera_position.y - sea_level, camera_position.z), _cloud_state,
-		_cloud_wind_offset, _cloud_evolution_time, light_direction, light_color, cloud_ambient_intensity)
+		_cloud_wind_offset, _cloud_evolution_time, light_direction, light_color, _atmosphere_renderer.get_top_altitude(), cloud_ambient_intensity)
 
 	# Re-sending the parameters once per full refresh also makes the sky
 	# re-render its radiance map, so ambient light and reflections follow the clouds.
@@ -1450,6 +1457,8 @@ func _release_atmosphere() -> void:
 	var renderer := _atmosphere_renderer
 	_atmosphere_renderer = null
 	_sky_irradiance = -1.0
+	# Nothing measures the clouds without the atmosphere's passes.
+	_cloud_light_target = Vector4.ONE
 	# Sky sources' consumers (the ocean) drop the sea-level volumes on this signal.
 	lighting_changed.emit()
 	renderer.release()
@@ -1483,22 +1492,27 @@ func _read_camera_sky_light() -> void:
 	_sky_light_read_pending = true
 	var renderer := _atmosphere_renderer
 	var exposure := _exposure
+	# Which body the atmosphere's key light was (_update_sky()).
+	var sun_is_key := _sun_direction.y >= MOON_KEY_SUN_HEIGHT
 	# The callback may run outside the main thread's frame logic; hand the data over deferred.
 	var on_read := func(data : PackedByteArray) -> void:
-		_on_camera_sky_light_read.call_deferred(renderer, exposure, data)
+		_on_camera_sky_light_read.call_deferred(renderer, exposure, sun_is_key, data)
 	var error := RenderingServer.get_rendering_device().buffer_get_data_async(renderer.camera_sky_light_buffer, on_read, 0, AtmosphereRenderer.SKY_LIGHT_SIZE)
 	if error != OK:
 		_sky_light_read_pending = false
 		push_error("SkySystem: reading the sky light back failed: %s" % error_string(error))
 
 
-func _on_camera_sky_light_read(renderer : AtmosphereRenderer, exposure : float, data : PackedByteArray) -> void:
+func _on_camera_sky_light_read(renderer : AtmosphereRenderer, exposure : float, sun_is_key : bool, data : PackedByteArray) -> void:
 	_sky_light_read_pending = false
 	# A readback from a renderer released since describes a sky that is gone.
 	if renderer != _atmosphere_renderer:
 		return
 	var floats := data.to_float32_array()
 	_sky_irradiance = Vector3(floats[8], floats[9], floats[10]).dot(LUMINANCE_WEIGHTS) / exposure
+	# Key and secondary light, to the camera (12, 13) and to the sea (14, 15).
+	var cloud_light := Vector4(floats[12], floats[13], floats[14], floats[15]).clamp(Vector4.ZERO, Vector4.ONE)
+	_cloud_light_target = cloud_light if sun_is_key else Vector4(cloud_light.y, cloud_light.x, cloud_light.w, cloud_light.z)
 
 
 ## Reads the camera's exposure and publishes it with the atmosphere.
@@ -1524,22 +1538,6 @@ func _refresh_sky_radiance() -> void:
 	_radiance_observer_altitude = _get_atmosphere_observer_altitude()
 	var material := _world_environment.environment.sky.sky_material
 	RenderingServer.material_set_param(material.get_rid(), &"sun_direction", _sun_direction)
-
-
-## Share of the sun's and the moon's light the clouds let through to the sea
-## (CloudPreset.sun_light_scale).
-func _get_cloud_sun_light_scale() -> float:
-	return _cloud_state.sun_light_scale if _cloud_renderer else 1.0
-
-
-## The same for the camera: the sea's share below the cloud layer, rising to all of it
-## at the layer's top.
-func _get_scene_cloud_light_scale() -> float:
-	if _cloud_renderer == null:
-		return 1.0
-	var altitude := _get_cloud_camera_position().y - sea_level
-	var above := smoothstep(_cloud_state.base_altitude, _cloud_state.base_altitude + _cloud_state.thickness, altitude)
-	return lerpf(_cloud_state.sun_light_scale, 1.0, above)
 
 
 ## The clouds use cloud_wind_speed / cloud_wind_direction while there is no valid source.

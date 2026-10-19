@@ -19,7 +19,10 @@ class_name WaveSpectrum extends Resource
 
 @export_group("Spectrum")
 ## Distance the wind has blown over open water, in kilometers. Longer fetches give
-## more developed, longer and more organized waves.
+## more developed, longer and more organized waves, up to the fully developed sea
+## (about 175 km at 10 m/s, 700 km at 20 m/s), past which they stop growing. The
+## largest cascade's tile should be at least 1.5 times the peak wavelength (OceanSystem
+## warns otherwise).
 @export_range(0.1, 1000.0, 0.1, "or_greater", "suffix:km") var fetch_length := 12.0 :
 	set(value): fetch_length = maxf(0.0001, value)
 ## Mean water depth for the finite-depth (TMA) spectrum, in meters. Shallow water
@@ -34,7 +37,7 @@ class_name WaveSpectrum extends Resource
 ## Short-wave detail: lower values damp the smallest ripples.
 @export_range(0.0, 1.0, 0.01) var detail := 1.0
 ## Multiplies the waves' displacement (height and horizontal chop) everywhere: the
-## drawn surface, water queries and buoyancy. 1 is the height of the spectrum
+## drawn surface and its shading slopes, water queries and buoyancy. 1 is the height of the spectrum
 ## (JONSWAP). The cascades' whitecap thresholds include it: retune them together.
 @export_range(0.0, 4.0, 0.01, "or_greater") var displacement_scale := 1.0
 

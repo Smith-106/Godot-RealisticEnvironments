@@ -17,7 +17,6 @@ detail_erosion = 0.25
 density = 1.4
 density_variation = 0.25
 evolution_speed = 0.003
-sun_light_scale = 0.3
 haze_visibility = 20000.0
 haze_scale_height = 800.0
 haze_anisotropy = 0.96

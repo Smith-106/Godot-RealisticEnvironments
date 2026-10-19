@@ -222,10 +222,33 @@ func _notification(what):
 	if what == NOTIFICATION_PREDELETE and context != null:
 		context.free()
 
-# Source: https://wikiwaves.org/Ocean-Wave_Spectra#JONSWAP_Spectrum
-static func JONSWAP_alpha(wind_speed:=20.0, fetch_length:=550e3) -> float:
-	return 0.076 * pow(wind_speed**2 / (fetch_length*G), 0.22)
+## JONSWAP's fetch laws (Hasselmann et al. 1973) in the dimensionless fetch g F / U^2:
+## alpha = 0.076 x^-0.22, peak omega = 22 (g / U) x^-1/3. Past this fetch the sea is fully
+## developed (Pierson-Moskowitz: alpha 0.0081-0.0084, peak omega about 0.8 g / U), so
+## longer fetches no longer grow the waves.
+const FULLY_DEVELOPED_DIMENSIONLESS_FETCH := 2.2e4
+
+## g F / U^2 for wind_speed (m/s) and fetch_length (m), capped at the fully developed sea.
+static func dimensionless_fetch(wind_speed : float, fetch_length : float) -> float:
+	return minf(G * fetch_length / maxf(wind_speed * wind_speed, 1e-8), FULLY_DEVELOPED_DIMENSIONLESS_FETCH)
 
 # Source: https://wikiwaves.org/Ocean-Wave_Spectra#JONSWAP_Spectrum
-static func JONSWAP_peak_angular_frequency(wind_speed:=20.0, fetch_length:=550e3) -> float:
-	return 22.0 * pow(G*G / (wind_speed*fetch_length), 1.0/3.0)
+static func JONSWAP_alpha(wind_speed : float, fetch_length : float) -> float:
+	return 0.076 * pow(dimensionless_fetch(wind_speed, fetch_length), -0.22)
+
+# Source: https://wikiwaves.org/Ocean-Wave_Spectra#JONSWAP_Spectrum
+static func JONSWAP_peak_angular_frequency(wind_speed : float, fetch_length : float) -> float:
+	return 22.0 * G / maxf(wind_speed, 1e-4) * pow(dimensionless_fetch(wind_speed, fetch_length), -1.0 / 3.0)
+
+## Wavelength (m) of the spectrum's peak for wind_speed (m/s), fetch_length (m) and
+## water depth (m): the finite-depth dispersion relation omega^2 = g k tanh(k depth),
+## solved by Newton's method from the deep-water wavenumber.
+static func peak_wavelength(wind_speed : float, fetch_length : float, depth : float) -> float:
+	var omega := JONSWAP_peak_angular_frequency(wind_speed, fetch_length)
+	var k := omega * omega / G
+	for i in 8:
+		var t := tanh(k * depth)
+		var f := G * k * t - omega * omega
+		var df := G * (t + k * depth * (1.0 - t * t))
+		k = maxf(k - f / df, 1e-6)
+	return TAU / k

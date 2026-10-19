@@ -69,6 +69,7 @@ var _shape_noise : RID
 var _detail_noise : RID
 var _weather_map : RID
 var _sky_ambient_buffer : RID
+var _transmittance_lut : RID
 var _weather_pipeline : RID
 var _weather_set : RID
 var _raymarch_pipeline : RID
@@ -82,11 +83,12 @@ var _frame := 0
 var _fresh_frames := 0
 
 
-## sky_ambient_buffer: AtmosphereRenderer.sky_ambient_buffer, the sky's light at the
-## cloud layer; it must outlive this renderer.
-func _init(device : RenderingDevice, sea_face_size : int, sky_ambient_buffer : RID) -> void:
+## sky_ambient_buffer, transmittance_lut: AtmosphereRenderer's sky light at the cloud
+## layer and transmittance LUT; they must outlive this renderer.
+func _init(device : RenderingDevice, sea_face_size : int, sky_ambient_buffer : RID, transmittance_lut : RID) -> void:
 	_device = device
 	_sky_ambient_buffer = sky_ambient_buffer
+	_transmittance_lut = transmittance_lut
 	_context = RenderingContext.new(device)
 	var linear_repeat := _context.create_sampler(RenderingContext.linear_sampler_state(RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT))
 	var linear_clamp := _context.create_sampler(RenderingContext.linear_sampler_state(RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE))
@@ -132,6 +134,7 @@ func _init(device : RenderingDevice, sea_face_size : int, sky_ambient_buffer : R
 			RenderingContext.sampled_uniform(3, linear_clamp, _weather_map),
 			RenderingContext.buffer_uniform(4, _params_buffer),
 			RenderingContext.buffer_uniform(5, sky_ambient_buffer),
+			RenderingContext.sampled_uniform(6, linear_clamp, transmittance_lut),
 		], raymarch_shader)
 		var mip_sets : Array[RID] = []
 		for mip in range(1, mip_count):
@@ -166,11 +169,11 @@ func has_failed() -> bool:
 	return _context.failed
 
 
-## What a screen-space trace binds at bindings 1-5 of cloud_common.glslinc: the
-## shape and detail noise, the weather map, the Params buffer and the sky ambient
-## buffer. Valid until release().
+## What a screen-space trace binds for cloud_common.glslinc: the shape and detail
+## noise, the weather map, the Params buffer, the sky ambient buffer (bindings 1-5) and
+## the transmittance LUT (CLOUD_TRANSMITTANCE_BINDING). Valid until release().
 func get_trace_resources() -> Array[RID]:
-	return [_shape_noise, _detail_noise, _weather_map, _params_buffer, _sky_ambient_buffer]
+	return [_shape_noise, _detail_noise, _weather_map, _params_buffer, _sky_ambient_buffer, _transmittance_lut]
 
 
 ## Makes the next full refresh replace the cubemaps instead of blending into them,
@@ -186,10 +189,11 @@ func get_refresh_frames() -> int:
 
 ## Records the weather, raymarch and mip passes for this frame. camera_position:
 ## world x, altitude above the sea (m), world z. light_color: the key light's
-## irradiance at the cloud layer; sky_light_scale multiplies the sky's light.
+## energy above the atmosphere (irradiance / pi); atmosphere_top: the atmosphere's top
+## altitude (m) for its transmittance LUT; sky_light_scale multiplies the sky's light.
 func render(camera_position : Vector3, preset : CloudPreset, wind_offset : Vector2, evolution_time : float,
-		light_direction : Vector3, light_color : Color, sky_light_scale : float) -> void:
-	var params := _pack_params(camera_position, preset, wind_offset, evolution_time, light_direction, light_color, sky_light_scale)
+		light_direction : Vector3, light_color : Color, atmosphere_top : float, sky_light_scale : float) -> void:
+	var params := _pack_params(camera_position, preset, wind_offset, evolution_time, light_direction, light_color, atmosphere_top, sky_light_scale)
 	_device.buffer_update(_params_buffer, 0, params.size(), params)
 
 	var cycle_length := update_stride * update_stride
@@ -256,9 +260,9 @@ func render(camera_position : Vector3, preset : CloudPreset, wind_offset : Vecto
 
 
 func _pack_params(camera_position : Vector3, preset : CloudPreset, wind_offset : Vector2, evolution_time : float,
-		light_direction : Vector3, light_color : Color, sky_light_scale : float) -> PackedByteArray:
+		light_direction : Vector3, light_color : Color, atmosphere_top : float, sky_light_scale : float) -> PackedByteArray:
 	return PackedFloat32Array([
-		preset.base_altitude, preset.base_altitude + preset.thickness, max_distance, 0.0,
+		preset.base_altitude, preset.base_altitude + preset.thickness, max_distance, atmosphere_top,
 		camera_position.x, camera_position.z, max_distance * 2.0, BASE_EXTINCTION * preset.density,
 		wind_offset.x, wind_offset.y, evolution_time, sky_light_scale,
 		preset.shape_scale, preset.detail_scale, preset.detail_erosion, preset.scattering_albedo,

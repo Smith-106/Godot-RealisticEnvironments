@@ -52,7 +52,7 @@
 | 分组 | 内容 |
 | --- | --- |
 | `water_level` | 静水面的高度。 |
-| Waves | `spectrum`：风（没有风源时使用）、`fetch_length`（风区长度）、`water_depth`、`swell`、`spread`、`detail`、`displacement_scale`（1 = 物理浪高；演示场景用 2），以及海面跟随变化的快慢。可以把它另存为 `.tres` 来复用一种海况。`cascades`（最多 8 个）：`tile_length`，以及泡沫设置（`whitecap`、`foam_generation`、`foam_lifetime`）。平铺长度之间不要互为整数倍。修改 `displacement_scale` 后要重新调整 `whitecap`。 |
+| Waves | `spectrum`：风（没有风源时使用）、`fetch_length`（风区长度；海况充分成长后不再增长）、`water_depth`、`swell`、`spread`、`detail`、`displacement_scale`（1 = 物理浪高；演示场景用 2），以及海面跟随变化的快慢。可以把它另存为 `.tres` 来复用一种海况。`cascades`（最多 8 个）：`tile_length`，以及泡沫设置（`whitecap`、`foam_generation`、`foam_lifetime`）。平铺长度之间不要互为整数倍，最大的至少为峰值波长的 1.5 倍（否则海洋会发出警告）。修改 `displacement_scale` 后要重新调整 `whitecap`。 |
 | Water | `water_absorption`、`water_scattering`、`water_scattering_anisotropy`：水的颜色只由它们决定。 |
 | Surface | `clear_roughness`、`short_wave_slope_scale`（小到无法模拟的风生涟漪）、`normal_scale`（1 = 物理斜率）。 |
 | Foam | `foam_color`、`foam_intensity`、`foam_roughness`、泡沫纹理及其平铺尺寸。 |

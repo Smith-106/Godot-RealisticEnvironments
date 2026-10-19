@@ -22,6 +22,9 @@
  * refracted view ray (find_refracted_scene()) and attenuated over the water it crosses
  * (underwater_transmittance()); the water body's color fills in what is not transmitted.
  *
+ * Seen from below (a camera under the surface, the mesh's back faces), the surface is
+ * Snell's window (underwater_view(), and the sun's transmission in light()).
+ *
  * The water is drawn on the earth's curve (earth_curvature_drop()), so it ends at a real
  * horizon. Everything else about the surface (waves, queries, hulls, planar reflections)
  * stays flat: water_world_position is the flat position, and only the drawn vertex and
@@ -57,6 +60,12 @@
 // Refinement steps of the planar reflection hit along a pixel's reflected ray.
 #ifndef PLANAR_REFLECTION_STEPS
 #define PLANAR_REFLECTION_STEPS 3
+#endif
+// Most reads along a reflection footprint's long axis (the clouds, the stars, the planar
+// and screen-space reflections): seen at a low angle, a rough reflection spreads far more
+// along the plane of incidence than across it (reflection_footprint()).
+#ifndef REFLECTION_FOOTPRINT_TAPS
+#define REFLECTION_FOOTPRINT_TAPS 4
 #endif
 // Refracted view ray's search for the opaque scene (find_refracted_scene()): march and
 // bisection steps, how far (m) behind a surface the ray may end up and still pass through
@@ -173,7 +182,6 @@ uniform sampler2D planar_reflection_texture : filter_linear_mipmap, repeat_disab
 uniform sampler2D planar_reflection_distance : filter_nearest, repeat_disable;
 uniform mat4 planar_reflection_view_projection;
 uniform vec3 planar_reflection_camera_position; // the mirrored camera
-uniform float planar_reflection_texel_angle = 0.001; // radians per mip-0 texel at the image center
 uniform float planar_reflection_strength : hint_range(0.0, 1.0) = 0.0; // how much reflected geometry covers the sky behind it
 // The opaque scene behind the water (linear HDR, exposed like EMISSION after scene_exposure).
 uniform sampler2D scene_color : hint_screen_texture, filter_linear_mipmap, repeat_disable;
@@ -230,6 +238,15 @@ varying vec3 water_world_position;
 varying float light_specular_scale;
 // Fragment -> light(): view-ray transmission for crest_scatter() (Fresnel, foam covers it).
 varying float crest_transmission;
+// Fragment -> light(), for a surface seen from below (0 from above): rgb the transmittance
+// of the water between it and the camera, a the share of the surface's light from above
+// that reaches the camera through the surface (1 - Fresnel, foam covers it); and
+// underwater_inscatter the radiance the water between scatters toward the camera per unit
+// of irradiance at the surface (underwater_view()).
+varying vec4 underwater_view_transmission;
+varying vec3 underwater_inscatter;
+// Fragment -> light(): 1 for a surface seen from below.
+varying float seen_from_below;
 
 /*
  * How far the water at world XZ is drawn below the plane touching the sphere under
@@ -268,16 +285,41 @@ float atmosphere_light_azimuth_x(vec3 direction) {
 	return acos(clamp(cos_phi, -1.0, 1.0)) / PI;
 }
 
-/*
- * The haze lobe's Henyey-Greenstein phase toward direction (1/sr), averaged over directions
- * spreading by sigma radians per axis around it (a rough reflection's lobe). Spherical
- * convolution multiplies Legendre coefficients (g^l for Henyey-Greenstein); matching the
- * first, the spread's mean cosine exp(-sigma^2), gives a Henyey-Greenstein lobe again.
- */
-float atmosphere_lobe_phase(vec3 direction, float sigma) {
-	float g = sky_atmosphere_light.w * exp(-sigma * sigma);
-	float denominator = 1.0 + g * g - 2.0 * g * dot(direction, sky_atmosphere_light.xyz);
+/* The haze lobe's Henyey-Greenstein phase (1/sr) at cosine cos_theta from its light. */
+float atmosphere_lobe_hg(float cos_theta) {
+	float g = sky_atmosphere_light.w;
+	float denominator = 1.0 + g * g - 2.0 * g * cos_theta;
 	return (1.0 - g * g) / (4.0 * PI * denominator * sqrt(denominator));
+}
+
+/*
+ * The haze lobe's phase toward direction (1/sr), capped at its value cap_angle (rad) from
+ * the light. A rough reflection averages the sky over a lobe far wider than the haze's
+ * peak, which a few samples cannot resolve (each would reflect its own copy of the glow
+ * around a low sun, strips beside the real sun path); the capped phase is smooth at that
+ * scale, and the peak above the cap is reflected like a light (atmosphere_lobe_core()).
+ * cap_angle 0: the whole phase.
+ */
+float atmosphere_lobe_phase(vec3 direction, float cap_angle) {
+	return atmosphere_lobe_hg(min(dot(direction, sky_atmosphere_light.xyz), cos(cap_angle)));
+}
+
+/*
+ * The part of the haze lobe's phase integral (1 over the sphere) above its cap at cap_angle
+ * (atmosphere_lobe_phase()): its integral within cap_angle of the light,
+ * (1 - g^2) / 2g (1 / (1 - g) - 1 / sqrt(1 + g^2 - 2g cos)), less the cap's level over
+ * that cone. In-scatter per unit phase times it is the irradiance the peak brings.
+ */
+float atmosphere_lobe_core(float cap_angle) {
+	float g = sky_atmosphere_light.w;
+	if (g <= 1e-4 || cap_angle <= 0.0) {
+		return 0.0;
+	}
+	float cap_cos = cos(cap_angle);
+	float inside = (1.0 - g * g) / (2.0 * g) * (1.0 / (1.0 - g) - inversesqrt(1.0 + g * g - 2.0 * g * cap_cos));
+	// 1 - cos, without cancellation for small angles.
+	float s = sin(0.5 * cap_angle);
+	return max(inside - atmosphere_lobe_hg(cap_cos) * 4.0 * PI * s * s, 0.0);
 }
 
 /*
@@ -301,11 +343,11 @@ void atmosphere_sea_volumes(vec3 direction, float slice, out vec3 transmittance,
 	lobe = textureLod(sky_atmosphere_inscatter_lobe, uvw, 0.0).rgb;
 }
 
-/* atmosphere_sea_volumes() with the lobe's phase applied, blurred by sigma (atmosphere_lobe_phase()). */
-void atmosphere_sea_lookup(vec3 direction, float slice, float sigma, out vec3 transmittance, out vec3 inscatter) {
+/* atmosphere_sea_volumes() with the lobe's phase applied, capped at cap_angle (atmosphere_lobe_phase()). */
+void atmosphere_sea_lookup(vec3 direction, float slice, float cap_angle, out vec3 transmittance, out vec3 inscatter) {
 	vec3 lobe;
 	atmosphere_sea_volumes(direction, slice, transmittance, inscatter, lobe);
-	inscatter += lobe * atmosphere_lobe_phase(direction, sigma);
+	inscatter += lobe * atmosphere_lobe_phase(direction, cap_angle);
 }
 
 /*
@@ -517,37 +559,78 @@ vec3 sample_sky_gradient(vec3 direction) {
 }
 
 /*
- * The sky source's clouds seen in direction (rgb premultiplied radiance, a opacity),
- * blurred over the reflection lobe of GGX roughness (perceptual); none without clouds.
+ * Footprint of a rough reflection's lobe around a reflected direction, in radians:
+ * x its length along the plane of incidence (the elevation, for the water), y across it.
+ * Reflected directions spread with an angular deviation of about sigma = sqrt(2) alpha
+ * (twice the normal's, slope deviation alpha / sqrt(2)) in the plane of incidence, but a
+ * normal tilted across that plane turns the reflection by only twice the tilt times
+ * no_v: seen at a low angle, reflections stretch into long vertical streaks. A box filter
+ * as wide as sqrt(12) sigma (4.9 alpha) has the same deviation, so a mip of texels that
+ * wide matches it.
  */
-vec4 sample_clouds(vec3 direction, float roughness) {
+vec2 reflection_footprint(float roughness, float no_v) {
+	float length_along = 4.9 * roughness * roughness;
+	return vec2(length_along, length_along * max(no_v, 0.02));
+}
+
+/*
+ * A cubemap's directions world_basis * d averaged over a reflection footprint around
+ * direction (reflection_footprint(); along: unit vector of its long axis): reads spread
+ * along the long axis, each at the mip of the wider of the short axis and the read
+ * spacing (a texel at mip 0 is about 2 / face size radians). Directions below the horizon
+ * are mirrored up, as the reflection is. Explicit LOD: called from divergent control flow.
+ */
+vec4 sample_cubemap_footprint(samplerCube cubemap, mat3 world_basis, vec3 direction, vec3 along, vec2 footprint) {
+	float texel = 2.0 / float(textureSize(cubemap, 0).x);
+	int taps = footprint.x > texel ? clamp(int(ceil(footprint.x / max(footprint.y, 1e-6) - 0.5)), 1, REFLECTION_FOOTPRINT_TAPS) : 1;
+	float lod = log2(max(max(footprint.y, footprint.x / float(taps)) / texel, 1.0));
+	vec4 sum = vec4(0.0);
+	for (int t = 0; t < taps; ++t) {
+		vec3 tap = normalize(direction + along * (footprint.x * ((float(t) + 0.5) / float(taps) - 0.5)));
+		tap.y = abs(tap.y);
+		sum += textureLod(cubemap, world_basis * tap, lod);
+	}
+	return sum / float(taps);
+}
+
+/*
+ * The sky source's clouds seen in direction (rgb premultiplied radiance, a opacity),
+ * averaged over a reflection footprint (sample_cubemap_footprint()); none without clouds.
+ */
+vec4 sample_clouds(vec3 direction, vec3 along, vec2 footprint) {
 	if (!sky_clouds_enabled) {
 		return vec4(0.0);
 	}
-	// Reflected directions spread with an angular deviation of about sqrt(2) alpha
-	// (twice the normal's, slope deviation alpha / sqrt(2)). A box-filtered mip of
-	// texels 2^lod wide (about 2 / face size radians each at mip 0) has deviation
-	// 2^lod * texel / sqrt(12); matching the two gives the level.
-	float alpha = roughness * roughness;
-	float lod = log2(max(alpha * float(textureSize(sky_cloud_cubemap, 0).x) * 2.45, 1.0));
-	// Explicit LOD: called from divergent control flow.
-	return textureLod(sky_cloud_cubemap, direction, lod);
+	return sample_cubemap_footprint(sky_cloud_cubemap, mat3(1.0), direction, along, footprint);
 }
 
 /*
  * The sky source's stars seen in direction (pre-exposed radiance above the atmosphere),
- * blurred over the reflection lobe like the clouds (sample_clouds()); none below the
- * horizon, by day (too faint for the exposure to show) or without stars.
+ * averaged over a reflection footprint like the clouds; none below the horizon, by day
+ * (too faint for the exposure to show) or without stars.
  */
-vec3 sample_stars(vec3 direction, float roughness) {
+vec3 sample_stars(vec3 direction, vec3 along, vec2 footprint) {
 	float scale = sky_star_radiance_scale * scene_exposure;
 	// The brightest star spread over a texel is well under 1 cd/m2.
 	if (!sky_stars_enabled || scale < 1e-4 || direction.y <= 0.0) {
 		return vec3(0.0);
 	}
-	float alpha = roughness * roughness;
-	float lod = log2(max(alpha * float(textureSize(sky_star_cubemap, 0).x) * 2.45, 1.0));
-	return textureLod(sky_star_cubemap, sky_star_basis * direction, lod).rgb * scale;
+	return sample_cubemap_footprint(sky_star_cubemap, sky_star_basis, direction, along, footprint).rgb * scale;
+}
+
+/* Unit vector along the elevation at direction: the long axis of its reflection footprint. */
+vec3 elevation_axis(vec3 direction) {
+	return safe_normalize_vec3(vec3(0.0, 1.0, 0.0) - direction * direction.y, vec3(0.0, 0.0, 1.0));
+}
+
+/*
+ * The cap of the haze lobe's phase for a reflection of this roughness: the reach of the
+ * sky samples along the elevation (sample_rough_procedural_environment()), so the capped
+ * phase is smooth between them; 0 for a mirror, which reads the whole phase.
+ */
+float reflection_lobe_cap(float roughness) {
+	float sigma = 1.41421356 * roughness * roughness;
+	return sigma < 0.005 ? 0.0 : 1.41421356 * sigma;
 }
 
 /*
@@ -568,41 +651,41 @@ void sample_clear_sky(vec3 direction, out vec3 sky, out vec3 lobe) {
 /*
  * The sky reflected over a rough surface: the clear sky averaged over the reflection
  * lobe, whose directions spread with an angular deviation of about sigma = sqrt(2) alpha
- * per axis (as for the clouds, sample_clouds()), by the 4-point Gaussian cubature
- * (+-sqrt(2) sigma along the elevation and the azimuth, weights 1/4: exact for skies that
- * vary up to cubically across the lobe). Directions below the horizon are mirrored up, as
- * the reflection is. The haze lobe's phase around the light is far sharper than the
- * 4 points resolve (each would reflect its own copy of the glow around a low sun, strips
- * beside the real sun path): only its smooth in-scatter volume goes through the cubature,
- * and its phase is blurred analytically (atmosphere_lobe_phase()). The clouds and the
- * stars are prefiltered (cubemap mips) and read once; star_weight scales the stars (the
- * share the planar reflection does not bring).
+ * along the elevation and no_v times that across it (reflection_footprint()), by the
+ * 4-point Gaussian cubature (+-sqrt(2) deviations along each axis, weights 1/4: exact for
+ * skies that vary up to cubically across the lobe). Directions below the horizon are
+ * mirrored up, as the reflection is. The haze lobe's phase is capped at the cubature's
+ * reach (reflection_lobe_cap()); fragment() reflects the peak above it like a light. The
+ * clouds and the stars are prefiltered (cubemap mips) and read over the footprint;
+ * star_weight scales the stars (the share the planar reflection does not bring).
  */
-vec3 sample_rough_procedural_environment(vec3 direction, float roughness, float star_weight) {
+vec3 sample_rough_procedural_environment(vec3 direction, float roughness, float no_v, float star_weight) {
 	float rough = saturate(roughness);
 	float sigma = 1.41421356 * rough * rough;
+	float lobe_cap = reflection_lobe_cap(rough);
+	vec3 along = elevation_axis(direction);
+	vec2 footprint = reflection_footprint(rough, no_v);
 	vec3 sky = vec3(0.0);
-	vec3 lobe = vec3(0.0);
 	if (sigma < 0.005) {
+		vec3 lobe;
 		sample_clear_sky(direction, sky, lobe);
+		sky += lobe * atmosphere_lobe_phase(direction, lobe_cap);
 	} else {
-		vec3 elevation_axis = safe_normalize_vec3(vec3(0.0, 1.0, 0.0) - direction * direction.y, vec3(0.0, 0.0, 1.0));
-		vec3 azimuth_axis = cross(direction, elevation_axis);
-		float offset = tan(min(1.41421356 * sigma, 1.2));
+		vec3 azimuth_axis = cross(direction, along);
+		float offset_along = tan(min(1.41421356 * sigma, 1.2));
+		float offset_across = tan(min(1.41421356 * sigma * max(no_v, 0.02), 1.2));
 		for (int i = 0; i < 4; ++i) {
-			vec3 axis = i < 2 ? elevation_axis : azimuth_axis;
-			vec3 sample_direction = normalize(direction + axis * (i % 2 == 0 ? offset : -offset));
+			vec3 offset = i < 2 ? along * offset_along : azimuth_axis * offset_across;
+			vec3 sample_direction = normalize(direction + (i % 2 == 0 ? offset : -offset));
 			sample_direction.y = abs(sample_direction.y);
 			vec3 sample_sky;
 			vec3 sample_lobe;
 			sample_clear_sky(sample_direction, sample_sky, sample_lobe);
-			sky += sample_sky * 0.25;
-			lobe += sample_lobe * 0.25;
+			sky += (sample_sky + sample_lobe * atmosphere_lobe_phase(sample_direction, lobe_cap)) * 0.25;
 		}
 	}
-	sky += lobe * atmosphere_lobe_phase(direction, sigma);
 	// The stars lie beyond the atmosphere, dimmed by it along the whole ray.
-	vec3 stars = star_weight > 0.0 ? sample_stars(direction, rough) * star_weight : vec3(0.0);
+	vec3 stars = star_weight > 0.0 ? sample_stars(direction, along, footprint) * star_weight : vec3(0.0);
 	if (sky_atmosphere_enabled && stars != vec3(0.0)) {
 		vec3 transmittance_end;
 		vec3 inscatter_end;
@@ -611,7 +694,7 @@ vec3 sample_rough_procedural_environment(vec3 direction, float roughness, float 
 	}
 	sky += stars;
 	vec3 cloud_direction = direction;
-	vec4 cloud = sample_clouds(cloud_direction, rough);
+	vec4 cloud = sample_clouds(cloud_direction, along, footprint);
 	if (!sky_atmosphere_enabled) {
 		return sky * (1.0 - cloud.a) + cloud.rgb;
 	}
@@ -622,8 +705,32 @@ vec3 sample_rough_procedural_environment(vec3 direction, float roughness, float 
 	// them, the rest of the sky (sky less that air's in-scatter) behind.
 	vec3 transmittance_cloud;
 	vec3 inscatter_cloud;
-	atmosphere_sea_lookup(cloud_direction, 0.0, sigma, transmittance_cloud, inscatter_cloud);
+	atmosphere_sea_lookup(cloud_direction, 0.0, lobe_cap, transmittance_cloud, inscatter_cloud);
 	return inscatter_cloud + transmittance_cloud * cloud.rgb + (1.0 - cloud.a) * (sky - inscatter_cloud);
+}
+
+/*
+ * The peak of the haze's glow around the atmosphere's light above the cap of a reflection
+ * of this roughness (atmosphere_lobe_core()), as a light: its irradiance on a surface
+ * facing it (pre-exposed) and its direction, lifted onto the horizon while the light is
+ * below it. The clouds toward the light hide what lies behind them; the air in front of
+ * them still glows. None without an atmosphere.
+ */
+vec3 sky_glow_core(float roughness, out vec3 direction) {
+	vec3 light = sky_atmosphere_light.xyz;
+	direction = normalize(vec3(light.x, max(light.y, 0.0), light.z));
+	float core = sky_atmosphere_enabled ? atmosphere_lobe_core(reflection_lobe_cap(saturate(roughness))) : 0.0;
+	if (core <= 0.0) {
+		return vec3(0.0);
+	}
+	vec3 transmittance;
+	vec3 inscatter;
+	vec3 lobe_end;
+	vec3 lobe_cloud;
+	atmosphere_sea_volumes(direction, 1.0, transmittance, inscatter, lobe_end);
+	atmosphere_sea_volumes(direction, 0.0, transmittance, inscatter, lobe_cloud);
+	float cloud = sky_clouds_enabled ? textureLod(sky_cloud_cubemap, direction, 0.0).a : 0.0;
+	return mix(lobe_end, lobe_cloud, cloud) * core;
 }
 
 float ggx_distribution(float no_h, float roughness) {
@@ -940,16 +1047,68 @@ float caustic_light(vec3 hit, vec3 hit_normal, vec3 to_sun, vec3 surface, vec2 r
 }
 
 /*
+ * Radiance of optically deep water just below the surface per unit of the irradiance there
+ * (rrs, 1/sr): 0.0949 u + 0.0794 u^2 with u = bb / (a + bb) (Gordon et al. 1988).
+ */
+vec3 water_subsurface_reflectance() {
+	vec3 backscattering = water_backscattering();
+	vec3 u = backscattering / (water_absorption + backscattering);
+	return (0.0949 + 0.0794 * u) * u;
+}
+
+/*
  * Albedo of optically deep water (radiance = albedo * irradiance / PI), from its optical
  * properties: the remote-sensing reflectance just below the surface, rrs = 0.0949 u + 0.0794 u^2
  * with u = bb / (a + bb) (Gordon et al. 1988), above it Rrs = 0.52 rrs / (1 - 1.7 rrs) (Lee et
  * al. 1998, for a view from above, surface transmission included); the albedo is PI Rrs.
  */
 vec3 water_body_albedo() {
-	vec3 backscattering = water_backscattering();
-	vec3 u = backscattering / (water_absorption + backscattering);
-	vec3 subsurface = (0.0949 + 0.0794 * u) * u;
+	vec3 subsurface = water_subsurface_reflectance();
 	return PI * 0.52 * subsurface / (1.0 - 1.7 * subsurface);
+}
+
+/*
+ * Unpolarized Fresnel reflectance for light arriving at cosine cos_i to the normal in a
+ * medium of eta times the other side's index; 1 past the critical angle (total internal
+ * reflection).
+ */
+float fresnel_dielectric(float cos_i, float eta) {
+	float sin2_t = eta * eta * (1.0 - cos_i * cos_i);
+	if (sin2_t >= 1.0) {
+		return 1.0;
+	}
+	float cos_t = sqrt(1.0 - sin2_t);
+	float rs = (eta * cos_i - cos_t) / (eta * cos_i + cos_t);
+	float rp = (cos_i - eta * cos_t) / (cos_i + eta * cos_t);
+	return 0.5 * (rs * rs + rp * rp);
+}
+
+/*
+ * Microfacet transmission of the water surface (Walter et al. 2007, GGX), without N.L: light
+ * from to_light above the surface (normal points up into the air) refracted toward to_view
+ * below it, including the n^2 rise in radiance as the light enters the denser water.
+ */
+float water_transmission_btdf(vec3 normal, vec3 to_view, vec3 to_light, float roughness) {
+	float i_n = dot(to_light, normal);
+	float o_n = dot(to_view, normal);
+	if (i_n <= 0.0 || o_n >= 0.0) {
+		return 0.0;
+	}
+	vec3 half_vector = -normalize(to_light + WATER_IOR * to_view);
+	if (dot(half_vector, normal) < 0.0) {
+		half_vector = -half_vector;
+	}
+	float i_h = dot(to_light, half_vector);
+	float o_h = dot(to_view, half_vector);
+	if (i_h <= 0.0 || o_h >= 0.0) {
+		return 0.0;
+	}
+	float denominator = i_h + WATER_IOR * o_h;
+	float distribution = ggx_distribution(saturate(dot(normal, half_vector)), roughness);
+	// smith_ggx_visibility() is G / (4 |i.n| |o.n|).
+	float visibility = smith_ggx_visibility(-o_n, i_n, roughness);
+	float transmission = 1.0 - fresnel_schlick(i_h, sky_reflection_f0);
+	return i_h * -o_h * WATER_IOR * WATER_IOR * transmission * distribution * 4.0 * visibility / max(denominator * denominator, 1e-6);
 }
 
 /* Henyey-Greenstein phase function (1/sr). */
@@ -1060,7 +1219,7 @@ vec3 sky_point_glints(vec3 normal, vec3 view, float roughness) {
 			atmosphere_sea_lookup(direction, 1.0, 0.0, transmittance, inscatter);
 			irradiance *= transmittance;
 		}
-		irradiance *= 1.0 - sample_clouds(direction, 0.0).a;
+		irradiance *= 1.0 - sample_clouds(direction, vec3(0.0, 1.0, 0.0), vec2(0.0)).a;
 		float no_l = saturate(dot(normal, direction));
 		glints += irradiance * (water_specular_brdf(normal, view, direction, roughness) * no_l);
 	}
@@ -1080,6 +1239,17 @@ vec3 planar_reflection_project(vec4 point) {
 	uv.y = 1.0 - uv.y;
 	float inside = all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0))) ? 1.0 : 0.0;
 	return vec3(uv, inside);
+}
+
+/*
+ * Reads of a 2D image over a footprint whose long axis is major_texels long and whose
+ * short width is minor_texels (mip-0 texels): x the number of reads spread along the long
+ * axis, y the mip each is read at (the wider of the short width and the read spacing).
+ * Read t lies at ((t + 0.5) / x - 0.5) of the long axis from the centre.
+ */
+vec2 image_footprint_reads(float major_texels, float minor_texels) {
+	int taps = major_texels > 1.0 ? clamp(int(ceil(major_texels / max(minor_texels, 1e-6) - 0.5)), 1, REFLECTION_FOOTPRINT_TAPS) : 1;
+	return vec2(float(taps), log2(max(max(minor_texels, major_texels / float(taps)), 1.0)));
 }
 
 void fragment() {
@@ -1224,6 +1394,8 @@ void fragment() {
 	vec3 drawn_position = water_world_position - vec3(0.0, earth_curvature_drop(water_world_position.xz, CAMERA_POSITION_WORLD), 0.0);
 	vec3 view_direction_world = safe_normalize_vec3(CAMERA_POSITION_WORLD - drawn_position, vec3(0.0, 0.0, 1.0));
 	vec3 sun_dir = safe_normalize_vec3(sky_sun_direction, vec3(0.0, 0.2, -1.0));
+	// The camera is under the surface (the mesh's back face): Snell's window, underwater_view.
+	bool from_below = !FRONT_FACING;
 	vec3 reflection_direction = reflect(-view_direction_world, world_normal);
 	// A ray reflected below the horizon hits the next wave and goes on upward;
 	// mirroring it up stands in for that second bounce (the sky gradient's
@@ -1258,7 +1430,7 @@ void fragment() {
 	float caustics = 1.0;
 	vec3 up_view = (VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz;
 	vec4 straight_point = scene_view_position(SCREEN_UV, INV_PROJECTION_MATRIX);
-	if (straight_point.w > 0.0) {
+	if (straight_point.w > 0.0 && !from_below) {
 		float straight_below = max(dot(VERTEX - straight_point.xyz, up_view), 0.0);
 		// Skip the search where even the straight-through scene's depth alone leaves no light.
 		vec3 best_transmittance = underwater_transmittance(straight_below, straight_below);
@@ -1310,7 +1482,7 @@ void fragment() {
 	// the screen-space ray finds nothing, or when disabled).
 	vec4 planar_sample = vec4(0.0);
 	float planar_coverage = 0.0;
-	if (planar_reflection_enabled && planar_reflection_strength > 0.0) {
+	if (!from_below && planar_reflection_enabled && planar_reflection_strength > 0.0) {
 		// Find what this pixel's reflected ray (about its own wave normal) hits. The
 		// mirrored camera sees every surface a ray from the water plane can reach,
 		// and the capture stores each texel's surface distance. Start with the ray's
@@ -1331,36 +1503,65 @@ void fragment() {
 			ray_end = vec4(water_world_position + reflection_direction * hit_distance, 1.0);
 			reflection_uv = planar_reflection_project(ray_end);
 		}
-		// Blurred over the reflection lobe like the clouds (sample_clouds): the
-		// reflected rays spread by about sqrt(2) alpha, which the mirrored camera sees
-		// scaled by (distance from the water) / (distance from the mirrored camera).
-		float lobe_scale = ray_end.w > 0.0 ? hit_distance / max(distance(ray_end.xyz, planar_reflection_camera_position), 0.001) : 1.0;
-		float alpha = effective_reflection_roughness * effective_reflection_roughness;
-		float reflection_lod = log2(max(alpha * 4.9 * lobe_scale / planar_reflection_texel_angle, 1.0));
-		planar_sample = textureLod(planar_reflection_texture, reflection_uv.xy, reflection_lod);
+		// Averaged over the reflection's footprint (reflection_footprint()), as the
+		// mirrored camera sees it: where rays turned along and across the plane of
+		// incidence by a small angle meet the same distance.
+		const float FOOTPRINT_PROBE = 0.01;
+		vec3 along = elevation_axis(reflection_direction);
+		vec3 across = cross(reflection_direction, along);
+		vec4 probe_along = ray_end.w > 0.0 ? vec4(water_world_position + normalize(reflection_direction + along * FOOTPRINT_PROBE) * hit_distance, 1.0) : vec4(normalize(reflection_direction + along * FOOTPRINT_PROBE), 0.0);
+		vec4 probe_across = ray_end.w > 0.0 ? vec4(water_world_position + normalize(reflection_direction + across * FOOTPRINT_PROBE) * hit_distance, 1.0) : vec4(normalize(reflection_direction + across * FOOTPRINT_PROBE), 0.0);
+		vec2 footprint = reflection_footprint(effective_reflection_roughness, no_v);
+		vec2 major_uv = (planar_reflection_project(probe_along).xy - reflection_uv.xy) / FOOTPRINT_PROBE * footprint.x;
+		float minor_texels = length((planar_reflection_project(probe_across).xy - reflection_uv.xy) / FOOTPRINT_PROBE * footprint.y * vec2(textureSize(planar_reflection_texture, 0)));
+		vec2 reads = image_footprint_reads(length(major_uv * vec2(textureSize(planar_reflection_texture, 0))), minor_texels);
+		for (int t = 0; t < int(reads.x); ++t) {
+			// Explicit LOD: this follows the hull discard.
+			planar_sample += textureLod(planar_reflection_texture, reflection_uv.xy + major_uv * ((float(t) + 0.5) / reads.x - 0.5), reads.y);
+		}
+		planar_sample /= reads.x;
 		planar_coverage = planar_reflection_strength * reflection_uv.z;
-	} else if (screen_space_reflections_enabled) {
+	} else if (!from_below && screen_space_reflections_enabled) {
 		vec3 reflection_view = (VIEW_MATRIX * vec4(reflection_direction, 0.0)).xyz;
 		vec3 hit = find_reflected_scene(VERTEX, reflection_view, PROJECTION_MATRIX, INV_PROJECTION_MATRIX);
 		if (hit.z > 0.0) {
-			// Blurred over the reflection lobe like the planar reflection: the rays spread by
-			// about sqrt(2) alpha over the distance to what they meet.
+			// Averaged over the reflection's footprint like the planar reflection: rays
+			// turned along and across the plane of incidence, at the hit's distance.
+			const float FOOTPRINT_PROBE = 0.01;
 			vec4 hit_position = scene_view_position(hit.xy, INV_PROJECTION_MATRIX);
 			float hit_distance = distance(hit_position.xyz, VERTEX);
-			float meters_per_pixel = 2.0 * max(-hit_position.z, 0.001) / (abs(PROJECTION_MATRIX[1][1]) * VIEWPORT_SIZE.y);
-			float alpha = effective_reflection_roughness * effective_reflection_roughness;
-			float reflection_lod = log2(max(2.0 * 1.41421356 * alpha * hit_distance / meters_per_pixel, 1.0));
-			// Explicit LOD: this follows the hull discard. Opaque: coverage is the hit's.
-			planar_sample = vec4(textureLod(scene_color, hit.xy, reflection_lod).rgb, 1.0);
+			vec3 along = (VIEW_MATRIX * vec4(elevation_axis(reflection_direction), 0.0)).xyz;
+			vec3 across = cross(reflection_view, along);
+			vec2 footprint = reflection_footprint(effective_reflection_roughness, no_v);
+			vec2 major_uv = (screen_project(VERTEX + normalize(reflection_view + along * FOOTPRINT_PROBE) * hit_distance, PROJECTION_MATRIX) - hit.xy) / FOOTPRINT_PROBE * footprint.x;
+			float minor_texels = length((screen_project(VERTEX + normalize(reflection_view + across * FOOTPRINT_PROBE) * hit_distance, PROJECTION_MATRIX) - hit.xy) / FOOTPRINT_PROBE * footprint.y * VIEWPORT_SIZE);
+			vec2 reads = image_footprint_reads(length(major_uv * VIEWPORT_SIZE), minor_texels);
+			vec3 reflected_scene = vec3(0.0);
+			for (int t = 0; t < int(reads.x); ++t) {
+				// Explicit LOD: this follows the hull discard.
+				reflected_scene += textureLod(scene_color, hit.xy + major_uv * ((float(t) + 0.5) / reads.x - 0.5), reads.y).rgb;
+			}
+			// Opaque: coverage is the hit's.
+			planar_sample = vec4(reflected_scene / reads.x, 1.0);
 			planar_coverage = hit.z;
 		}
 	}
 	// Seen from the bottom of the atmosphere; the camera's own path to the water is
 	// hazed afterwards, with the rest of the scene (the sky source's aerial perspective).
-	reflected_sky_color = sample_rough_procedural_environment(reflection_direction, effective_reflection_roughness, 1.0 - planar_coverage);
+	reflected_sky_color = sample_rough_procedural_environment(reflection_direction, effective_reflection_roughness, no_v, 1.0 - planar_coverage);
 	// Reflected scene geometry hides the sky behind it (alpha: geometry coverage).
-	vec3 reflected_color = reflected_sky_color * (1.0 - planar_coverage * planar_sample.a) + planar_sample.rgb * planar_coverage;
+	float sky_visible = 1.0 - planar_coverage * planar_sample.a;
+	vec3 reflected_color = reflected_sky_color * sky_visible + planar_sample.rgb * planar_coverage;
 	vec3 reflection_radiance = reflected_color * sky_reflection_amount;
+	// The peak of the haze's glow, reflected like a light (sky_glow_core()): the specular
+	// BRDF gives its reflection the shape the sun's own has.
+	vec3 glow_direction;
+	vec3 glow_irradiance = sky_glow_core(effective_reflection_roughness, glow_direction);
+	if (glow_irradiance != vec3(0.0)) {
+		float glow_no_l = saturate(dot(world_normal, glow_direction));
+		reflection_radiance += glow_irradiance * (water_specular_brdf(world_normal, view_direction_world, glow_direction, effective_reflection_roughness) * glow_no_l
+				* sky_reflection_strength * clear_water_mask * sky_visible);
+	}
 
 	if (water_debug_view > 0) {
 		vec3 debug_color = vec3(0.0);
@@ -1411,6 +1612,48 @@ void fragment() {
 		FOG = vec4(0.0);
 		light_specular_scale = 0.0;
 		crest_transmission = 0.0;
+		underwater_view_transmission = vec4(0.0);
+		underwater_inscatter = vec3(0.0);
+		seen_from_below = 0.0;
+	} else if (from_below) {
+		// Snell's window: the sky's light crosses the surface within the critical angle
+		// (48.6 degrees) of the normal, squeezed from the whole sky into that cone, so its
+		// radiance rises by n^2; past it the surface reflects the water below totally.
+		// The water between the camera and the surface dims all of it and scatters its
+		// own light toward the camera. The water's light, looking up or along, is about
+		// the deep water's (water_subsurface_reflectance()) under the light at the
+		// surface, which the downwelling attenuation dims over the depth the path crosses.
+		vec3 toward_surface = -view_direction_world;
+		float inside_fresnel = fresnel_dielectric(saturate(dot(toward_surface, world_normal)), WATER_IOR);
+		vec3 sky_through = vec3(0.0);
+		if (inside_fresnel < 1.0) {
+			vec3 to_sky = refract(toward_surface, -world_normal, WATER_IOR);
+			to_sky.y = abs(to_sky.y);
+			sky_through = sample_rough_procedural_environment(normalize(to_sky), effective_reflection_roughness, 1.0, 1.0) * (WATER_IOR * WATER_IOR);
+		}
+		float path = distance(CAMERA_POSITION_WORLD, drawn_position);
+		vec3 path_transmittance = exp(-(water_absorption + water_scattering + WATER_MOLECULAR_SCATTERING) * path);
+		vec3 downwelling_attenuation = (water_absorption + water_backscattering()) / WATER_DOWNWELLING_MEAN_COSINE;
+		// Mean of exp(-K_d depth) over the path, its depth going from the surface to the camera's.
+		vec3 depth_attenuation = downwelling_attenuation * max(water_level - CAMERA_POSITION_WORLD.y, 0.0);
+		vec3 mean_light = mix(vec3(1.0) - 0.5 * depth_attenuation, (vec3(1.0) - exp(-depth_attenuation)) / max(depth_attenuation, vec3(1e-4)), step(vec3(1e-4), depth_attenuation));
+		vec3 water_light = water_subsurface_reflectance() * mean_light;
+		float through = (1.0 - inside_fresnel) * (1.0 - foam_factor);
+		// The light the water gets from the sky: pi times its mean radiance, the clouds' included.
+		vec3 sky_irradiance = PI * sample_rough_procedural_environment(vec3(0.0, 1.0, 0.0), 1.0, 1.0, 0.0);
+		vec3 water_reflected = inside_fresnel * (1.0 - foam_factor) * path_transmittance + (vec3(1.0) - path_transmittance);
+		ALBEDO = foam_color.rgb * mix(0.75, 1.0, detail) * foam_factor * path_transmittance;
+		METALLIC = 0.0;
+		ROUGHNESS = mix(effective_reflection_roughness, foam_roughness, foam_factor);
+		SPECULAR = 0.0;
+		EMISSION = (sky_through * through * path_transmittance + sky_irradiance * water_light * water_reflected) / scene_exposure;
+		// Underwater the air's haze does not apply.
+		FOG = vec4(0.0);
+		light_specular_scale = 0.0;
+		crest_transmission = 0.0;
+		underwater_view_transmission = vec4(path_transmittance, through * sun_specular_strength);
+		underwater_inscatter = water_light * water_reflected;
+		seen_from_below = 1.0;
 	} else {
 		ALBEDO = base_albedo;
 		METALLIC = 0.0;
@@ -1422,6 +1665,9 @@ void fragment() {
 		FOG = aerial_perspective_enabled ? aerial_perspective_fog(drawn_position) : vec4(0.0);
 		light_specular_scale = sun_specular_strength * clear_water_mask;
 		crest_transmission = (1.0 - sky_fresnel) * (1.0 - foam_factor);
+		underwater_view_transmission = vec4(0.0);
+		underwater_inscatter = vec3(0.0);
+		seen_from_below = 0.0;
 #ifndef WATER_NO_SKY_POINTS
 		if (sky_point_count > 0) {
 			EMISSION += sky_point_glints(world_normal, view_direction_world, effective_reflection_roughness) * light_specular_scale / scene_exposure;
@@ -1436,28 +1682,42 @@ void fragment() {
  */
 void light() {
 	float no_l = dot(NORMAL, LIGHT);
-	// Water body: light refracted into the water and scattered back up. It depends
-	// on how high the light is, not on the wave facet; Lambert on the facets made
-	// the water look like shaded plastic.
 	vec3 up = (VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz;
-	float body_light = max(dot(up, LIGHT), 0.0);
-	// Foam: a layer of bubbles that scatters light through its volume, so facets
-	// turned away from the light still get some (wrapped diffuse), and light from
-	// behind shines through toward the viewer.
-	float foam_light = max(no_l + FOAM_WRAP, 0.0) / (1.0 + FOAM_WRAP)
-		+ FOAM_TRANSMISSION * pow(max(dot(-VIEW, LIGHT), 0.0), FOAM_TRANSMISSION_POWER);
-	DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * mix(body_light, foam_light, foam_factor) / PI;
-	// Light that crossed a wave crest and scatters toward the eye. Not scaled by albedo.
-	if (crest_transmission > 0.0) {
-		vec3 world_normal = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
-		vec3 world_view = (INV_VIEW_MATRIX * vec4(VIEW, 0.0)).xyz;
-		vec3 world_light = (INV_VIEW_MATRIX * vec4(LIGHT, 0.0)).xyz;
-		float light_path;
-		float phase;
-		vec3 crest = crest_scatter(world_normal, world_view, world_light, UV, water_world_position.y, light_path, phase);
-		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION / PI * crest * crest_transmission;
-	}
-	if (no_l > 0.0) {
-		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * (no_l / PI) * water_specular_brdf(NORMAL, VIEW, LIGHT, ROUGHNESS) * light_specular_scale;
+	if (seen_from_below > 0.5) {
+		// Seen from below (fragment()): foam lit through from above, the light scattered by
+		// the water between (underwater_inscatter, per unit of the light at the surface) and
+		// the light seen through the surface, dimmed by that water.
+		float foam_light = max(no_l + FOAM_WRAP, 0.0) / (1.0 + FOAM_WRAP)
+			+ FOAM_TRANSMISSION * pow(max(dot(-VIEW, LIGHT), 0.0), FOAM_TRANSMISSION_POWER);
+		DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * foam_light / PI;
+		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * max(dot(up, LIGHT), 0.0) * underwater_inscatter;
+		if (no_l > 0.0) {
+			SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * (no_l / PI) * water_transmission_btdf(NORMAL, VIEW, LIGHT, ROUGHNESS)
+					* underwater_view_transmission.rgb * underwater_view_transmission.a;
+		}
+	} else {
+		// Water body: light refracted into the water and scattered back up. It depends
+		// on how high the light is, not on the wave facet; Lambert on the facets made
+		// the water look like shaded plastic.
+		float body_light = max(dot(up, LIGHT), 0.0);
+		// Foam: a layer of bubbles that scatters light through its volume, so facets
+		// turned away from the light still get some (wrapped diffuse), and light from
+		// behind shines through toward the viewer.
+		float foam_light = max(no_l + FOAM_WRAP, 0.0) / (1.0 + FOAM_WRAP)
+			+ FOAM_TRANSMISSION * pow(max(dot(-VIEW, LIGHT), 0.0), FOAM_TRANSMISSION_POWER);
+		DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * mix(body_light, foam_light, foam_factor) / PI;
+		// Light that crossed a wave crest and scatters toward the eye. Not scaled by albedo.
+		if (crest_transmission > 0.0) {
+			vec3 world_normal = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
+			vec3 world_view = (INV_VIEW_MATRIX * vec4(VIEW, 0.0)).xyz;
+			vec3 world_light = (INV_VIEW_MATRIX * vec4(LIGHT, 0.0)).xyz;
+			float light_path;
+			float phase;
+			vec3 crest = crest_scatter(world_normal, world_view, world_light, UV, water_world_position.y, light_path, phase);
+			SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION / PI * crest * crest_transmission;
+		}
+		if (no_l > 0.0) {
+			SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * (no_l / PI) * water_specular_brdf(NORMAL, VIEW, LIGHT, ROUGHNESS) * light_specular_scale;
+		}
 	}
 }

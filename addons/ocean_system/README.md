@@ -62,7 +62,7 @@ The sea lies at `water_level`. The node's own transform is ignored.
 | Group | Contents |
 | --- | --- |
 | `water_level` | Height of the still water. |
-| Waves | `spectrum`: wind (used without a wind source), `fetch_length`, `water_depth`, `swell`, `spread`, `detail`, `displacement_scale` (1 = physical height; the demo uses 2), and how fast the sea follows changes. Save one as a `.tres` to reuse a sea state. `cascades` (at most 8): `tile_length`, plus foam (`whitecap`, `foam_generation`, `foam_lifetime`). Use tile lengths that don't divide each other. Retune `whitecap` after changing `displacement_scale`. |
+| Waves | `spectrum`: wind (used without a wind source), `fetch_length` (the sea stops growing once fully developed), `water_depth`, `swell`, `spread`, `detail`, `displacement_scale` (1 = physical height; the demo uses 2), and how fast the sea follows changes. Save one as a `.tres` to reuse a sea state. `cascades` (at most 8): `tile_length`, plus foam (`whitecap`, `foam_generation`, `foam_lifetime`). Use tile lengths that don't divide each other, the largest at least 1.5 times the peak wavelength (the ocean warns otherwise). Retune `whitecap` after changing `displacement_scale`. |
 | Water | `water_absorption`, `water_scattering`, `water_scattering_anisotropy`: the only source of the water's colour. |
 | Surface | `clear_roughness`, `short_wave_slope_scale` (wind ripples too small to simulate), `normal_scale` (1 = physical slopes). |
 | Foam | `foam_color`, `foam_intensity`, `foam_roughness`, the foam pattern texture and its tile size. |

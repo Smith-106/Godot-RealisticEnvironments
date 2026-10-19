@@ -163,7 +163,7 @@ func _notification(what: int) -> void:
 
 func _render_callback(_callback_type: int, render_data: RenderData) -> void:
 	_params_mutex.lock()
-	var is_active := active and cloud_resources.size() == 5 and view_textures.size() == 3
+	var is_active := active and cloud_resources.size() == 6 and view_textures.size() == 3
 	var resources := cloud_resources.duplicate()
 	var volumes := view_textures.duplicate()
 	var observer := observer_position
@@ -218,6 +218,7 @@ func _render_callback(_callback_type: int, render_data: RenderData) -> void:
 			RenderingContext.sampled_uniform(7, _nearest_clamp, depth),
 			RenderingContext.image_uniform(8, trace_color),
 			RenderingContext.image_uniform(9, trace_distance),
+			RenderingContext.sampled_uniform(10, _linear_clamp, resources[5]),
 		])
 		var reconstruct_pass : Array = _passes[&"reconstruct"][version]
 		var reconstruct_set := UniformSetCacheRD.get_cache(reconstruct_pass[0], 0, [

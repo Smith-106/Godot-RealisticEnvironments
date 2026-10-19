@@ -225,7 +225,8 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `.godot/imported/<name>-*` of every shader using it (touching is not
   enough). `ocean_sampling.glslinc` → `surface_query.glsl`,
   `iwave_pressure.glsl`; `iwave_common.glslinc` → every `iwave_*.glsl`;
-  `atmosphere_common.glslinc` → `atmosphere_*.glsl`, `aerial_perspective.glsl`;
+  `atmosphere_common.glslinc` → `atmosphere_*.glsl`, `aerial_perspective.glsl`,
+  `cloud_raymarch.glsl`, `cloud_trace.glsl`;
   `cloud_noise.glslinc` → `cloud_noise_bake.glsl`, `cloud_weather.glsl`;
   `cloud_common.glslinc` → `cloud_raymarch.glsl`, `cloud_trace.glsl`;
   `cloud_screen_common.glslinc` → `cloud_trace.glsl`, `cloud_reconstruct.glsl`,

@@ -30,9 +30,11 @@
  * degrees of the sun behind thin cloud, where the glow comes out up to 4x too bright (the
  * peak's small deflections spread it there).
  *
- * Light: the key light as it reaches the cloud layer (SkySystem dims it by the
- * atmosphere), and the sky's light at the layer from above and below
- * (AtmosphereRenderer.sky_ambient_buffer). Output, as seen at the cloud: rgb in-scattered
+ * Light: the key light above the atmosphere, dimmed down to each sample by the
+ * atmosphere along the light's path there (the transmittance LUT, with the planet's
+ * shadow): far clouds toward a low sun see it higher and whiter than those away from it,
+ * and stay lit after the observer's sunset. Plus the sky's light at the layer from above
+ * and below (AtmosphereRenderer.sky_ambient_buffer). Output, as seen at the cloud: rgb in-scattered
  * radiance (premultiplied), a opacity; the atmosphere between the observer and the
  * clouds is left to the consumers.
  */
@@ -52,12 +54,12 @@ layout(set = 0, binding = 2) uniform sampler3D detail_noise;
 layout(set = 0, binding = 3) uniform sampler2D weather_map;
 // CloudRenderer._pack_params().
 layout(set = 0, binding = 4, std430) restrict readonly buffer CloudParams {
-	vec4 layer;           // x base altitude, y top altitude (m above the sea), z max distance, w unused
+	vec4 layer;           // x base altitude, y top altitude (m above the sea), z max distance, w the atmosphere's top altitude (m)
 	vec4 weather_area;    // xy map centre (world XZ), z map extent (m), w extinction at density 1 (1/m)
 	vec4 motion;          // xy wind offset (world XZ, m), z evolution time, w sky light scale
 	vec4 scales;          // x shape tile (m), y detail tile (m), z detail erosion, w scattering albedo
 	vec4 light_direction; // xyz unit vector toward the key light (sun or moon)
-	vec4 light_color;     // rgb key light at the cloud layer: irradiance / pi (the light's energy)
+	vec4 light_color;     // rgb key light above the atmosphere: irradiance / pi (the light's energy)
 	vec4 march;           // x view steps, y light steps, z longest light march (m), w phase g
 } params;
 // AtmosphereRenderer.sky_ambient_buffer (atmosphere_ambient.glsl).
@@ -65,7 +67,12 @@ layout(set = 0, binding = 5, std430) restrict readonly buffer SkyAmbient {
 	vec4 above; // rgb mean radiance of the sky above the layer
 	vec4 below; // rgb mean radiance of the sky and sea below it
 	vec4 irradiance; // unused here
+	vec4 cloud_light; // unused here
 } sky_ambient;
+// AtmosphereRenderer's transmittance LUT. The includer defines CLOUD_TRANSMITTANCE_BINDING
+// and includes atmosphere_common.glslinc first (the importer expands only the shader's own
+// includes, not nested ones).
+layout(set = 0, binding = CLOUD_TRANSMITTANCE_BINDING) uniform sampler2D transmittance_lut;
 
 float cloud_remap(float value, float old_min, float old_max, float new_min, float new_max) {
 	return new_min + (value - old_min) / (old_max - old_min) * (new_max - new_min);
@@ -333,13 +340,14 @@ vec4 cloud_march(vec2 origin_xz, float h, vec3 direction, float t_limit, float j
 			float cloud_top = params.layer.x + (params.layer.y - params.layer.x) * mix(0.22, 1.0, weather.g);
 			vec2 column = cloud_column_optical_depths(position, altitude, cloud_top, weather);
 
-			// The planet's shadow: clouds stay lit for a while after sunset.
+			// The light through the atmosphere down to the sample, at its height there: the
+			// planet curves under the ray. Its shadow edge is softened over about the sun's
+			// disk; clouds stay lit for a while after sunset.
 			vec3 local_up = normalize(vec3(direction.x * t, CLOUD_PLANET_RADIUS + h + direction.y * t, direction.z * t));
-			float sample_radius = CLOUD_PLANET_RADIUS + altitude;
-			float horizon_mu = -sqrt(max(altitude * (2.0 * CLOUD_PLANET_RADIUS + altitude), 0.0)) / sample_radius;
-			float light_visibility = smoothstep(horizon_mu - 0.01, horizon_mu + 0.01, dot(local_up, light_direction));
-
-			vec3 sun = light_flux * light_visibility;
+			float mu_light = dot(local_up, light_direction);
+			float horizon_mu = atmosphere_horizon_mu(altitude);
+			float light_visibility = smoothstep(horizon_mu - 0.01, horizon_mu + 0.01, mu_light);
+			vec3 sun = light_flux * light_visibility * atmosphere_light_transmittance(transmittance_lut, altitude, max(mu_light, horizon_mu), params.layer.w);
 			// Single scattering, per unit of true extinction.
 			float beam = exp(-light_depth);
 			float beam_transport = exp(-light_depth * transport_share);

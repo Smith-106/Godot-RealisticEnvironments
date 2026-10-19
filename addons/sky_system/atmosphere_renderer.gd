@@ -36,8 +36,8 @@ const MAX_DISTANCE := 100000.0
 const AIR_TOP_ALTITUDE := 100000.0
 ## The atmosphere reaches at least this many haze scale heights up.
 const HAZE_TOP_SCALE_HEIGHTS := 12.0
-## Bytes of a sky light buffer: three vec4s (atmosphere_ambient.glsl).
-const SKY_LIGHT_SIZE := 48
+## Bytes of a sky light buffer: four vec4s (atmosphere_ambient.glsl).
+const SKY_LIGHT_SIZE := 64
 
 ## Camera view volume (sampled by the sky, starfield, aerial perspective and transparent
 ## materials): rgb transmittance, rgb in-scatter but the lobe, rgb lobe in-scatter per
@@ -55,8 +55,11 @@ var sea_inscatter_lobe := Texture3DRD.new()
 ## at the cloud layer (cloud_ambient_altitude), clear sky: the clouds' ambient light;
 var sky_ambient_buffer : RID
 ## at the camera, through the clouds around it (above or below): the sky's share of the
-## scene's light meter (read back by SkySystem).
+## scene's light meter, and the share of the key and secondary lights the clouds let
+## through to the camera and to the sea below it (read back by SkySystem).
 var camera_sky_light_buffer : RID
+## The transmittance LUT (atmosphere_common.glslinc): the clouds light themselves with it.
+var transmittance_lut : RID
 
 ## Haze (CloudPreset haze_*): extinction at sea level (1/m), scale height (m) and its
 ## forward lobe's Henyey-Greenstein g.
@@ -107,7 +110,11 @@ func _init(device : RenderingDevice) -> void:
 	_context = RenderingContext.new(device)
 	_linear_clamp = _context.create_sampler(RenderingContext.linear_sampler_state(RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE, true))
 	var storage_usage := RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_STORAGE_BIT
-	_transmittance_rid = _create_texture(RenderingDevice.TEXTURE_TYPE_2D, Vector3i(TRANSMITTANCE_SIZE.x, TRANSMITTANCE_SIZE.y, 1), storage_usage)
+	_transmittance_rid = _create_texture(RenderingDevice.TEXTURE_TYPE_2D, Vector3i(TRANSMITTANCE_SIZE.x, TRANSMITTANCE_SIZE.y, 1), storage_usage | RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT)
+	transmittance_lut = _transmittance_rid
+	# The clouds render before the atmosphere each frame, so on the first one they read the
+	# LUT before it is built: clear air until then, never undefined memory in their history.
+	device.texture_clear(_transmittance_rid, Color(1.0, 1.0, 1.0, 1.0), 0, 1, 0, 1)
 	_multiple_scattering_rid = _create_texture(RenderingDevice.TEXTURE_TYPE_2D, Vector3i(MULTIPLE_SCATTERING_SIZE.x, MULTIPLE_SCATTERING_SIZE.y, 1), storage_usage)
 	for i in 3:
 		_view_rids.push_back(_create_texture(RenderingDevice.TEXTURE_TYPE_3D, VIEW_SIZE, storage_usage))
@@ -218,7 +225,7 @@ func render(camera_altitude : float, sea_clouds : RID, camera_clouds : RID, expo
 		_device.compute_list_dispatch(compute_list, ceili(VIEW_SIZE.x / 8.0), ceili(VIEW_SIZE.y / 8.0), 1)
 	_device.compute_list_add_barrier(compute_list)
 
-	for light in [[ambient_altitude, _cloud_layer_rids, sky_ambient_buffer, 0.0, _no_cloud_cubemap], [get_observer_altitude(camera_altitude), _view_rids, camera_sky_light_buffer, 1.0, camera_view_clouds]]:
+	for light in [[ambient_altitude, _cloud_layer_rids, sky_ambient_buffer, 0.0, _no_cloud_cubemap, _no_cloud_cubemap], [get_observer_altitude(camera_altitude), _view_rids, camera_sky_light_buffer, 1.0, camera_view_clouds, clouds]]:
 		_device.compute_list_bind_compute_pipeline(compute_list, _ambient_pipeline)
 		var volumes : Array[RID] = light[1]
 		var ambient_set := UniformSetCacheRD.get_cache(_ambient_shader, 0, [
@@ -226,9 +233,11 @@ func render(camera_altitude : float, sea_clouds : RID, camera_clouds : RID, expo
 			_sampled_uniform(1, volumes[2]),
 			RenderingContext.buffer_uniform(2, light[2]),
 			_sampled_uniform(3, light[4]),
+			_sampled_uniform(4, light[5]),
 		])
 		_device.compute_list_bind_uniform_set(compute_list, ambient_set, 0)
-		var ambient_push := RenderingContext.create_float_push_constant([light[0], light[3], 0.0, 0.0, light_direction.x, light_direction.y, light_direction.z, 0.0])
+		var ambient_push := RenderingContext.create_float_push_constant([light[0], light[3], 0.0, 0.0, light_direction.x, light_direction.y, light_direction.z, 0.0,
+				secondary_direction.x, secondary_direction.y, secondary_direction.z, 0.0])
 		_device.compute_list_set_push_constant(compute_list, ambient_push, ambient_push.size())
 		_device.compute_list_dispatch(compute_list, 1, 1, 1)
 	_device.compute_list_end()
