@@ -13,7 +13,7 @@ const BLENDED_PROPERTIES : Array[StringName] = [
 	&"shape_scale", &"detail_scale", &"detail_erosion",
 	&"density", &"density_variation", &"scattering_albedo",
 	&"evolution_speed",
-	&"haze_visibility", &"haze_scale_height", &"haze_anisotropy",
+	&"haze_visibility", &"haze_scale_height", &"haze_anisotropy", &"haze_wavelength_exponent",
 	&"star_scintillation",
 ]
 ## Blended fields interpolated geometrically: haze_visibility, so that the haze
@@ -77,6 +77,11 @@ const GEOMETRIC_BLENDED_PROPERTIES : Array[StringName] = [&"haze_visibility"]
 ## mean g is 0.75 times this; about 0.97 for marine haze (coarse sea salt), 0.98
 ## for fog droplets. Higher makes the glow around the sun smaller.
 @export_range(0.0, 0.99, 0.01) var haze_anisotropy := 0.97
+## How the haze's particles colour it (Angstrom exponent: extinction goes as
+## wavelength^-this): about 1-1.5 for fine aerosol (smoke, pollution: a bluish haze
+## that reddens the sun strongly), 0.3-0.6 for marine haze, 0 for fog and mist
+## droplets (grey, white glow). Finer particles also absorb a little (a few percent).
+@export_range(0.0, 2.0, 0.01) var haze_wavelength_exponent := 0.4
 
 @export_group("Stars")
 ## How much the stars twinkle (the air's turbulence): the spread of the log of a

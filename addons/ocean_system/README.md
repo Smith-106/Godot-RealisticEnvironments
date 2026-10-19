@@ -119,7 +119,9 @@ frame.
 
 ## Limits
 
-- The camera must stay above the water (there is no underwater view).
+- Below the water the surface is drawn as seen from under it (Snell's window, total
+  internal reflection, the water between), but nothing else is: objects under the
+  water get no underwater fog and there are no light shafts.
 - One ocean per world, with one depth for the whole sea (no shores).
 - Only the drawing is curved. Queries, buoyancy and the wake simulation treat
   the sea as flat.

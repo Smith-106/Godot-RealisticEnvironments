@@ -58,6 +58,9 @@ const CASCADE_BAND_MIN_TEXELS := 4.0
 ## waves longer than a tile cannot be drawn, and with a shorter tile a sizeable share of
 ## the sea's energy (all of it beyond the peak's long side) is missing.
 const _LARGEST_TILE_PEAK_WAVELENGTHS := 1.5
+## Speed of the surface water's mean drift as a share of the wind speed (wind drift and
+## Stokes drift together, about 3 %, Wu 1975): it carries the foam downwind.
+const _FOAM_DRIFT_WIND_SHARE := 0.03
 
 ## Height of the still water in world units. The surface is drawn here, and water
 ## queries, buoyancy, hull cutouts and planar reflections use it; the node's own
@@ -142,9 +145,9 @@ const _LARGEST_TILE_PEAK_WAVELENGTHS := 1.5
 		_update_micro_roughness()
 ## Scales the slope variance of the short (capillary and gravity-capillary) waves
 ## the wind raises, which the cascades do not draw: Cox and Munk's (1954) clean sea
-## less their slick sea (whose oil film damps them), 0.00356 U - 0.005 for wind
-## U (m/s), none below about 1.4 m/s. 1 is measured; 0 keeps clear_roughness at
-## every wind.
+## less their slick sea (whose oil film damps them), 0.00238 U - 0.005 along the wind
+## and 0.00108 U across it for wind U (m/s), so sun glints stretch along the wind.
+## 1 is measured; 0 keeps clear_roughness at every wind.
 @export_range(0.0, 2.0, 0.01, "or_greater") var short_wave_slope_scale := 1.0 :
 	set(value):
 		short_wave_slope_scale = value
@@ -742,9 +745,11 @@ func _pack_cascade_data() -> PackedByteArray:
 ## is the slope variance (both axes) of what the cascades do not draw, the calm
 ## clear_roughness plus the wind's short waves (short_wave_slope_scale).
 func _update_micro_roughness() -> void:
-	var short_wave_variance := maxf(0.00356 * get_wind_speed() - 0.005, 0.0) * short_wave_slope_scale
-	var alpha := sqrt(pow(clear_roughness, 4.0) + short_wave_variance)
-	_set_water_shader_parameter(&'clear_roughness', sqrt(alpha))
+	var wind_speed := get_wind_speed()
+	var short_wave_variance := Vector2(maxf(0.00238 * wind_speed - 0.005, 0.0), 0.00108 * wind_speed) * short_wave_slope_scale
+	_set_water_shader_parameter(&'clear_roughness', clear_roughness)
+	_set_water_shader_parameter(&'short_wave_slope_variance', short_wave_variance)
+	_set_water_shader_parameter(&'wind_direction', WindSource.direction_to_vector(get_wind_direction_degrees()))
 
 ## Updates every cascade whose newest frame the display has reached. A cascade
 ## computes its next frame one update interval ahead of now, so blending from
@@ -761,7 +766,9 @@ func _update_waves(frame_delta : float) -> void:
 			if interval <= frame_delta:
 				interval = 0.0 # Every frame: shown as computed, no blend.
 			var frame_time := _time + interval
-			state.advance(frame_time - state.frame_time if state.frame_count > 0 else 0.0, cascades[i], spectrum, wind_speed, wind_direction)
+			var step := frame_time - state.frame_time if state.frame_count > 0 else 0.0
+			state.advance(step, cascades[i], spectrum, wind_speed, wind_direction)
+			state.advance_foam_drift(step, WindSource.direction_to_vector(wind_direction) * (wind_speed * _FOAM_DRIFT_WIND_SHARE), cascades[i].tile_length / simulation_map_size)
 			_wave_generator.update_cascade(i, cascades[i], state, spectrum.displacement_scale)
 			state.previous_frame_time = state.frame_time
 			state.frame_time = frame_time

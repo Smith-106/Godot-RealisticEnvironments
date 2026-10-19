@@ -108,7 +108,13 @@ uniform vec3 water_absorption = vec3(0.45, 0.07, 0.03);
 uniform vec3 water_scattering = vec3(0.03, 0.035, 0.04);
 uniform float water_scattering_anisotropy : hint_range(0.0, 0.99) = 0.85; // Henyey-Greenstein g of particle scattering (ocean particles: about 0.9)
 
-uniform float clear_roughness : hint_range(0.0, 1.0) = 0.10;
+uniform float clear_roughness : hint_range(0.0, 1.0) = 0.10; // calm water's micro-roughness (perceptual)
+// Slope variance of the short waves the wind raises, which the cascades do not draw
+// (OceanSystem.short_wave_slope_scale): x along the wind, y across it. Cox and Munk found
+// them steeper along the wind, so glints stretch along it.
+uniform vec2 short_wave_slope_variance = vec2(0.0);
+// Unit world (x, z) direction the wind blows toward.
+uniform vec2 wind_direction = vec2(0.0, 1.0);
 uniform float foam_roughness : hint_range(0.0, 1.0) = 0.24;
 uniform float normal_scale : hint_range(0.0, 2.0) = 1.0; // multiplies every wave slope (OceanSystem.normal_scale; 1 = physical)
 uniform float foam_intensity : hint_range(0.0, 4.0) = 1.0; // multiplies the wave foam coverage
@@ -238,6 +244,8 @@ varying vec3 water_world_position;
 varying float light_specular_scale;
 // Fragment -> light(): view-ray transmission for crest_scatter() (Fresnel, foam covers it).
 varying float crest_transmission;
+// Fragment -> light(): GGX alpha of the specular highlight along the wind (x) and across it (y).
+varying vec2 specular_alpha;
 // Fragment -> light(), for a surface seen from below (0 from above): rgb the transmittance
 // of the water between it and the camera, a the share of the surface's light from above
 // that reaches the camera through the surface (1 - Fresnel, foam covers it); and
@@ -546,6 +554,31 @@ float rough_fresnel(float no_v, float sigma, float f0) {
 	return f0 + (1.0 - f0) * mean;
 }
 
+/*
+ * Unpolarized Fresnel reflectance for light arriving at cosine cos_i to the normal in a
+ * medium of eta times the other side's index; 1 past the critical angle (total internal
+ * reflection).
+ */
+float fresnel_dielectric(float cos_i, float eta) {
+	float sin2_t = eta * eta * (1.0 - cos_i * cos_i);
+	if (sin2_t >= 1.0) {
+		return 1.0;
+	}
+	float cos_t = sqrt(1.0 - sin2_t);
+	float rs = (eta * cos_i - cos_t) / (eta * cos_i + cos_t);
+	float rp = (cos_i - eta * cos_t) / (cos_i + eta * cos_t);
+	return 0.5 * (rs * rs + rp * rp);
+}
+
+/*
+ * Share of a ray reflected below the horizon (direction_y < 0) that reflects again off the
+ * next wave, taken as level: it meets it at a glancing angle, so most of it does; a ray
+ * reflected steeply down mostly enters the water. 1 above the horizon.
+ */
+float second_bounce_reflectance(float direction_y) {
+	return direction_y < 0.0 ? fresnel_dielectric(-direction_y, 1.0 / WATER_IOR) : 1.0;
+}
+
 /* Sky gradient without clouds. */
 vec3 sample_sky_gradient(vec3 direction) {
 	float upper_blend = smoothstep(0.0, 0.55, direction.y);
@@ -657,9 +690,11 @@ void sample_clear_sky(vec3 direction, out vec3 sky, out vec3 lobe) {
  * mirrored up, as the reflection is. The haze lobe's phase is capped at the cubature's
  * reach (reflection_lobe_cap()); fragment() reflects the peak above it like a light. The
  * clouds and the stars are prefiltered (cubemap mips) and read over the footprint;
- * star_weight scales the stars (the share the planar reflection does not bring).
+ * star_weight scales the stars (the share the planar reflection does not bring). Samples
+ * below the horizon reflect again off the next wave (second_bounce_reflectance()); what
+ * enters the water there brings back body_radiance (water_body_radiance()).
  */
-vec3 sample_rough_procedural_environment(vec3 direction, float roughness, float no_v, float star_weight) {
+vec3 sample_rough_procedural_environment(vec3 direction, float roughness, float no_v, float star_weight, vec3 body_radiance) {
 	float rough = saturate(roughness);
 	float sigma = 1.41421356 * rough * rough;
 	float lobe_cap = reflection_lobe_cap(rough);
@@ -677,11 +712,13 @@ vec3 sample_rough_procedural_environment(vec3 direction, float roughness, float 
 		for (int i = 0; i < 4; ++i) {
 			vec3 offset = i < 2 ? along * offset_along : azimuth_axis * offset_across;
 			vec3 sample_direction = normalize(direction + (i % 2 == 0 ? offset : -offset));
+			float bounce = second_bounce_reflectance(sample_direction.y);
 			sample_direction.y = abs(sample_direction.y);
 			vec3 sample_sky;
 			vec3 sample_lobe;
 			sample_clear_sky(sample_direction, sample_sky, sample_lobe);
-			sky += (sample_sky + sample_lobe * atmosphere_lobe_phase(sample_direction, lobe_cap)) * 0.25;
+			vec3 sample_radiance = sample_sky + sample_lobe * atmosphere_lobe_phase(sample_direction, lobe_cap);
+			sky += (bounce < 1.0 ? mix(body_radiance, sample_radiance, bounce) : sample_radiance) * 0.25;
 		}
 	}
 	// The stars lie beyond the atmosphere, dimmed by it along the whole ray.
@@ -747,6 +784,28 @@ float smith_ggx_visibility(float no_v, float no_l, float roughness) {
 	float lambda_v = no_l * sqrt(no_v * no_v * (1.0 - alpha2) + alpha2);
 	float lambda_l = no_v * sqrt(no_l * no_l * (1.0 - alpha2) + alpha2);
 	return 0.5 / max(lambda_v + lambda_l, 0.00001);
+}
+
+/*
+ * Specular BRDF of the water surface with anisotropic GGX (Burley 2012) and height-
+ * correlated Smith visibility, Schlick Fresnel with the water's f0, without N.L: alpha.x
+ * along tangent (projected onto the surface), alpha.y across it.
+ */
+float water_specular_brdf_anisotropic(vec3 normal, vec3 view, vec3 light_direction, vec3 tangent, vec2 alpha) {
+	vec3 t = safe_normalize_vec3(tangent - normal * dot(normal, tangent), safe_normalize_vec3(cross(normal, vec3(0.0, 0.0, 1.0)), vec3(1.0, 0.0, 0.0)));
+	vec3 b = cross(normal, t);
+	vec2 a = max(alpha, vec2(0.0009));
+	vec3 half_vector = safe_normalize_vec3(view + light_direction, normal);
+	float no_v = max(dot(normal, view), 0.0001);
+	float no_l = saturate(dot(normal, light_direction));
+	vec3 stretched = vec3(dot(t, half_vector) / a.x, dot(b, half_vector) / a.y, dot(normal, half_vector));
+	float stretched_length2 = dot(stretched, stretched);
+	float distribution = 1.0 / max(PI * a.x * a.y * stretched_length2 * stretched_length2, 0.00001);
+	float lambda_v = no_l * length(vec3(a.x * dot(t, view), a.y * dot(b, view), no_v));
+	float lambda_l = no_v * length(vec3(a.x * dot(t, light_direction), a.y * dot(b, light_direction), no_l));
+	float visibility = 0.5 / max(lambda_v + lambda_l, 0.00001);
+	float fresnel = fresnel_schlick(saturate(dot(view, half_vector)), sky_reflection_f0);
+	return distribution * visibility * fresnel;
 }
 
 /* Specular BRDF of the water surface (GGX, Schlick Fresnel with the water's f0), without N.L. */
@@ -1068,19 +1127,15 @@ vec3 water_body_albedo() {
 }
 
 /*
- * Unpolarized Fresnel reflectance for light arriving at cosine cos_i to the normal in a
- * medium of eta times the other side's index; 1 past the critical angle (total internal
- * reflection).
+ * The deep water's own light toward the sky (pre-exposed): its albedo under the clear sky's
+ * light, about pi times the zenith's radiance. What a ray that enters the water at the
+ * second bounce brings back.
  */
-float fresnel_dielectric(float cos_i, float eta) {
-	float sin2_t = eta * eta * (1.0 - cos_i * cos_i);
-	if (sin2_t >= 1.0) {
-		return 1.0;
-	}
-	float cos_t = sqrt(1.0 - sin2_t);
-	float rs = (eta * cos_i - cos_t) / (eta * cos_i + cos_t);
-	float rp = (cos_i - eta * cos_t) / (cos_i + eta * cos_t);
-	return 0.5 * (rs * rs + rp * rp);
+vec3 water_body_radiance() {
+	vec3 zenith;
+	vec3 lobe;
+	sample_clear_sky(vec3(0.0, 1.0, 0.0), zenith, lobe);
+	return water_body_albedo() * zenith;
 }
 
 /*
@@ -1204,7 +1259,7 @@ vec3 crest_scatter(vec3 normal, vec3 view, vec3 to_light, vec2 rest_xz, float su
  * sea-level atmosphere and the clouds, reflected by the specular BRDF, pre-exposed.
  * Skipped while too faint for the exposure (by day).
  */
-vec3 sky_point_glints(vec3 normal, vec3 view, float roughness) {
+vec3 sky_point_glints(vec3 normal, vec3 view, vec2 alpha) {
 	vec3 glints = vec3(0.0);
 	for (int i = 0; i < min(sky_point_count, MAX_SKY_POINTS); ++i) {
 		vec3 direction = sky_point_directions[i];
@@ -1221,7 +1276,7 @@ vec3 sky_point_glints(vec3 normal, vec3 view, float roughness) {
 		}
 		irradiance *= 1.0 - sample_clouds(direction, vec3(0.0, 1.0, 0.0), vec2(0.0)).a;
 		float no_l = saturate(dot(normal, direction));
-		glints += irradiance * (water_specular_brdf(normal, view, direction, roughness) * no_l);
+		glints += irradiance * (water_specular_brdf_anisotropic(normal, view, direction, vec3(wind_direction.x, 0.0, wind_direction.y), alpha) * no_l);
 	}
 	return glints;
 }
@@ -1397,22 +1452,30 @@ void fragment() {
 	// The camera is under the surface (the mesh's back face): Snell's window, underwater_view.
 	bool from_below = !FRONT_FACING;
 	vec3 reflection_direction = reflect(-view_direction_world, world_normal);
-	// A ray reflected below the horizon hits the next wave and goes on upward;
-	// mirroring it up stands in for that second bounce (the sky gradient's
-	// ground colors are for looking down, not for reflections).
+	// A ray reflected below the horizon meets the next wave and reflects again, mirrored
+	// up (second_bounce_reflectance()); the rest enters the water.
+	float second_bounce = second_bounce_reflectance(reflection_direction.y);
 	reflection_direction.y = abs(reflection_direction.y);
 	float clear_water_mask = 1.0 - foam_factor * 0.85;
 	float no_v = saturate(dot(world_normal, view_direction_world));
 	// GGX alpha (perceptual roughness squared) widened by the unresolved slope variance
-	// (Toksvig / LEAN: alpha^2 += variance). clear_roughness is the micro-roughness of
-	// ripples shorter than the smallest cascade.
+	// (Toksvig / LEAN: alpha^2 += variance, the variance of both axes together).
+	// clear_roughness is the micro-roughness of calm water, shared by both axes; the
+	// wind's short waves add their own variance along and across it. The highlight is
+	// anisotropic (specular_alpha: alpha^2 = 2 sigma^2 per axis); the reflections use the
+	// total.
 	float base_alpha = clear_roughness * clear_roughness;
-	effective_reflection_roughness = saturate(sqrt(sqrt(base_alpha * base_alpha + slope_variance)));
+	float shared_variance = 0.5 * (base_alpha * base_alpha + slope_variance);
+	vec2 axis_variance = vec2(shared_variance) + short_wave_slope_variance;
+	float total_variance = axis_variance.x + axis_variance.y;
+	effective_reflection_roughness = saturate(sqrt(sqrt(total_variance)));
+	vec2 clear_alpha = sqrt(2.0 * axis_variance);
+	vec3 wind_tangent = vec3(wind_direction.x, 0.0, wind_direction.y);
 
 	// One Fresnel reflectance for everything the water reflects: the sky, and the
 	// scene geometry of the planar reflection in front of it. Averaged over the
 	// same slopes as the roughness: alpha^2 = 2 sigma^2 per axis.
-	float slope_sigma = sqrt(base_alpha * base_alpha + slope_variance) * 0.70710678;
+	float slope_sigma = sqrt(total_variance) * 0.70710678;
 	float sky_fresnel = rough_fresnel(no_v, slope_sigma, sky_reflection_f0);
 	// The water body's color is light that entered the water and scattered back
 	// out: only the share the surface does not reflect leaves toward the eye
@@ -1475,7 +1538,7 @@ void fragment() {
 	vec3 base_albedo = mix(body_albedo, foam_color.rgb * mix(0.75, 1.0, detail), foam_factor);
 	sky_reflection_amount = saturate(sky_reflection_strength * sky_fresnel * clear_water_mask);
 	// The highlight itself is lit in light(); this copy (per unit of sun irradiance) is for the debug view.
-	sun_specular_amount = water_specular_brdf(world_normal, view_direction_world, sun_dir, effective_reflection_roughness) * saturate(dot(world_normal, sun_dir));
+	sun_specular_amount = water_specular_brdf_anisotropic(world_normal, view_direction_world, sun_dir, wind_tangent, clear_alpha) * saturate(dot(world_normal, sun_dir));
 
 	// The planar (or screen-space) reflection: rgb premultiplied by geometry coverage (a),
 	// and the share of the reflection it covers (0 off screen of the mirrored camera, where
@@ -1548,10 +1611,14 @@ void fragment() {
 	}
 	// Seen from the bottom of the atmosphere; the camera's own path to the water is
 	// hazed afterwards, with the rest of the scene (the sky source's aerial perspective).
-	reflected_sky_color = sample_rough_procedural_environment(reflection_direction, effective_reflection_roughness, no_v, 1.0 - planar_coverage);
+	vec3 body_radiance = water_body_radiance();
+	reflected_sky_color = sample_rough_procedural_environment(reflection_direction, effective_reflection_roughness, no_v, 1.0 - planar_coverage, body_radiance);
 	// Reflected scene geometry hides the sky behind it (alpha: geometry coverage).
 	float sky_visible = 1.0 - planar_coverage * planar_sample.a;
 	vec3 reflected_color = reflected_sky_color * sky_visible + planar_sample.rgb * planar_coverage;
+	if (second_bounce < 1.0) {
+		reflected_color = mix(body_radiance, reflected_color, second_bounce);
+	}
 	vec3 reflection_radiance = reflected_color * sky_reflection_amount;
 	// The peak of the haze's glow, reflected like a light (sky_glow_core()): the specular
 	// BRDF gives its reflection the shape the sun's own has.
@@ -1559,7 +1626,7 @@ void fragment() {
 	vec3 glow_irradiance = sky_glow_core(effective_reflection_roughness, glow_direction);
 	if (glow_irradiance != vec3(0.0)) {
 		float glow_no_l = saturate(dot(world_normal, glow_direction));
-		reflection_radiance += glow_irradiance * (water_specular_brdf(world_normal, view_direction_world, glow_direction, effective_reflection_roughness) * glow_no_l
+		reflection_radiance += glow_irradiance * (water_specular_brdf_anisotropic(world_normal, view_direction_world, glow_direction, wind_tangent, clear_alpha) * glow_no_l
 				* sky_reflection_strength * clear_water_mask * sky_visible);
 	}
 
@@ -1612,6 +1679,7 @@ void fragment() {
 		FOG = vec4(0.0);
 		light_specular_scale = 0.0;
 		crest_transmission = 0.0;
+		specular_alpha = vec2(1.0);
 		underwater_view_transmission = vec4(0.0);
 		underwater_inscatter = vec3(0.0);
 		seen_from_below = 0.0;
@@ -1629,7 +1697,7 @@ void fragment() {
 		if (inside_fresnel < 1.0) {
 			vec3 to_sky = refract(toward_surface, -world_normal, WATER_IOR);
 			to_sky.y = abs(to_sky.y);
-			sky_through = sample_rough_procedural_environment(normalize(to_sky), effective_reflection_roughness, 1.0, 1.0) * (WATER_IOR * WATER_IOR);
+			sky_through = sample_rough_procedural_environment(normalize(to_sky), effective_reflection_roughness, 1.0, 1.0, water_body_radiance()) * (WATER_IOR * WATER_IOR);
 		}
 		float path = distance(CAMERA_POSITION_WORLD, drawn_position);
 		vec3 path_transmittance = exp(-(water_absorption + water_scattering + WATER_MOLECULAR_SCATTERING) * path);
@@ -1640,7 +1708,7 @@ void fragment() {
 		vec3 water_light = water_subsurface_reflectance() * mean_light;
 		float through = (1.0 - inside_fresnel) * (1.0 - foam_factor);
 		// The light the water gets from the sky: pi times its mean radiance, the clouds' included.
-		vec3 sky_irradiance = PI * sample_rough_procedural_environment(vec3(0.0, 1.0, 0.0), 1.0, 1.0, 0.0);
+		vec3 sky_irradiance = PI * sample_rough_procedural_environment(vec3(0.0, 1.0, 0.0), 1.0, 1.0, 0.0, water_body_radiance());
 		vec3 water_reflected = inside_fresnel * (1.0 - foam_factor) * path_transmittance + (vec3(1.0) - path_transmittance);
 		ALBEDO = foam_color.rgb * mix(0.75, 1.0, detail) * foam_factor * path_transmittance;
 		METALLIC = 0.0;
@@ -1651,6 +1719,7 @@ void fragment() {
 		FOG = vec4(0.0);
 		light_specular_scale = 0.0;
 		crest_transmission = 0.0;
+		specular_alpha = clear_alpha;
 		underwater_view_transmission = vec4(path_transmittance, through * sun_specular_strength);
 		underwater_inscatter = water_light * water_reflected;
 		seen_from_below = 1.0;
@@ -1665,12 +1734,13 @@ void fragment() {
 		FOG = aerial_perspective_enabled ? aerial_perspective_fog(drawn_position) : vec4(0.0);
 		light_specular_scale = sun_specular_strength * clear_water_mask;
 		crest_transmission = (1.0 - sky_fresnel) * (1.0 - foam_factor);
+		specular_alpha = mix(clear_alpha, vec2(foam_roughness * foam_roughness), foam_factor);
 		underwater_view_transmission = vec4(0.0);
 		underwater_inscatter = vec3(0.0);
 		seen_from_below = 0.0;
 #ifndef WATER_NO_SKY_POINTS
 		if (sky_point_count > 0) {
-			EMISSION += sky_point_glints(world_normal, view_direction_world, effective_reflection_roughness) * light_specular_scale / scene_exposure;
+			EMISSION += sky_point_glints(world_normal, view_direction_world, clear_alpha) * light_specular_scale / scene_exposure;
 		}
 #endif
 	}
@@ -1699,7 +1769,10 @@ void light() {
 		// Water body: light refracted into the water and scattered back up. It depends
 		// on how high the light is, not on the wave facet; Lambert on the facets made
 		// the water look like shaded plastic.
-		float body_light = max(dot(up, LIGHT), 0.0);
+		// Only the share the surface lets in (exact Fresnel at the light's height; the
+		// body's albedo holds a high light's).
+		float light_height = max(dot(up, LIGHT), 0.0);
+		float body_light = light_height * (1.0 - fresnel_dielectric(light_height, 1.0 / WATER_IOR)) / (1.0 - sky_reflection_f0);
 		// Foam: a layer of bubbles that scatters light through its volume, so facets
 		// turned away from the light still get some (wrapped diffuse), and light from
 		// behind shines through toward the viewer.
@@ -1717,7 +1790,8 @@ void light() {
 			SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION / PI * crest * crest_transmission;
 		}
 		if (no_l > 0.0) {
-			SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * (no_l / PI) * water_specular_brdf(NORMAL, VIEW, LIGHT, ROUGHNESS) * light_specular_scale;
+			vec3 tangent = (VIEW_MATRIX * vec4(wind_direction.x, 0.0, wind_direction.y, 0.0)).xyz;
+			SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * (no_l / PI) * water_specular_brdf_anisotropic(NORMAL, VIEW, LIGHT, tangent, specular_alpha) * light_specular_scale;
 		}
 	}
 }

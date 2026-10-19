@@ -84,6 +84,7 @@ layout(push_constant, std430) restrict readonly uniform PushConstants {
 	float airglow_green;
 	vec3 secondary_color;    // its irradiance above the atmosphere: pi * energy (white)
 	float airglow_blue;
+	float haze_wavelength_exponent; // atmosphere_haze_optics()
 } pc;
 
 vec3 transmittance;
@@ -92,8 +93,9 @@ vec3 transport;
 vec3 inscatter;
 vec3 inscatter_lobe;
 
-// atmosphere_haze_transport_share() of the haze's g.
+// atmosphere_haze_transport_share() of the haze's g, and atmosphere_haze_optics().
 float haze_transport_share;
+vec4 haze_optics;
 
 // Share of the key light that comes through the clouds: toward the light over the
 // observer, and through the mean cover overhead.
@@ -164,11 +166,11 @@ void march(float mu, float cos_light, vec3 key_light, float t_start, float t_end
 		float t = t_start + (t_end - t_start) * (quadratic ? s * s : s);
 		float h = atmosphere_altitude_along(h0, mu, t);
 		vec3 rayleigh;
-		float haze;
+		vec3 haze;
 		vec3 extinction;
-		atmosphere_segment_media(previous_h, h, pc.haze_density, pc.haze_scale_height, rayleigh, haze, extinction);
-		float haze_transport = haze * haze_transport_share;
-		vec3 extinction_transport = extinction - vec3(haze - haze_transport);
+		atmosphere_segment_media(previous_h, h, pc.haze_density, pc.haze_scale_height, haze_optics, 1.0, rayleigh, haze, extinction);
+		vec3 haze_transport = haze * haze_transport_share;
+		vec3 extinction_transport = extinction - (haze - haze_transport);
 		vec3 segment_transmittance = exp(-extinction * (t - previous_t));
 		vec3 segment_transport = exp(-extinction_transport * (t - previous_t));
 		// Integral of the transport transmittance from the observer over the segment, per
@@ -233,6 +235,7 @@ void main() {
 	float cos_light = dot(direction, light);
 	vec3 key_light = pc.light_color;
 	haze_transport_share = atmosphere_haze_transport_share(pc.haze_anisotropy);
+	haze_optics = atmosphere_haze_optics(pc.haze_wavelength_exponent);
 	init_cloud_light();
 	// The secondary light in the frame: x along the key light's horizontal direction.
 	vec2 key_xz = length(pc.light_direction.xz) > 1e-5 ? normalize(pc.light_direction.xz) : vec2(1.0, 0.0);

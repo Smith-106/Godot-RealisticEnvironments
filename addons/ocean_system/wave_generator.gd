@@ -200,7 +200,7 @@ func _update_spectrum_slot(compute_list : int, cascade_index : int, slot : int, 
 	context.compute_list_add_barrier(compute_list)
 
 	## --- DISPLACEMENT/NORMAL MAP UPDATE ---
-	pipelines[&'fft_unpack'].call(context, compute_list, RenderingContext.create_push_constant([slot, cascade.whitecap, state.foam_grow_rate, state.foam_decay_rate, displacement_scale]), [unpack_sets[write_output][spectrum_layer], fft_buffer_set])
+	pipelines[&'fft_unpack'].call(context, compute_list, RenderingContext.create_push_constant([slot, cascade.whitecap, state.foam_grow_rate, state.foam_decay_rate, displacement_scale, state.foam_shift.x, state.foam_shift.y]), [unpack_sets[write_output][spectrum_layer], fft_buffer_set])
 
 	## --- MIP CHAINS (displacement and normal maps of this layer, up to five levels a dispatch) ---
 	for step in mip_steps.size():

@@ -25,6 +25,8 @@ layout(push_constant) restrict readonly uniform PushConstants {
 	float foam_grow;     // coverage added this update per unit of Jacobian below whitecap
 	float foam_decay;    // this update's share of the e-folding lifetime (update interval / lifetime)
 	float displacement_scale; // WaveSpectrum.displacement_scale, as the vertex shader draws the waves
+	int foam_shift_x;    // texels the foam drifts downwind this update (x along world x, y along world z)
+	int foam_shift_y;
 };
 
 // Tiling doesn't provide much of a benefit here (but it does a *little*)
@@ -75,8 +77,10 @@ void main() {
 			// Foam coverage (0-1). It forms where the rendered surface is compressed
 			// (Jacobian below whitecap: the crests that look sharp), fades with the
 			// cascade's lifetime, and stays with the water: the map is indexed by rest
-			// position, so foam left by a passing crest stays behind it.
-			float foam = imageLoad(previous_normal_map, id).a * exp(-foam_decay);
+			// position, so foam left by a passing crest stays behind it. The water's mean
+			// drift (wind drift and Stokes drift) carries it downwind, whole texels at a time.
+			ivec2 source = (id - ivec2(foam_shift_x, foam_shift_y)) & ivec2(int(map_size) - 1);
+			float foam = imageLoad(previous_normal_map, source).a * exp(-foam_decay);
 			foam += max(whitecap - chop_jacobian, 0.0) * foam_grow;
 			foam = clamp(foam, 0.0, 1.0);
 			// z: squared slope, the second moment the mip chain averages (mip_chain.glsl).

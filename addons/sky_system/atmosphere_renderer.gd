@@ -66,6 +66,8 @@ var transmittance_lut : RID
 var haze_density := 0.0
 var haze_scale_height := 1000.0
 var haze_anisotropy := 0.97
+## Its Angstrom exponent (atmosphere_haze_optics()): its colour and absorption.
+var haze_wavelength_exponent := 0.4
 ## Toward the key light (sun or moon).
 var light_direction := Vector3.UP
 ## The key light above the atmosphere: pi * energy, white.
@@ -183,7 +185,7 @@ func get_observer_altitude(camera_altitude : float) -> float:
 ## transmittance is stored at (pre-exposed: the light is scaled by it).
 func render(camera_altitude : float, sea_clouds : RID, camera_clouds : RID, exposure : float) -> void:
 	var top := get_top_altitude()
-	var media_push := RenderingContext.create_float_push_constant([haze_density, haze_scale_height, top, haze_anisotropy])
+	var media_push := RenderingContext.create_float_push_constant([haze_density, haze_scale_height, top, haze_anisotropy, haze_wavelength_exponent])
 	var compute_list := _device.compute_list_begin()
 	_device.compute_list_bind_compute_pipeline(compute_list, _transmittance_pipeline)
 	_device.compute_list_bind_uniform_set(compute_list, _transmittance_set, 0)
@@ -220,6 +222,7 @@ func render(camera_altitude : float, sea_clouds : RID, camera_clouds : RID, expo
 			cloud_altitude, cloud_top_altitude, haze_anisotropy, airglow_radiance.r * exposure,
 			secondary_direction.x, secondary_direction.y, secondary_direction.z, airglow_radiance.g * exposure,
 			secondary_color.r * exposure, secondary_color.g * exposure, secondary_color.b * exposure, airglow_radiance.b * exposure,
+			haze_wavelength_exponent,
 		])
 		_device.compute_list_set_push_constant(compute_list, view_push, view_push.size())
 		_device.compute_list_dispatch(compute_list, ceili(VIEW_SIZE.x / 8.0), ceili(VIEW_SIZE.y / 8.0), 1)

@@ -13,7 +13,8 @@
  *   ozone: ATMOSPHERE_OZONE_ABSORPTION times a tent profile peaking at 25 km and
  *     ending at 10 and 40 km, absorbing only;
  *   haze (aerosols and droplets, CloudPreset haze_*): haze_density *
- *     exp(-altitude / haze_scale_height), grey, scattering albedo 1.
+ *     exp(-altitude / haze_scale_height) at 550 nm, coloured and slightly absorbing by
+ *     its particles' size (atmosphere_haze_optics()).
  * Values from Bruneton 2017 and Hillaire 2020 (at 680, 550 and 440 nm for r, g, b).
  * The sea below reflects diffusely with ATMOSPHERE_SEA_ALBEDO, for the light the
  * atmosphere gets back from it.
@@ -126,6 +127,17 @@ float atmosphere_ozone_integral(float h) {
 	return u <= 0.0 ? (u + w) * (u + w) / (2.0 * w) : 0.5 * w + u - u * u / (2.0 * w);
 }
 
+/*
+ * The haze's optics for an Angstrom exponent a (CloudPreset.haze_wavelength_exponent):
+ * rgb its extinction per channel over its value at 550 nm, lambda^-a at 680, 550 and
+ * 440 nm (fine aerosol, a about 1, dims blue more and its glow is bluish; coarse sea salt
+ * and fog droplets, a near 0, are grey); w its single-scattering albedo, 1 - 0.075 a:
+ * fine aerosol absorbs a few percent of what it intercepts, droplets almost nothing.
+ */
+vec4 atmosphere_haze_optics(float exponent) {
+	return vec4(pow(vec3(680.0, 550.0, 440.0) / 550.0, vec3(-exponent)), clamp(1.0 - 0.075 * exponent, 0.0, 1.0));
+}
+
 /* Mean of the ozone's profile along a segment whose altitude goes linearly from h_a to h_b. */
 float atmosphere_ozone_mean(float h_a, float h_b) {
 	float dh = h_b - h_a;
@@ -138,22 +150,27 @@ float atmosphere_ozone_mean(float h_a, float h_b) {
 
 /*
  * The media along a segment whose altitude goes linearly from h_a to h_b, as mean
- * coefficients (1/m): the air's scattering, the haze's scattering (grey) and the
- * extinction of everything (ozone only absorbs).
+ * coefficients (1/m): the air's scattering, the haze's scattering and the extinction of
+ * everything (ozone only absorbs). haze_optics: atmosphere_haze_optics(). transport: the
+ * share of the haze's scattering light transport sees (atmosphere_haze_transport_share();
+ * 1 for all of it): its forward peak leaves the scattering and the extinction, its
+ * absorption stays.
  */
-void atmosphere_segment_media(float h_a, float h_b, float haze_density, float haze_scale_height,
-		out vec3 rayleigh, out float haze, out vec3 extinction) {
+void atmosphere_segment_media(float h_a, float h_b, float haze_density, float haze_scale_height, vec4 haze_optics, float transport,
+		out vec3 rayleigh, out vec3 haze, out vec3 extinction) {
 	rayleigh = ATMOSPHERE_RAYLEIGH_SCATTERING * atmosphere_exponential_mean(h_a, h_b, ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT);
-	haze = haze_density * atmosphere_exponential_mean(h_a, h_b, haze_scale_height);
-	extinction = rayleigh + haze + ATMOSPHERE_OZONE_ABSORPTION * atmosphere_ozone_mean(h_a, h_b);
+	vec3 haze_extinction = haze_density * atmosphere_exponential_mean(h_a, h_b, haze_scale_height) * haze_optics.rgb;
+	vec3 haze_scattering = haze_extinction * haze_optics.a;
+	haze = haze_scattering * transport;
+	extinction = rayleigh + haze_extinction - haze_scattering * (1.0 - transport) + ATMOSPHERE_OZONE_ABSORPTION * atmosphere_ozone_mean(h_a, h_b);
 }
 
-/* Mean extinction (1/m) of every medium along such a segment. */
-vec3 atmosphere_mean_extinction(float h_a, float h_b, float haze_density, float haze_scale_height) {
+/* Mean extinction (1/m) of every medium along such a segment (as atmosphere_segment_media()). */
+vec3 atmosphere_mean_extinction(float h_a, float h_b, float haze_density, float haze_scale_height, vec4 haze_optics, float transport) {
 	vec3 rayleigh;
-	float haze;
+	vec3 haze;
 	vec3 extinction;
-	atmosphere_segment_media(h_a, h_b, haze_density, haze_scale_height, rayleigh, haze, extinction);
+	atmosphere_segment_media(h_a, h_b, haze_density, haze_scale_height, haze_optics, transport, rayleigh, haze, extinction);
 	return extinction;
 }
 

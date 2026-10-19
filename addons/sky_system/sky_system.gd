@@ -107,6 +107,9 @@ const SATURN_RING_POLE := Vector3(0.08537, 0.07311, 0.99366)
 const LUMINANCE_WEIGHTS := Vector3(0.2126, 0.7152, 0.0722)
 ## Angular radii (rad) of the sun's and the moon's disks, as the sky material's
 ## sun_disk_size and moon_disk_size.
+## Illuminance the full earth gives the moon over the sun's (about 13 lux against
+## 128 000): the earthshine on its night side, as a share of the full moon's radiance.
+const EARTHSHINE_FULL_EARTH := 1.0e-4
 const SUN_ANGULAR_RADIUS := 0.00465
 const MOON_ANGULAR_RADIUS := 0.00465
 ## As shaders/compute/atmosphere_common.glslinc.
@@ -316,8 +319,14 @@ var _advancing_cycle := false
 
 # Lighting state, recomputed by _update_lighting_state() whenever an input changes.
 # The public getters return these, so reading the sky costs nothing per call.
+## Where the sun and the moon are seen (refracted by the air, _refracted()), and where
+## they are (the sky shader draws their disks from these).
 var _sun_direction := Vector3.UP
 var _moon_direction := Vector3.DOWN
+var _sun_true_direction := Vector3.UP
+var _moon_true_direction := Vector3.DOWN
+## Sun-moon-earth angle (rad): 0 at full moon.
+var _moon_phase_angle := 0.0
 var _sun_visibility := 1.0
 var _moon_visibility := 0.0
 var _moon_phase := 1.0
@@ -341,6 +350,7 @@ var _moon_transmittance := Color.BLACK
 var _haze_density := 0.0
 var _haze_scale_height := 1000.0
 var _haze_anisotropy := 0.97
+var _haze_wavelength_exponent := 0.4
 ## Irradiance (scene units) of the sun's and the moon's lights on a level surface at the sea.
 var _direct_irradiance := 0.0
 ## Luminance of the sky's irradiance on a level surface at the camera, through the
@@ -660,7 +670,7 @@ func get_planet_directions() -> PackedVector3Array:
 	var to_world := _get_equatorial_to_world_basis()
 	var directions := PackedVector3Array()
 	for direction in _planet_directions:
-		directions.push_back(to_world * direction)
+		directions.push_back(_refracted(to_world * direction))
 	return directions
 
 
@@ -677,10 +687,13 @@ func get_planet_irradiance() -> PackedVector3Array:
 func _update_lighting_state() -> void:
 	var solar_coordinates := _get_solar_equatorial_coordinates()
 	_sun_hour_angle = _get_solar_hour_angle()
-	_sun_direction = _equatorial_to_horizontal_direction(solar_coordinates.y, _sun_hour_angle)
+	_sun_true_direction = _equatorial_to_horizontal_direction(solar_coordinates.y, _sun_hour_angle)
+	_sun_direction = _refracted(_sun_true_direction)
 	var moon_state := _get_moon_state()
-	_moon_direction = moon_state["direction"]
+	_moon_true_direction = moon_state["direction"]
+	_moon_direction = _refracted(_moon_true_direction)
 	_moon_phase = float(moon_state["phase"])
+	_moon_phase_angle = float(moon_state["phase_angle"])
 	_moon_brightness = float(moon_state["brightness"])
 	_sun_visibility = _disk_above_horizon(_sun_direction.y, SUN_ANGULAR_RADIUS)
 	_moon_visibility = _disk_above_horizon(_moon_direction.y, MOON_ANGULAR_RADIUS)
@@ -736,6 +749,7 @@ func _update_haze_medium() -> void:
 	_haze_density = 3.912 / _cloud_state.haze_visibility
 	_haze_scale_height = _cloud_state.haze_scale_height
 	_haze_anisotropy = _cloud_state.haze_anisotropy
+	_haze_wavelength_exponent = _cloud_state.haze_wavelength_exponent
 
 
 ## The light the atmosphere scatters: white at energy above the atmosphere, where pi *
@@ -795,6 +809,35 @@ static func _disk_above_horizon(height : float, angular_radius : float) -> float
 	return 1.0 - (acos(d) - d * sqrt(1.0 - d * d)) / PI
 
 
+## direction as seen through the air: lifted by the atmospheric refraction at its true
+## elevation (Saemundsson 1986, standard air at the sea: about 34' at the horizon, so
+## the sun is seen whole for a while after it has set), faded out a few degrees below
+## the horizon, where nothing is seen. As refracted() in starfield.gdshader; the sky
+## shader bends view rays back with Bennett's inverse formula.
+static func _refracted(direction : Vector3) -> Vector3:
+	var horizontal := Vector2(direction.x, direction.z).length()
+	if horizontal < 1e-5:
+		return direction
+	var elevation := rad_to_deg(asin(clampf(direction.y, -1.0, 1.0)))
+	var clamped := maxf(elevation, -1.5)
+	var lift := maxf(1.02 / tan(deg_to_rad(clamped + 10.3 / (clamped + 5.11))), 0.0) / 60.0 * smoothstep(-4.0, -1.5, elevation)
+	var apparent := deg_to_rad(elevation + lift)
+	return Vector3(direction.x / horizontal * cos(apparent), sin(apparent), direction.z / horizontal * cos(apparent))
+
+
+## The moon's disk-integrated brightness under the Lommel-Seeliger law at phase angle
+## (rad) as a share of the full moon's: 1 - sin(a/2) tan(a/2) ln(cot(a/4)).
+static func _lommel_seeliger_phase(phase_angle : float) -> float:
+	var a := clampf(absf(phase_angle), 1e-4, PI - 1e-3)
+	return maxf(1.0 - sin(0.5 * a) * tan(0.5 * a) * log(1.0 / tan(0.25 * a)), 1e-4)
+
+
+## A Lambert sphere's brightness at phase angle (rad) as a share of its full phase.
+static func _lambert_sphere_phase(phase_angle : float) -> float:
+	var a := clampf(absf(phase_angle), 0.0, PI)
+	return (sin(a) + (PI - a) * cos(a)) / PI
+
+
 ## direction lifted onto the horizon when below it.
 static func _above_horizon(direction : Vector3) -> Vector3:
 	return Vector3(direction.x, maxf(direction.y, 0.0), direction.z).normalized()
@@ -830,6 +873,8 @@ func _get_atmosphere_transmittance(altitude : float, direction : Vector3, with_h
 	var root := sqrt(b * b + c)
 	var ray_length := c / (b + root) if mu >= 0.0 else root - b
 	var haze_density := _haze_density if with_haze else 0.0
+	# atmosphere_haze_optics(): the whole haze's extinction per channel (the direct beam).
+	var haze_spectrum := Vector3(pow(680.0 / 550.0, -_haze_wavelength_exponent), 1.0, pow(440.0 / 550.0, -_haze_wavelength_exponent))
 	var optical_depth := Vector3.ZERO
 	var previous_t := 0.0
 	var previous_height := h
@@ -840,7 +885,7 @@ func _get_atmosphere_transmittance(altitude : float, direction : Vector3, with_h
 		var k := t * (2.0 * r * mu + t)
 		var height := h + k / (sqrt(r * r + k) + r)
 		# Mean extinction over the step (atmosphere_mean_extinction()).
-		var extinction := Vector3.ONE * (haze_density * _exponential_mean(previous_height, height, _haze_scale_height)) \
+		var extinction := haze_spectrum * (haze_density * _exponential_mean(previous_height, height, _haze_scale_height)) \
 				+ ATMOSPHERE_RAYLEIGH_SCATTERING * _exponential_mean(previous_height, height, ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT) \
 				+ ATMOSPHERE_OZONE_ABSORPTION * _ozone_mean(previous_height, height)
 		optical_depth += extinction * (t - previous_t)
@@ -879,6 +924,7 @@ func _push_atmosphere_parameters() -> void:
 	_atmosphere_renderer.haze_density = _haze_density
 	_atmosphere_renderer.haze_scale_height = _haze_scale_height
 	_atmosphere_renderer.haze_anisotropy = _haze_anisotropy
+	_atmosphere_renderer.haze_wavelength_exponent = _haze_wavelength_exponent
 	_atmosphere_renderer.light_direction = _haze_light_direction
 	_atmosphere_renderer.light_color = _haze_light_color
 	_atmosphere_renderer.secondary_direction = _haze_secondary_direction
@@ -942,6 +988,8 @@ func _update_environment(sun_direction : Vector3, moon_direction : Vector3, sun_
 		return
 	var shader_material := environment.sky.sky_material as ShaderMaterial
 	shader_material.set_shader_parameter(&"sun_direction", sun_direction)
+	shader_material.set_shader_parameter(&"sun_disk_direction", _sun_true_direction)
+	shader_material.set_shader_parameter(&"moon_disk_direction", _moon_true_direction)
 	shader_material.set_shader_parameter(&"sun_color", _sun_color)
 	shader_material.set_shader_parameter(&"sun_irradiance", Vector3(_sun_irradiance.r, _sun_irradiance.g, _sun_irradiance.b))
 	shader_material.set_shader_parameter(&"sun_visibility", sun_visibility)
@@ -952,9 +1000,11 @@ func _update_environment(sun_direction : Vector3, moon_direction : Vector3, sun_
 	shader_material.set_shader_parameter(&"moon_irradiance", Vector3(_moon_irradiance.r, _moon_irradiance.g, _moon_irradiance.b))
 	shader_material.set_shader_parameter(&"moon_visibility", moon_visibility)
 	shader_material.set_shader_parameter(&"moon_phase", _moon_phase)
-	# The lit part's radiance as a share of the full moon's (at most 1: the formula
-	# overshoots near new moon, where the lit share goes to 0).
-	shader_material.set_shader_parameter(&"moon_surface_brightness", minf(_moon_brightness / maxf(_moon_phase, 1e-6), 1.0))
+	# The measured brightness over the Lommel-Seeliger law's (the shader applies the law):
+	# the surface's own shadows dim it away from full. Capped: both go to 0 at new moon.
+	shader_material.set_shader_parameter(&"moon_surface_brightness", minf(_moon_brightness / _lommel_seeliger_phase(_moon_phase_angle), 2.0))
+	# The earth seen from the moon is full at new moon.
+	shader_material.set_shader_parameter(&"moon_earthshine", EARTHSHINE_FULL_EARTH * _lambert_sphere_phase(PI - _moon_phase_angle))
 	shader_material.set_shader_parameter(&"milky_way_basis", get_star_basis())
 	shader_material.set_shader_parameter(&"milky_way_scale", MILKY_WAY_UNIT * get_star_radiance_scale())
 	_radiance_observer_altitude = _get_atmosphere_observer_altitude()
@@ -1173,6 +1223,7 @@ func _get_moon_state() -> Dictionary:
 		"direction": _equatorial_to_horizontal_direction(declination, hour_angle),
 		"phase": phase,
 		"brightness": _lunar_phase_brightness(PI - phase_angle),
+		"phase_angle": absf(_wrap_pi(PI - phase_angle)),
 	}
 
 

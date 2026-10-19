@@ -34,6 +34,10 @@ var wavenumber_band := Vector2(0.0, UNBOUNDED_WAVENUMBER)
 ## Foam added and decayed by the latest update, for fft_unpack.glsl (set by advance()).
 var foam_grow_rate := 0.0
 var foam_decay_rate := 0.0
+## Whole texels (x along world x, y along world z) the foam drifts by in the latest
+## update, and the drift (m) not yet moved (set by advance_foam_drift()).
+var foam_shift := Vector2i.ZERO
+var _foam_drift := Vector2.ZERO
 ## The spectrum slot shown, and the one a new spectrum is generated into and
 ## crossfaded from.
 var active_slot := 0
@@ -110,6 +114,14 @@ func advance(delta : float, cascade : WaveCascade, spectrum : WaveSpectrum, wind
 		is_blending = true
 		blend_progress = 0.0
 
+
+## Moves the foam by the water's mean drift, velocity (m/s, world x and z), over
+## delta seconds, in whole texels of texel_size meters (foam_shift); the rest carries over.
+func advance_foam_drift(delta : float, velocity : Vector2, texel_size : float) -> void:
+	_foam_drift += velocity * delta
+	var texels := (_foam_drift / texel_size).floor()
+	_foam_drift -= texels * texel_size
+	foam_shift = Vector2i(texels)
 
 ## Slots the generator must propagate this update: the active one, plus the
 ## pending one while a crossfade is running.

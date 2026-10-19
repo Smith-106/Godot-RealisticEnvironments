@@ -23,6 +23,7 @@ layout(push_constant, std430) restrict readonly uniform PushConstants {
 	float haze_scale_height; // m
 	float top_altitude;      // m
 	float haze_anisotropy;   // the lobe's g: the haze is seen for transport (atmosphere_haze_transport_share())
+	float haze_wavelength_exponent; // atmosphere_haze_optics()
 } pc;
 
 void main() {
@@ -36,7 +37,8 @@ void main() {
 	float h = altitude_mu.x;
 	float mu = altitude_mu.y;
 	float ray_length = atmosphere_distance_to_top(h, mu, pc.top_altitude);
-	float haze_density = pc.haze_density * atmosphere_haze_transport_share(pc.haze_anisotropy);
+	float transport = atmosphere_haze_transport_share(pc.haze_anisotropy);
+	vec4 haze_optics = atmosphere_haze_optics(pc.haze_wavelength_exponent);
 	vec3 optical_depth = vec3(0.0);
 	float previous_t = 0.0;
 	float previous_h = h;
@@ -44,7 +46,7 @@ void main() {
 		float s = float(i) / float(TRANSMITTANCE_STEPS);
 		float t = ray_length * s * s;
 		float step_h = atmosphere_altitude_along(h, mu, t);
-		optical_depth += atmosphere_mean_extinction(previous_h, step_h, haze_density, pc.haze_scale_height) * (t - previous_t);
+		optical_depth += atmosphere_mean_extinction(previous_h, step_h, pc.haze_density, pc.haze_scale_height, haze_optics, transport) * (t - previous_t);
 		previous_t = t;
 		previous_h = step_h;
 	}
