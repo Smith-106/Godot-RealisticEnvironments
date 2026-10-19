@@ -36,6 +36,8 @@ uniform vec4 wave_frame_blends[MAX_CASCADES];
 // Irradiance on a level surface just above the water (scene units, unexposed): the sky
 // source's light meter, or OceanSystem's stand-in without one.
 uniform vec3 underwater_irradiance = vec3(3.14159);
+// Steps of the light-shaft march (OceanSystem.shader_quality; 0: no shafts).
+uniform int underwater_shaft_steps = 6;
 
 uniform sampler2D screen_texture : hint_screen_texture, filter_nearest, repeat_disable;
 uniform sampler2D depth_texture : hint_depth_texture, filter_nearest, repeat_disable;
@@ -68,8 +70,10 @@ void fragment() {
 	vec3 to_sun = normalize(sky_sun_direction);
 	vec3 inscatter = underwater_path_light(direction, camera_depth, path, underwater_irradiance, to_sun, sky_sun_visibility);
 
-	// Light shafts: the waves above focus the sun's light unevenly.
-	inscatter += underwater_shafts(CAMERA_POSITION_WORLD, direction, path, underwater_irradiance, to_sun, sky_sun_visibility,
+	// Light shafts: the waves above focus the sun's light unevenly. Rays that climb to the
+	// surface are drawn over by it (its own pass adds their shafts).
+	if (direction.y <= 0.0 || path < camera_depth / max(direction.y, 1e-4))
+		inscatter += underwater_shafts(CAMERA_POSITION_WORLD, direction, path, underwater_irradiance, to_sun, sky_sun_visibility,
 			2.0 / (abs(PROJECTION_MATRIX[1][1]) * VIEWPORT_SIZE.y), interleaved_gradient_noise(FRAGCOORD.xy));
 
 	// Unshaded ALBEDO is not exposed by Godot: the scene behind is (it was lit exposed).

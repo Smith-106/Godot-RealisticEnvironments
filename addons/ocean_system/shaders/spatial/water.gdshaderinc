@@ -167,6 +167,8 @@ uniform float scene_exposure = 1.0;
 // Irradiance on a level surface just above the water (scene units, unexposed), for the
 // water's own light seen from below (underwater_path_light()). Set by OceanSystem.
 uniform vec3 underwater_irradiance = vec3(3.14159);
+// Steps of the underwater light-shaft march (OceanSystem.shader_quality; 0: no shafts).
+uniform int underwater_shaft_steps = 6;
 uniform bool planar_reflection_enabled = false;
 // Screen-space reflections (OceanSystem.reflection_mode): the reflected ray is marched
 // against the opaque scene the camera already drew (scene_color, scene_depth).

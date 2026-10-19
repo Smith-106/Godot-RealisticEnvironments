@@ -38,6 +38,8 @@ const WATER_SHADERS : Array[Shader] = [
 const EDITOR_WATER_PREVIEW_MESH := preload('res://addons/ocean_system/editor_water_preview_mesh.tres')
 const OceanReflectionRenderer := preload('res://addons/ocean_system/ocean_reflection_renderer.gd')
 const UNDERWATER_SHADER := preload('res://addons/ocean_system/shaders/spatial/underwater.gdshader')
+## Steps of the underwater light-shaft march per ShaderQuality (Low, Medium, High).
+const UNDERWATER_SHAFT_STEPS : Array[int] = [0, 4, 6]
 const MAX_CASCADES := 8
 ## The FFT sizes simulation_map_size accepts (fft_compute.glsl has one version each).
 const SIMULATION_MAP_SIZES : Array[int] = [128, 256, 512, 1024]
@@ -391,7 +393,7 @@ const _FOAM_DRIFT_WIND_SHARE := 0.03
 ## the crest light march, the planar reflection search and the normal maps'
 ## anisotropic filtering; Low shortens them further and compiles out caustics and
 ## planet glints. Only applies when water_material uses the stock water shader (one
-## of WATER_SHADERS).
+## of WATER_SHADERS). Underwater, the light shafts take 6, 4 or no march steps.
 @export var shader_quality := ShaderQuality.HIGH :
 	set(value):
 		shader_quality = clampi(value, ShaderQuality.LOW, ShaderQuality.HIGH) as ShaderQuality
@@ -615,6 +617,7 @@ func _is_running() -> bool:
 ## Pushes every shader parameter this node owns into the current water material.
 func _push_all_shader_parameters() -> void:
 	_set_water_shader_parameter(&'water_level', water_level)
+	_set_water_shader_parameter(&'underwater_shaft_steps', UNDERWATER_SHAFT_STEPS[shader_quality])
 	_set_water_shader_parameter(&'water_absorption', water_absorption)
 	_set_water_shader_parameter(&'water_scattering', water_scattering)
 	_set_water_shader_parameter(&'water_scattering_anisotropy', water_scattering_anisotropy)

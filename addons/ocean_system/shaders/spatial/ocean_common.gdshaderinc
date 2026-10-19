@@ -3,7 +3,7 @@
 // uniforms these read (with the water shader's names, so OceanSystem sets both alike):
 // water_absorption, water_scattering, water_scattering_anisotropy, normal_scale,
 // fragment_cascade_limit, num_cascades, map_scales, spectrum_blend_states,
-// wave_frame_blends, normals_a, normals_b, water_level.
+// wave_frame_blends, normals_a, normals_b, water_level, underwater_shaft_steps.
 
 #define WATER_IOR 1.333
 // Scattering by water molecules (1/m; Morel: 0.00193 (550 nm / lambda)^4.32 at the sRGB
@@ -152,11 +152,57 @@ vec3 underwater_path_light(vec3 direction, float depth, float path, vec3 irradia
 	return irradiance * exp(-downwelling * depth) * source * integral;
 }
 
-// Steps of the light-shaft march (underwater_shafts()), and how far it goes (m): the waves'
-// focus blurs out with depth (the sun's disk and the mixing of the slopes), so far shafts
-// are even light.
-#define SHAFT_STEPS 8
-#define SHAFT_DISTANCE 30.0
+// How far the light-shaft march goes (m; underwater_shafts(), in underwater_shaft_steps
+// jittered steps): the waves' focus blurs out with depth (the sun's disk and the mixing
+// of the slopes), so far shafts are even light.
+#define SHAFT_DISTANCE 25.0
+// Below this share of the water's light along a ray (green), the sun's single scattering
+// (and so its shafts) is too faint to see: shafts fade out from twice it and are skipped.
+#define SHAFT_MIN_SUN_SHARE 0.1
+
+/*
+ * caustic_focus() for the light shafts, cheaper: the blur (mixing included) comes from
+ * the caller, the Hessian is differenced forward from the nearer of each cascade's two
+ * FFT frames and its active spectrum only (3 reads per cascade, not 8 or more: the
+ * shafts step with the FFT's updates, too slowly to see), and cascades whose waves the
+ * blur averages away (it spans a quarter of their tile) are skipped.
+ */
+float caustic_focus_shaft(vec2 entry_rest, float path, float k, float blur) {
+	float map_size = float(textureSize(normals_a, 0).x);
+	mat2 hessian = mat2(0.0);
+	uint cascade_count = min(uint(num_cascades), uint(fragment_cascade_limit));
+	for (uint i = 0U; i < cascade_count; ++i) {
+		vec4 scales = map_scales[i];
+		float tile = 1.0 / max(scales.x, scales.y);
+		if (blur > 0.25 * tile) {
+			continue;
+		}
+		float texel = tile / map_size;
+		float e = max(blur, texel);
+		float lod = log2(e / texel);
+		// The nearer of the cascade's two FFT frames only (active spectrum).
+		vec3 coords = vec3(entry_rest * scales.xy, spectrum_blend_states[i].x);
+		float weight = spectrum_blend_states[i].z;
+		vec2 dx = vec2(e * scales.x, 0.0);
+		vec2 dz = vec2(0.0, e * scales.y);
+		vec2 center;
+		vec2 slope_x;
+		vec2 slope_z;
+		if (wave_frame_blends[i].x < 0.5) {
+			center = textureLod(normals_a, coords, lod).xy;
+			slope_x = textureLod(normals_a, coords + vec3(dx, 0.0), lod).xy;
+			slope_z = textureLod(normals_a, coords + vec3(dz, 0.0), lod).xy;
+		} else {
+			center = textureLod(normals_b, coords, lod).xy;
+			slope_x = textureLod(normals_b, coords + vec3(dx, 0.0), lod).xy;
+			slope_z = textureLod(normals_b, coords + vec3(dz, 0.0), lod).xy;
+		}
+		hessian[0] += (slope_x - center) * weight / e;
+		hessian[1] += (slope_z - center) * weight / e;
+	}
+	mat2 jacobian = mat2(1.0) - path * k * normal_scale * hessian;
+	return inversesqrt(determinant(jacobian) * determinant(jacobian) + CAUSTIC_SOFTENING * CAUSTIC_SOFTENING);
+}
 
 /* Per-pixel jitter in [0, 1) (interleaved gradient noise, Jimenez 2014). */
 float interleaved_gradient_noise(vec2 pixel) {
@@ -168,23 +214,38 @@ float interleaved_gradient_noise(vec2 pixel) {
  * (caustic_focus()), so its single scattering along an underwater ray (from origin, in
  * direction, `path` meters long) is uneven. Returns what that adds to its mean (in
  * underwater_path_light()), unexposed: marched over the near SHAFT_DISTANCE meters in
- * SHAFT_STEPS jittered steps. The shafts are blurred across by the sun's disk over the
- * light's path and by the pixel (pixel_angle, rad) over the distance. water_level: the
- * includer's uniform.
+ * underwater_shaft_steps jittered steps (0: none). The shafts are blurred across by the sun's disk over the
+ * light's path and by the pixel (pixel_angle, rad) over the distance, and by the mixing
+ * of the slopes (caustic_focus()), estimated once at the march's middle and scaled with
+ * the light's path. water_level: the includer's uniform.
  */
 vec3 underwater_shafts(vec3 origin, vec3 direction, float path, vec3 irradiance, vec3 to_sun, float sun_visibility, float pixel_angle, float jitter) {
 	vec3 sun_in_water;
 	vec3 sun_source = underwater_sun_source(direction, to_sun, sun_visibility, sun_in_water);
-	if (sun_source == vec3(0.0) || num_cascades == 0) {
+	if (sun_source == vec3(0.0) || num_cascades == 0 || underwater_shaft_steps <= 0) {
 		return vec3(0.0);
 	}
 	vec3 attenuation = water_absorption + water_scattering + WATER_MOLECULAR_SCATTERING;
 	vec3 downwelling = (water_absorption + water_backscattering()) / WATER_DOWNWELLING_MEAN_COSINE;
+	// Looking away from the sun its forward lobe sends little light: skip what cannot show.
+	float diffuse_source = (water_subsurface_reflectance() * (attenuation + downwelling)).g;
+	float sun_share = sun_source.g / max(sun_source.g + diffuse_source, 1e-8);
+	float visible = smoothstep(SHAFT_MIN_SUN_SHARE, 2.0 * SHAFT_MIN_SUN_SHARE, sun_share);
+	if (visible <= 0.0) {
+		return vec3(0.0);
+	}
 	float cos_t = max(sun_in_water.y, 0.05);
 	float k = 1.0 - to_sun.y / (WATER_IOR * cos_t);
-	float step_length = min(path, SHAFT_DISTANCE) / float(SHAFT_STEPS);
+	float step_length = min(path, SHAFT_DISTANCE) / float(underwater_shaft_steps);
+	// The mixing blur per meter of the light's path, at the march's middle.
+	vec3 middle = origin + direction * (0.5 * step_length * float(underwater_shaft_steps));
+	float middle_path = max(water_level - middle.y, 0.1) / cos_t;
+	vec2 middle_entry = middle.xz + sun_in_water.xz * middle_path;
+	float mixing = middle_path * k * sqrt(slope_variance_within(middle_entry, 1.0e6));
+	mixing = middle_path * k * sqrt(slope_variance_within(middle_entry, max(mixing, SUN_ANGULAR_DIAMETER * middle_path)));
+	float mixing_per_meter = mixing / middle_path;
 	vec3 shafts = vec3(0.0);
-	for (int i = 0; i < SHAFT_STEPS; ++i) {
+	for (int i = 0; i < underwater_shaft_steps; ++i) {
 		float t = (float(i) + jitter) * step_length;
 		vec3 point = origin + direction * t;
 		float point_depth = water_level - point.y;
@@ -195,8 +256,8 @@ vec3 underwater_shafts(vec3 origin, vec3 direction, float path, vec3 irradiance,
 		// Where the light reaching this point entered (rest position: the waves'
 		// horizontal displacement is left out).
 		vec2 entry = point.xz + sun_in_water.xz * sun_path;
-		float focus = caustic_focus(entry, sun_path, k, max(SUN_ANGULAR_DIAMETER * sun_path, pixel_angle * t));
+		float focus = caustic_focus_shaft(entry, sun_path, k, max(max(SUN_ANGULAR_DIAMETER, mixing_per_meter) * sun_path, pixel_angle * t));
 		shafts += exp(-downwelling * point_depth - attenuation * t) * (focus - 1.0) * step_length;
 	}
-	return irradiance * sun_source * shafts;
+	return irradiance * sun_source * shafts * visible;
 }
