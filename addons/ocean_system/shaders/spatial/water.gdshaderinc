@@ -268,9 +268,14 @@ float atmosphere_light_azimuth_x(vec3 direction) {
 	return acos(clamp(cos_phi, -1.0, 1.0)) / PI;
 }
 
-/* The haze lobe's Henyey-Greenstein phase toward direction (1/sr). */
-float atmosphere_lobe_phase(vec3 direction) {
-	float g = sky_atmosphere_light.w;
+/*
+ * The haze lobe's Henyey-Greenstein phase toward direction (1/sr), averaged over directions
+ * spreading by sigma radians per axis around it (a rough reflection's lobe). Spherical
+ * convolution multiplies Legendre coefficients (g^l for Henyey-Greenstein); matching the
+ * first, the spread's mean cosine exp(-sigma^2), gives a Henyey-Greenstein lobe again.
+ */
+float atmosphere_lobe_phase(vec3 direction, float sigma) {
+	float g = sky_atmosphere_light.w * exp(-sigma * sigma);
 	float denominator = 1.0 + g * g - 2.0 * g * dot(direction, sky_atmosphere_light.xyz);
 	return (1.0 - g * g) / (4.0 * PI * denominator * sqrt(denominator));
 }
@@ -283,7 +288,7 @@ float atmosphere_lobe_phase(vec3 direction) {
  * atmosphere.gdshaderinc) for an observer at altitude 0, whose horizon is level.
  * Change them together.
  */
-void atmosphere_sea_lookup(vec3 direction, float slice, out vec3 transmittance, out vec3 inscatter) {
+void atmosphere_sea_volumes(vec3 direction, float slice, out vec3 transmittance, out vec3 inscatter, out vec3 lobe) {
 	vec3 size = vec3(textureSize(sky_atmosphere_transmittance, 0));
 	float x = atmosphere_light_azimuth_x(direction);
 	// Zenith angle over the half-turn from the zenith to the level horizon, squeezed
@@ -292,7 +297,15 @@ void atmosphere_sea_lookup(vec3 direction, float slice, out vec3 transmittance, 
 	float y = zenith < 1.0 ? 0.5 * (1.0 - sqrt(1.0 - zenith)) : 0.5 + 0.5 * sqrt(min(zenith - 1.0, 1.0));
 	vec3 uvw = vec3(0.5 / size.x + x * (1.0 - 1.0 / size.x), clamp(y, 0.5 / size.y, 1.0 - 0.5 / size.y), (slice + 0.5) / size.z);
 	transmittance = textureLod(sky_atmosphere_transmittance, uvw, 0.0).rgb;
-	inscatter = textureLod(sky_atmosphere_inscatter, uvw, 0.0).rgb + textureLod(sky_atmosphere_inscatter_lobe, uvw, 0.0).rgb * atmosphere_lobe_phase(direction);
+	inscatter = textureLod(sky_atmosphere_inscatter, uvw, 0.0).rgb;
+	lobe = textureLod(sky_atmosphere_inscatter_lobe, uvw, 0.0).rgb;
+}
+
+/* atmosphere_sea_volumes() with the lobe's phase applied, blurred by sigma (atmosphere_lobe_phase()). */
+void atmosphere_sea_lookup(vec3 direction, float slice, float sigma, out vec3 transmittance, out vec3 inscatter) {
+	vec3 lobe;
+	atmosphere_sea_volumes(direction, slice, transmittance, inscatter, lobe);
+	inscatter += lobe * atmosphere_lobe_phase(direction, sigma);
 }
 
 /*
@@ -321,7 +334,7 @@ vec4 aerial_perspective_fog(vec3 position) {
 	float slice = sqrt(clamp(distance / aerial_max_distance, 0.0, 1.0)) * (size.z - 2.0);
 	vec3 uvw = vec3(0.5 / size.x + atmosphere_light_azimuth_x(direction) * (1.0 - 1.0 / size.x), clamp(y, 0.5 / size.y, 1.0 - 0.5 / size.y), (slice + 0.5) / size.z);
 	vec3 transmittance = textureLod(aerial_transmittance, uvw, 0.0).rgb;
-	vec3 inscatter = textureLod(aerial_inscatter, uvw, 0.0).rgb + textureLod(aerial_inscatter_lobe, uvw, 0.0).rgb * atmosphere_lobe_phase(direction);
+	vec3 inscatter = textureLod(aerial_inscatter, uvw, 0.0).rgb + textureLod(aerial_inscatter_lobe, uvw, 0.0).rgb * atmosphere_lobe_phase(direction, 0.0);
 	float opacity = 1.0 - dot(transmittance, vec3(1.0 / 3.0));
 	return opacity > 1e-5 ? vec4(inscatter / opacity, opacity) : vec4(0.0);
 }
@@ -539,16 +552,17 @@ vec3 sample_stars(vec3 direction, float roughness) {
 
 /*
  * The sky without clouds in direction, from the sky source's atmosphere when it has one
- * (the in-scatter at the ray's end), else from the gradient.
+ * (sky: the in-scatter at the ray's end but the haze lobe; lobe: the lobe's per unit
+ * phase), else from the gradient (no lobe).
  */
-vec3 sample_clear_sky(vec3 direction) {
+void sample_clear_sky(vec3 direction, out vec3 sky, out vec3 lobe) {
+	lobe = vec3(0.0);
 	if (sky_atmosphere_enabled) {
 		vec3 transmittance;
-		vec3 inscatter;
-		atmosphere_sea_lookup(direction, 1.0, transmittance, inscatter);
-		return inscatter;
+		atmosphere_sea_volumes(direction, 1.0, transmittance, sky, lobe);
+		return;
 	}
-	return sample_sky_gradient(direction) * scene_exposure;
+	sky = sample_sky_gradient(direction) * scene_exposure;
 }
 
 /*
@@ -557,33 +571,42 @@ vec3 sample_clear_sky(vec3 direction) {
  * per axis (as for the clouds, sample_clouds()), by the 4-point Gaussian cubature
  * (+-sqrt(2) sigma along the elevation and the azimuth, weights 1/4: exact for skies that
  * vary up to cubically across the lobe). Directions below the horizon are mirrored up, as
- * the reflection is. The clouds and the stars are prefiltered (cubemap mips) and read
- * once; star_weight scales the stars (the share the planar reflection does not bring).
+ * the reflection is. The haze lobe's phase around the light is far sharper than the
+ * 4 points resolve (each would reflect its own copy of the glow around a low sun, strips
+ * beside the real sun path): only its smooth in-scatter volume goes through the cubature,
+ * and its phase is blurred analytically (atmosphere_lobe_phase()). The clouds and the
+ * stars are prefiltered (cubemap mips) and read once; star_weight scales the stars (the
+ * share the planar reflection does not bring).
  */
 vec3 sample_rough_procedural_environment(vec3 direction, float roughness, float star_weight) {
 	float rough = saturate(roughness);
 	float sigma = 1.41421356 * rough * rough;
-	vec3 sky;
+	vec3 sky = vec3(0.0);
+	vec3 lobe = vec3(0.0);
 	if (sigma < 0.005) {
-		sky = sample_clear_sky(direction);
+		sample_clear_sky(direction, sky, lobe);
 	} else {
 		vec3 elevation_axis = safe_normalize_vec3(vec3(0.0, 1.0, 0.0) - direction * direction.y, vec3(0.0, 0.0, 1.0));
 		vec3 azimuth_axis = cross(direction, elevation_axis);
 		float offset = tan(min(1.41421356 * sigma, 1.2));
-		sky = vec3(0.0);
 		for (int i = 0; i < 4; ++i) {
 			vec3 axis = i < 2 ? elevation_axis : azimuth_axis;
 			vec3 sample_direction = normalize(direction + axis * (i % 2 == 0 ? offset : -offset));
 			sample_direction.y = abs(sample_direction.y);
-			sky += sample_clear_sky(sample_direction) * 0.25;
+			vec3 sample_sky;
+			vec3 sample_lobe;
+			sample_clear_sky(sample_direction, sample_sky, sample_lobe);
+			sky += sample_sky * 0.25;
+			lobe += sample_lobe * 0.25;
 		}
 	}
+	sky += lobe * atmosphere_lobe_phase(direction, sigma);
 	// The stars lie beyond the atmosphere, dimmed by it along the whole ray.
 	vec3 stars = star_weight > 0.0 ? sample_stars(direction, rough) * star_weight : vec3(0.0);
 	if (sky_atmosphere_enabled && stars != vec3(0.0)) {
 		vec3 transmittance_end;
 		vec3 inscatter_end;
-		atmosphere_sea_lookup(direction, 1.0, transmittance_end, inscatter_end);
+		atmosphere_sea_lookup(direction, 1.0, 0.0, transmittance_end, inscatter_end);
 		stars *= transmittance_end;
 	}
 	sky += stars;
@@ -599,7 +622,7 @@ vec3 sample_rough_procedural_environment(vec3 direction, float roughness, float 
 	// them, the rest of the sky (sky less that air's in-scatter) behind.
 	vec3 transmittance_cloud;
 	vec3 inscatter_cloud;
-	atmosphere_sea_lookup(cloud_direction, 0.0, transmittance_cloud, inscatter_cloud);
+	atmosphere_sea_lookup(cloud_direction, 0.0, sigma, transmittance_cloud, inscatter_cloud);
 	return inscatter_cloud + transmittance_cloud * cloud.rgb + (1.0 - cloud.a) * (sky - inscatter_cloud);
 }
 
@@ -1034,7 +1057,7 @@ vec3 sky_point_glints(vec3 normal, vec3 view, float roughness) {
 		if (sky_atmosphere_enabled) {
 			vec3 transmittance;
 			vec3 inscatter;
-			atmosphere_sea_lookup(direction, 1.0, transmittance, inscatter);
+			atmosphere_sea_lookup(direction, 1.0, 0.0, transmittance, inscatter);
 			irradiance *= transmittance;
 		}
 		irradiance *= 1.0 - sample_clouds(direction, 0.0).a;
