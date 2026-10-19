@@ -696,7 +696,6 @@ func _ensure_debug_nodes() -> void:
 	_update_debug_materials()
 	_update_debug_visibility()
 
-
 func _update_debug_visibility() -> void:
 	if _debug_mesh_instance != null:
 		_debug_mesh_instance.visible = debug_enabled
