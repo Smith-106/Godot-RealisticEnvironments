@@ -156,7 +156,8 @@ func get_adapted_illuminance() -> float:
 
 
 func _process(delta : float) -> void:
-	if _attributes == null:
+	# A freed light source leaves the exposure where it was.
+	if _attributes == null or not is_instance_valid(_light_source):
 		return
 	var lux : float = _light_source.get_scene_illuminance()
 	if lux < 0.0 or is_nan(lux):

@@ -428,8 +428,8 @@ func _init() -> void:
 
 func _ready() -> void:
 	_check_project_settings()
-	if not Engine.is_editor_hint():
-		_ensure_unique_runtime_resources()
+	if _get_sky_material() == null:
+		push_error("SkySystem %s: its WorldEnvironment has no Sky with a ShaderMaterial (keep sky_system.tscn's); the sky stays empty." % get_path())
 	_setup_starfield()
 	if cloud_preset:
 		_cloud_state = cloud_preset.duplicate()
@@ -490,6 +490,8 @@ func _enter_tree() -> void:
 	if is_node_ready():
 		_setup_atmosphere()
 		_setup_clouds()
+	elif not Engine.is_editor_hint():
+		_make_runtime_resources_unique()
 
 
 func _exit_tree() -> void:
@@ -525,14 +527,30 @@ func _process(delta : float) -> void:
 		_process_atmosphere()
 
 
-func _ensure_unique_runtime_resources() -> void:
-	if _world_environment and _world_environment.environment:
-		_world_environment.environment = _world_environment.environment.duplicate()
-		var environment := _world_environment.environment
+## Gives this sky its own copies of the resources it writes at runtime: every instance
+## of sky_system.tscn shares its sub-resources, so two skies would otherwise drive one
+## sky material and one set of compositor effects. Runs on the first _enter_tree(),
+## before any node's _ready() can read them (an ExposureController adds its effects to
+## this compositor there).
+func _make_runtime_resources_unique() -> void:
+	var world_environment : WorldEnvironment = get_node_or_null(^"WorldEnvironment")
+	if world_environment == null:
+		return
+	var environment := world_environment.environment
+	if environment:
+		environment = environment.duplicate()
+		world_environment.environment = environment
 		if environment.sky:
 			environment.sky = environment.sky.duplicate()
 			if environment.sky.sky_material:
 				environment.sky.sky_material = environment.sky.sky_material.duplicate()
+	if world_environment.compositor:
+		var compositor : Compositor = world_environment.compositor.duplicate()
+		var effects : Array[CompositorEffect] = []
+		for effect in compositor.compositor_effects:
+			effects.push_back(effect.duplicate() if effect else null)
+		compositor.compositor_effects = effects
+		world_environment.compositor = compositor
 
 
 ## World direction toward the sun (unit vector; y < 0 below the horizon).
@@ -703,10 +721,14 @@ func _update_lighting_state() -> void:
 	_sun_visibility = _disk_above_horizon(_sun_direction.y, SUN_ANGULAR_RADIUS)
 	_moon_visibility = _disk_above_horizon(_moon_direction.y, MOON_ANGULAR_RADIUS)
 	_update_haze_medium()
-	_sun_transmittance = _get_body_transmittance(_sun_direction, SUN_ANGULAR_RADIUS, true)
-	_moon_transmittance = _get_body_transmittance(_moon_direction, MOON_ANGULAR_RADIUS, true)
-	_sun_color = _light_color(_get_atmosphere_transmittance(0.0, _above_horizon(_sun_direction), true))
-	_moon_color = _light_color(_get_atmosphere_transmittance(0.0, _above_horizon(_moon_direction), true))
+	# The light's colour is the transmittance's (taken at the horizon while the body
+	# sets), its strength also the share of the disk above the horizon.
+	var sun_transmittance := _get_atmosphere_transmittance(0.0, _above_horizon(_sun_direction), true)
+	var moon_transmittance := _get_atmosphere_transmittance(0.0, _above_horizon(_moon_direction), true)
+	_sun_transmittance = sun_transmittance * _sun_visibility
+	_moon_transmittance = moon_transmittance * _moon_visibility
+	_sun_color = _light_color(sun_transmittance)
+	_moon_color = _light_color(moon_transmittance)
 	# The disks are drawn in space: the sky's view volume dims them by the whole
 	# atmosphere along each view ray, per colour (dimming them here as well counted the
 	# air twice).
@@ -744,6 +766,10 @@ func _update_sky() -> void:
 	else:
 		_update_haze_lighting(_moon_direction, moon_energy, _sun_direction, sun_energy)
 	_update_environment(_sun_direction, _moon_direction, _sun_visibility, _moon_visibility)
+	if _starfield_material:
+		_starfield_material.set_shader_parameter(&"planet_directions", _planet_directions)
+		_starfield_material.set_shader_parameter(&"planet_light", _planet_lux)
+		_starfield_material.set_shader_parameter(&"sea_level", sea_level)
 	_push_atmosphere_parameters()
 	lighting_changed.emit()
 
@@ -797,16 +823,6 @@ static func _level_irradiance(energy : float, transmittance : Color, direction :
 
 static func _luminance(color : Color) -> float:
 	return Vector3(color.r, color.g, color.b).dot(LUMINANCE_WEIGHTS)
-
-
-## Share of a sun's or moon's light that reaches the sea, per channel: the
-## atmosphere's transmittance (taken at the horizon while the body sets) times the
-## share of its disk above the horizon.
-func _get_body_transmittance(direction : Vector3, angular_radius : float, with_haze : bool) -> Color:
-	var visible_share := _disk_above_horizon(direction.y, angular_radius)
-	if visible_share <= 0.0:
-		return Color.BLACK
-	return _get_atmosphere_transmittance(0.0, _above_horizon(direction), with_haze) * visible_share
 
 
 ## Share of a disk of angular_radius whose centre's elevation has sine height that is
@@ -958,6 +974,12 @@ func _push_atmosphere_parameters() -> void:
 		cloud_effect.sea_level = sea_level
 
 
+## The WorldEnvironment's sky material (null, reported in _ready(), without one).
+func _get_sky_material() -> ShaderMaterial:
+	var environment := _world_environment.environment if _world_environment else null
+	return environment.sky.sky_material as ShaderMaterial if environment and environment.sky else null
+
+
 func _get_aerial_perspective_effect() -> AerialPerspectiveEffect:
 	if _world_environment == null or _world_environment.compositor == null:
 		return null
@@ -990,12 +1012,9 @@ func _update_light(light : DirectionalLight3D, direction : Vector3, energy : flo
 ## The sky material's lights. The environment's ambient light is the sky's radiance
 ## map as rendered (energy 1): the atmosphere and the clouds set its brightness.
 func _update_environment(sun_direction : Vector3, moon_direction : Vector3, sun_visibility : float, moon_visibility : float) -> void:
-	if _world_environment == null or _world_environment.environment == null:
+	var shader_material := _get_sky_material()
+	if shader_material == null:
 		return
-	var environment := _world_environment.environment
-	if environment.sky == null or not environment.sky.sky_material is ShaderMaterial:
-		return
-	var shader_material := environment.sky.sky_material as ShaderMaterial
 	shader_material.set_shader_parameter(&"sun_direction", sun_direction)
 	shader_material.set_shader_parameter(&"sun_disk_direction", _sun_true_direction)
 	shader_material.set_shader_parameter(&"moon_disk_direction", _moon_true_direction)
@@ -1198,9 +1217,6 @@ func _update_starfield() -> void:
 	_starfield_material.set_shader_parameter(&"illuminance_scale", star_brightness * _exposure / get_illuminance_unit_lux() * _get_star_gain())
 	_starfield_material.set_shader_parameter(&"scintillation", _cloud_state.star_scintillation if _cloud_state else DEFAULT_STAR_SCINTILLATION)
 	_starfield_material.set_shader_parameter(&"time", fposmod(_elapsed_time, STAR_TIME_PERIOD))
-	_starfield_material.set_shader_parameter(&"planet_directions", _planet_directions)
-	_starfield_material.set_shader_parameter(&"planet_light", _planet_lux)
-	_starfield_material.set_shader_parameter(&"sea_level", sea_level)
 
 
 func _get_solar_equatorial_coordinates() -> Vector2:
@@ -1338,13 +1354,6 @@ func _get_look_up(direction : Vector3) -> Vector3:
 	return Vector3.FORWARD if absf(direction.dot(Vector3.UP)) > 0.98 else Vector3.UP
 
 
-func _get_active_camera() -> Camera3D:
-	var viewport := get_viewport()
-	if viewport == null:
-		return null
-	return viewport.get_camera_3d()
-
-
 func _setup_clouds() -> void:
 	_release_clouds()
 	if clouds_enabled:
@@ -1448,9 +1457,12 @@ func _process_clouds(delta : float) -> void:
 ## mirrored camera); with a VolumetricCloudEffect neither draws them over the camera's
 ## own view.
 func _push_cloud_material_parameters() -> void:
+	var sky_material := _get_sky_material()
+	if sky_material == null or _starfield_material == null:
+		return
 	var enabled := _cloud_renderer != null
 	var screen_clouds := enabled and _get_cloud_effect() != null
-	var sky_rid := _world_environment.environment.sky.sky_material.get_rid()
+	var sky_rid := sky_material.get_rid()
 	var starfield_rid := _starfield_material.get_rid()
 	RenderingServer.material_set_param(sky_rid, &"cloud_cubemap", _cloud_renderer.camera_cubemap.get_rid() if enabled else RID())
 	RenderingServer.material_set_param(starfield_rid, &"cloud_cubemap", _cloud_renderer.sea_cubemap.get_rid() if enabled else RID())
@@ -1596,8 +1608,9 @@ func _get_atmosphere_observer_altitude() -> float:
 ## it change. Re-sending a sky parameter makes it render the radiance map again.
 func _refresh_sky_radiance() -> void:
 	_radiance_observer_altitude = _get_atmosphere_observer_altitude()
-	var material := _world_environment.environment.sky.sky_material
-	RenderingServer.material_set_param(material.get_rid(), &"sun_direction", _sun_direction)
+	var material := _get_sky_material()
+	if material:
+		RenderingServer.material_set_param(material.get_rid(), &"sun_direction", _sun_direction)
 
 
 ## The clouds use cloud_wind_speed / cloud_wind_direction while there is no valid source.
@@ -1613,7 +1626,7 @@ func _resolve_cloud_wind_source() -> void:
 
 
 func _get_cloud_wind_velocity() -> Vector2:
-	if _cloud_wind_source:
+	if is_instance_valid(_cloud_wind_source):
 		return WindSource.get_velocity(_cloud_wind_source) * cloud_wind_speed_multiplier
 	return WindSource.direction_to_vector(cloud_wind_direction) * cloud_wind_speed
 
@@ -1627,4 +1640,5 @@ func _get_cloud_camera_position() -> Vector3:
 func _get_render_camera() -> Camera3D:
 	if Engine.is_editor_hint():
 		return Engine.get_singleton(&"EditorInterface").get_editor_viewport_3d(0).get_camera_3d()
-	return _get_active_camera()
+	var viewport := get_viewport()
+	return viewport.get_camera_3d() if viewport else null

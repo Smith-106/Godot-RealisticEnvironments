@@ -234,12 +234,12 @@ const _FOAM_DRIFT_WIND_SHARE := 0.03
 @export_color_no_alpha var manual_sky_top_color : Color = Color(0.12, 0.42, 0.78) :
 	set(value):
 		manual_sky_top_color = value
-		_update_sky_lighting_shader_parameters()
+		_update_manual_sky_shader_parameters()
 ## Horizon colour of that sky.
 @export_color_no_alpha var manual_sky_horizon_color : Color = Color(0.58, 0.78, 0.94) :
 	set(value):
 		manual_sky_horizon_color = value
-		_update_sky_lighting_shader_parameters()
+		_update_manual_sky_shader_parameters()
 ## Direction toward the sun (world space) without a sky source.
 @export var manual_sun_direction := Vector3(0.0, 0.2, -1.0) :
 	set(value):
@@ -463,7 +463,8 @@ var _wave_generator : WaveGenerator
 ## they were made for (_update_cascade_states()).
 var _cascade_states : Array[WaveCascadeState] = []
 var _cascade_state_owners : Array[WaveCascade] = []
-## Resolved node of wind_source_path (null without a valid one).
+## Resolved node of wind_source_path (null without a valid one; the spectrum's wind
+## takes over if it is freed).
 var _wind_source : Node
 ## Resolved node of sky_source_path (null without one).
 var _sky_source : Node
@@ -498,7 +499,7 @@ var _has_wave_output := false
 ## Whether the spectrum's peak wave has been reported as too long for the largest tile
 ## (_check_peak_wavelength()); cleared once it fits again, so it is reported once per episode.
 var _peak_wavelength_reported := false
-## This frame's cascade records for the compute shaders (_pack_cascade_data()),
+## This frame's cascade records for the compute shaders (_update_cascade_uniforms()),
 ## shared by the surface queries and the interaction simulation's ticks.
 var _cascade_data := PackedByteArray()
 var _reflection_renderer : OceanReflectionRenderer
@@ -560,7 +561,7 @@ func _process(delta : float) -> void:
 	if _sky_source_polled or _sky_lighting_dirty:
 		_update_sky_lighting_shader_parameters()
 	if _aerial_perspective_enabled:
-		_set_water_shader_parameter(&'aerial_observer', _sky_source.call(&'get_atmosphere_view_observer'))
+		_set_water_shader_parameter(&'aerial_observer', _read_sky(&'get_atmosphere_view_observer', Vector4.ZERO))
 	_update_scene_exposure()
 	_update_underwater(camera)
 	_time += delta
@@ -570,7 +571,6 @@ func _process(delta : float) -> void:
 		_update_waves(delta)
 		_update_micro_roughness()
 		_update_cascade_uniforms()
-		_cascade_data = _pack_cascade_data()
 	_dispatch_surface_queries()
 
 ## The interaction simulation steps with physics: one step per tick sees exactly
@@ -590,12 +590,12 @@ func _physics_process(delta : float) -> void:
 
 ## Wind speed (m/s) the waves follow: the wind source's, else the spectrum's.
 func get_wind_speed() -> float:
-	return WindSource.get_speed(_wind_source) if _wind_source != null else spectrum.wind_speed
+	return WindSource.get_speed(_wind_source) if is_instance_valid(_wind_source) else spectrum.wind_speed
 
 ## Direction (degrees, 0 = +Z, 90 = +X) the waves' wind blows toward: the wind
 ## source's, else the spectrum's.
 func get_wind_direction_degrees() -> float:
-	return WindSource.get_direction(_wind_source) if _wind_source != null else spectrum.wind_direction
+	return WindSource.get_direction(_wind_source) if is_instance_valid(_wind_source) else spectrum.wind_direction
 
 ## The private duplicate of water_material the ocean renders with (the stock shader swapped
 ## for the shader_quality tier). Set your own shader parameters on it at runtime (e.g.
@@ -635,6 +635,7 @@ func _push_all_shader_parameters() -> void:
 	_set_water_shader_parameter(&'use_bicubic_normals', use_bicubic_normals)
 	_set_water_shader_parameter(&'scene_exposure', _scene_exposure)
 	_update_sky_lighting_shader_parameters()
+	_update_manual_sky_shader_parameters()
 	_lod_grid.set_cell_size(mesh_base_cell_size, true)
 	_bind_wave_textures()
 	_update_cascade_uniforms()
@@ -689,11 +690,13 @@ func _setup_wave_generator() -> void:
 			push_error("OceanSystem %s: the wave generator's GPU resources failed; the ocean is flat." % get_path())
 		else:
 			_wave_generator = generator
+	# Swapped in place, never through RID() (that frees the texture the material holds).
+	# Without a generator the material binds the flat maps instead.
 	var descriptors := _wave_generator.descriptors if _wave_generator != null else {}
-	_set_texture_rid(_displacement_maps_a, descriptors[&'displacement_map_a'].rid if _wave_generator != null else RID())
-	_set_texture_rid(_displacement_maps_b, descriptors[&'displacement_map_b'].rid if _wave_generator != null else RID())
-	_set_texture_rid(_normal_maps_a, descriptors[&'normal_map_a'].rid if _wave_generator != null else RID())
-	_set_texture_rid(_normal_maps_b, descriptors[&'normal_map_b'].rid if _wave_generator != null else RID())
+	_displacement_maps_a.texture_rd_rid = descriptors[&'displacement_map_a'].rid if _wave_generator != null else RID()
+	_displacement_maps_b.texture_rd_rid = descriptors[&'displacement_map_b'].rid if _wave_generator != null else RID()
+	_normal_maps_a.texture_rd_rid = descriptors[&'normal_map_a'].rid if _wave_generator != null else RID()
+	_normal_maps_b.texture_rd_rid = descriptors[&'normal_map_b'].rid if _wave_generator != null else RID()
 	_bind_wave_textures()
 	_update_cascade_uniforms()
 
@@ -704,7 +707,7 @@ func _bind_wave_textures() -> void:
 	var maps : Array[TextureLayered] = [_displacement_maps_a, _displacement_maps_b, _normal_maps_a, _normal_maps_b]
 	if _wave_generator == null:
 		maps.fill(_get_flat_wave_maps())
-	# Forced: the textures may hold new RenderingServer RIDs (_set_texture_rid()).
+	# Forced: a texture set from RID() gets a new RenderingServer RID.
 	_set_water_shader_parameter(&'displacements_a', maps[0], true)
 	_set_water_shader_parameter(&'displacements_b', maps[1], true)
 	_set_water_shader_parameter(&'normals_a', maps[2], true)
@@ -718,43 +721,32 @@ func _get_flat_wave_maps() -> Texture2DArray:
 		_flat_wave_maps.create_from_images([image])
 	return _flat_wave_maps
 
-## Points texture at the generator texture rid (or none). Cleared first, so it gets a
-## new RenderingServer texture: bind it again (forced) afterwards.
-func _set_texture_rid(texture: Texture2DArrayRD, rid: RID) -> void:
-	texture.texture_rd_rid = RID()
-	texture.texture_rd_rid = rid
-
 ## The per-cascade uniforms: tile scales and displacement_scale, the spectrum crossfade
-## and the A/B frame blend. Sent every frame; unchanged values are skipped.
+## and the A/B frame blend. Sent every frame; unchanged values are skipped. The same
+## values, as one record of three vec4s per cascade (OceanCascade in
+## ocean_sampling.glslinc, OceanSurfaceQueries.FLOATS_PER_CASCADE), are the compute
+## shaders' _cascade_data.
 func _update_cascade_uniforms() -> void:
 	var map_scales := PackedVector4Array()
 	var blend_states := PackedVector4Array()
 	var frame_blends := PackedVector4Array()
+	var records := PackedVector4Array()
+	records.resize(MAX_CASCADES * 3)
 	for i in cascades.size():
 		var uv_scale := 1.0 / cascades[i].tile_length
-		map_scales.push_back(Vector4(uv_scale, uv_scale, spectrum.displacement_scale, 0.0))
-		blend_states.push_back(_cascade_states[i].get_blend_state(i))
-		frame_blends.push_back(_get_cascade_frame_blend(i))
+		var map_scale := Vector4(uv_scale, uv_scale, spectrum.displacement_scale, 0.0)
+		var blend_state := _cascade_states[i].get_blend_state(i)
+		var frame_blend := _get_cascade_frame_blend(i)
+		map_scales.push_back(map_scale)
+		blend_states.push_back(blend_state)
+		frame_blends.push_back(frame_blend)
+		records[3 * i] = map_scale
+		records[3 * i + 1] = blend_state
+		records[3 * i + 2] = frame_blend
 	_set_water_shader_parameter(&'map_scales', map_scales)
 	_set_water_shader_parameter(&'spectrum_blend_states', blend_states)
 	_set_water_shader_parameter(&'wave_frame_blends', frame_blends)
-
-## Cascade records for the compute shaders, OceanSurfaceQueries.BYTES_PER_CASCADE each
-## (OceanCascade in ocean_sampling.glslinc): the uniforms of _update_cascade_uniforms().
-func _pack_cascade_data() -> PackedByteArray:
-	var floats := PackedFloat32Array()
-	floats.resize(MAX_CASCADES * OceanSurfaceQueries.FLOATS_PER_CASCADE)
-	for i in cascades.size():
-		var uv_scale := 1.0 / cascades[i].tile_length
-		var blend_state := _cascade_states[i].get_blend_state(i)
-		var frame_blend := _get_cascade_frame_blend(i)
-		var values := [uv_scale, uv_scale, spectrum.displacement_scale, 0.0,
-			blend_state.x, blend_state.y, blend_state.z, blend_state.w,
-			frame_blend.x, frame_blend.y, frame_blend.z, frame_blend.w]
-		var offset := i * OceanSurfaceQueries.FLOATS_PER_CASCADE
-		for j in values.size():
-			floats[offset + j] = values[j]
-	return floats.to_byte_array()
+	_cascade_data = records.to_byte_array()
 
 ## The water's micro-roughness for the shader's clear_roughness: GGX alpha squared
 ## is the slope variance (both axes) of what the cascades do not draw, the calm
@@ -884,13 +876,8 @@ func _apply_water_material() -> void:
 func _setup_interaction() -> void:
 	if not _is_running():
 		return
-	if _interaction != null:
-		_interaction_texture.texture_rd_rid = RID()
-		_interaction.release()
-		_interaction = null
-		_surface_queries.interaction = null
-		# Query uniform sets that referenced the old render texture are freed with it.
-		_surface_queries.clear_uniform_set_cache()
+	var previous := _interaction
+	_interaction = null
 	# The simulation follows the game camera and does not run in the editor.
 	if interaction_enabled and not Engine.is_editor_hint():
 		if interaction_grid_size not in [256, 512, 1024] or interaction_cell_size <= 0.0:
@@ -901,10 +888,15 @@ func _setup_interaction() -> void:
 				push_error("OceanSystem %s: the interaction simulation's GPU resources failed; it is off." % get_path())
 				_interaction.release()
 				_interaction = null
-	if _interaction != null:
-		_apply_interaction_settings()
-		_interaction_texture.texture_rd_rid = _interaction.render_texture
-		_surface_queries.interaction = _interaction
+	# Swapped in place before the old simulation is freed, never through RID() (that
+	# frees the texture the material holds).
+	_interaction_texture.texture_rd_rid = _interaction.render_texture if _interaction != null else RID()
+	_surface_queries.interaction = _interaction
+	if previous != null:
+		# Query uniform sets that referenced the old render texture are freed with it.
+		_surface_queries.clear_uniform_set_cache()
+		previous.release()
+	_apply_interaction_settings()
 	_push_interaction_shader_parameters()
 
 func _apply_interaction_settings() -> void:
@@ -992,11 +984,6 @@ func _update_sky_lighting_shader_parameters() -> void:
 		sun_direction = Vector3.UP
 	_set_water_shader_parameter(&'sky_sun_direction', sun_direction.normalized())
 	_set_water_shader_parameter(&'sky_sun_visibility', float(_read_sky(&'get_sun_visibility', manual_sun_visibility)))
-	# The sky reflected without an atmosphere.
-	_set_water_shader_parameter(&'sky_top_color', manual_sky_top_color)
-	_set_water_shader_parameter(&'sky_horizon_color', manual_sky_horizon_color)
-	_set_water_shader_parameter(&'sky_ground_horizon_color', manual_sky_horizon_color.darkened(0.25))
-	_set_water_shader_parameter(&'sky_ground_bottom_color', manual_sky_top_color.darkened(0.55))
 	var cloud_cubemap : Texture = _read_sky(&'get_cloud_cubemap', null)
 	_set_water_shader_parameter(&'sky_clouds_enabled', cloud_cubemap != null)
 	_set_water_shader_parameter(&'sky_cloud_cubemap', cloud_cubemap)
@@ -1037,12 +1024,20 @@ func _update_sky_lighting_shader_parameters() -> void:
 	_set_water_shader_parameter(&'aerial_inscatter', view_volumes[1] if _aerial_perspective_enabled else null)
 	_set_water_shader_parameter(&'aerial_inscatter_lobe', view_volumes[2] if _aerial_perspective_enabled else null)
 	if _aerial_perspective_enabled:
-		_set_water_shader_parameter(&'aerial_max_distance', _sky_source.call(&'get_atmosphere_view_max_distance'))
-		_set_water_shader_parameter(&'aerial_observer', _sky_source.call(&'get_atmosphere_view_observer'))
+		_set_water_shader_parameter(&'aerial_max_distance', _read_sky(&'get_atmosphere_view_max_distance', 0.0))
+		_set_water_shader_parameter(&'aerial_observer', _read_sky(&'get_atmosphere_view_observer', Vector4.ZERO))
 
-## What the sky source's method returns, or fallback without a source or that method.
+## The sky reflected without an atmosphere.
+func _update_manual_sky_shader_parameters() -> void:
+	_set_water_shader_parameter(&'sky_top_color', manual_sky_top_color)
+	_set_water_shader_parameter(&'sky_horizon_color', manual_sky_horizon_color)
+	_set_water_shader_parameter(&'sky_ground_horizon_color', manual_sky_horizon_color.darkened(0.25))
+	_set_water_shader_parameter(&'sky_ground_bottom_color', manual_sky_top_color.darkened(0.55))
+
+## What the sky source's method returns, or fallback without a source (or once it is
+## freed) or that method.
 func _read_sky(method : StringName, fallback : Variant) -> Variant:
-	if _sky_source != null and _sky_source.has_method(method):
+	if is_instance_valid(_sky_source) and _sky_source.has_method(method):
 		return _sky_source.call(method)
 	return fallback
 
@@ -1059,8 +1054,11 @@ func _resolve_wind_source() -> void:
 
 func _resolve_sky_source() -> void:
 	# A freed source was disconnected by the engine.
-	if is_instance_valid(_sky_source) and _sky_source.has_signal(&'lighting_changed') and _sky_source.is_connected(&'lighting_changed', _on_sky_lighting_changed):
-		_sky_source.disconnect(&'lighting_changed', _on_sky_lighting_changed)
+	if is_instance_valid(_sky_source):
+		if _sky_source.has_signal(&'lighting_changed') and _sky_source.is_connected(&'lighting_changed', _on_sky_lighting_changed):
+			_sky_source.disconnect(&'lighting_changed', _on_sky_lighting_changed)
+		if _sky_source.tree_exited.is_connected(_on_sky_lighting_changed):
+			_sky_source.tree_exited.disconnect(_on_sky_lighting_changed)
 	_sky_source = null if sky_source_path.is_empty() else get_node_or_null(sky_source_path)
 	if _sky_source == null and not sky_source_path.is_empty():
 		push_error("OceanSystem %s: sky_source_path %s not found; using the manual sky values." % [get_path(), sky_source_path])
@@ -1068,6 +1066,10 @@ func _resolve_sky_source() -> void:
 	_sky_source_polled = _sky_source != null and not signals_changes
 	if signals_changes:
 		_sky_source.connect(&'lighting_changed', _on_sky_lighting_changed)
+	# A source that leaves (or is freed) without a last lighting_changed: re-read it next
+	# frame, which falls back to the manual values once it is gone.
+	if _sky_source != null and not _sky_source.tree_exited.is_connected(_on_sky_lighting_changed):
+		_sky_source.tree_exited.connect(_on_sky_lighting_changed)
 
 func _on_sky_lighting_changed() -> void:
 	_sky_lighting_dirty = true
@@ -1185,12 +1187,9 @@ func _update_underwater(camera : Camera3D) -> void:
 ## Irradiance (scene units, unexposed) on a level surface just above the water: the sky
 ## source's light meter (sun, moon and sky), else a white light of energy 1 overhead.
 func _get_surface_irradiance() -> Vector3:
-	if _sky_source != null and _sky_source.has_method(&'get_scene_illuminance') and _sky_source.has_method(&'get_illuminance_unit_lux'):
-		var lux := float(_sky_source.call(&'get_scene_illuminance'))
-		var unit := float(_sky_source.call(&'get_illuminance_unit_lux'))
-		if lux >= 0.0 and unit > 0.0:
-			return Vector3.ONE * (lux / unit)
-	return Vector3.ONE * PI
+	var lux := float(_read_sky(&'get_scene_illuminance', -1.0))
+	var unit := float(_read_sky(&'get_illuminance_unit_lux', 0.0))
+	return Vector3.ONE * (lux / unit) if lux >= 0.0 and unit > 0.0 else Vector3.ONE * PI
 
 ## The water sums its reflections pre-exposed (the sky source's textures and the planar
 ## reflection are stored that way) and divides EMISSION by the camera's exposure.

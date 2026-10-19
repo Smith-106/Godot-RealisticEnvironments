@@ -19,6 +19,10 @@ signal probe_exited_water(state: BuoyancyProbeState)
 ## &"hitbox_group_destroyed" or the one passed to start_sinking(); data holds its details.
 signal sinking_started(reason: StringName, data: Dictionary)
 
+## Physics seconds the body is held frozen waiting for its first water sample
+## before it is released anyway (and the missing sample reported).
+const FIRST_SAMPLE_TIMEOUT := 5.0
+
 ## Optional rigid body target. Leave empty to use the parent or nearest ancestor RigidBody3D.
 @export var rigid_body_path : NodePath :
 	set(value):
@@ -79,7 +83,7 @@ signal sinking_started(reason: StringName, data: Dictionary)
 ## Hitbox groups whose destruction starts sinking, reported through
 ## _on_hitbox_group_destroyed (connect a damage system's signal to it).
 @export var sink_on_destroyed_groups : Array[StringName] = [&"hull"]
-## buoyancy_strength is multiplied by this once sinking starts.
+## The buoyancy is multiplied by this once sinking starts.
 @export_range(0.0, 1.0, 0.01) var sink_buoyancy_multiplier := 0.3
 ## Seconds after sinking starts before delete_root_path is freed. 0 frees immediately.
 @export_range(0.0, 60.0, 0.01, "or_greater") var delete_delay := 5.0
@@ -123,6 +127,8 @@ var _water_sample_time := -INF
 var _probe_set_time := -INF
 var _sinking_probes : Array[Node] = []
 var _is_sinking := false
+## sink_buoyancy_multiplier once sinking, else 1 (buoyancy_strength stays as set).
+var _sink_scale := 1.0
 
 
 func _ready() -> void:
@@ -140,10 +146,11 @@ func _ready() -> void:
 	_collect_volumes()
 	if probe_volumes.is_empty():
 		push_error("BuoyantBody found no probe volumes: %s" % get_path())
+	_rebuild_probe_cache()
 	for path in sinking_probe_paths:
 		var probe := get_node_or_null(path)
-		if probe == null:
-			push_error("BuoyantBody %s: sinking probe %s not found; ignored." % [get_path(), path])
+		if probe == null or not _states_by_probe.has(probe.get_instance_id()):
+			push_error("BuoyantBody %s: sinking probe %s is not an enabled probe of this body; ignored." % [get_path(), path])
 			continue
 		_sinking_probes.push_back(probe)
 	# The first surface query result arrives several frames after the first submit,
@@ -176,6 +183,9 @@ func _physics_process(delta : float) -> void:
 	var result := _water.get_query_result(self)
 	# The first readback arrives a few frames after the first submit.
 	if result == null or result.dispatch_time <= _probe_set_time:
+		if _awaiting_first_sample and _physics_time > FIRST_SAMPLE_TIMEOUT:
+			push_error("BuoyantBody %s: no water sample after %d s (does the ocean have wave cascades?); released without buoyancy." % [get_path(), FIRST_SAMPLE_TIMEOUT])
+			_end_first_sample_hold()
 		return
 	if result.samples.size() != _points.size():
 		push_error("BuoyantBody %s: query result has %d samples for %d probes; tick skipped." % [get_path(), result.samples.size(), _points.size()])
@@ -232,7 +242,7 @@ func _physics_process(delta : float) -> void:
 			# submerged probe's buoyancy swallow its drag (the sum stayed at the cap
 			# whichever way the probe moved), so a body that dived bounced undamped and
 			# the waves pumped it higher with every bounce.
-			var buoyancy := water_density * _gravity * buoyancy_strength * _max_volumes[i] * submersion
+			var buoyancy := water_density * _gravity * buoyancy_strength * _sink_scale * _max_volumes[i] * submersion
 			var buoyancy_force := Vector3.UP * minf(buoyancy, max_force)
 
 			# Quadratic drag per body axis, each from the velocity across that face
@@ -252,7 +262,7 @@ func _physics_process(delta : float) -> void:
 			# Wave-making damping while the column crosses the surface (where its
 			# waterplane gives it a stiffness k): c = 2·ζ·√(k·m).
 			if submersion < 1.0 and heave_damping_ratio > 0.0:
-				var stiffness := water_density * _gravity * buoyancy_strength * _max_volumes[i] / vertical_extent
+				var stiffness := water_density * _gravity * buoyancy_strength * _sink_scale * _max_volumes[i] / vertical_extent
 				drag_acceleration.y -= relative_velocity.y * _stable_drag_rate(2.0 * heave_damping_ratio * sqrt(stiffness / probe_mass), delta)
 			var drag_force := drag_acceleration * probe_mass
 			if drag_force.length_squared() > max_force * max_force:
@@ -282,7 +292,7 @@ func _physics_process(delta : float) -> void:
 		var sample := result.samples[force_count + j]
 		_update_state(_contact_states[j], _points[force_count + j], sample, sample.extrapolated_height(elapsed), Vector3.ZERO, 0.0, _physics_time)
 
-	_update_volume_debug(total_external_force)
+	_update_volume_debug(body_transform.origin + center_of_mass, body_state.total_gravity * mass, total_external_force)
 	if sinking_enabled and not _is_sinking:
 		_check_sinking()
 
@@ -293,7 +303,7 @@ func start_sinking(reason : StringName = &"manual", data : Dictionary = {}) -> v
 	if _is_sinking:
 		return
 	_is_sinking = true
-	buoyancy_strength *= sink_buoyancy_multiplier
+	_sink_scale = sink_buoyancy_multiplier
 	sinking_started.emit(reason, data)
 	var delete_root : Node = rigid_body
 	if not delete_root_path.is_empty():
@@ -328,9 +338,10 @@ func get_probe_states(tag_filter := "") -> Array[BuoyancyProbeState]:
 	if _probe_cache_dirty:
 		_rebuild_probe_cache()
 	var states : Array[BuoyancyProbeState] = []
-	for state in _force_states + _contact_states:
-		if tag_filter == "" or state.tag == tag_filter:
-			states.push_back(state)
+	for group in [_force_states, _contact_states]:
+		for state : BuoyancyProbeState in group:
+			if tag_filter == "" or state.tag == tag_filter:
+				states.push_back(state)
 	return states
 
 
@@ -536,9 +547,7 @@ func _get_abs_roll_degrees() -> float:
 	return absf(rad_to_deg(basis.y.signed_angle_to(target_up.normalized(), roll_axis)))
 
 
-func _update_volume_debug(total_external_force : Vector3) -> void:
-	var center_of_mass_world := rigid_body.global_transform * rigid_body.center_of_mass
-	var gravity_force := Vector3.DOWN * rigid_body.mass * _gravity
+func _update_volume_debug(center_of_mass_world : Vector3, gravity_force : Vector3, total_external_force : Vector3) -> void:
 	for volume in probe_volumes:
 		if volume.debug_enabled:
 			volume.set_debug_body_state(center_of_mass_world, gravity_force, total_external_force, true)

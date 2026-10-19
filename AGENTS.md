@@ -223,7 +223,7 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   per-cascade A/B frame blend (`OceanSystem._get_cascade_frame_blend()`),
   spectrum blend weights (`spectrum_blend_states.zw`, skip pending when
   `.w == 0`). Cascade buffer = 12 floats/cascade
-  (`OceanSurfaceQueries.FLOATS_PER_CASCADE`, `OceanSystem._pack_cascade_data()`,
+  (`OceanSurfaceQueries.FLOATS_PER_CASCADE`, `OceanSystem._update_cascade_uniforms()`,
   `ocean_sampling.glslinc`). Queries read mip 0 and invert horizontal
   displacement.
 - Includes aren't tracked by the importer: after editing an include, delete
