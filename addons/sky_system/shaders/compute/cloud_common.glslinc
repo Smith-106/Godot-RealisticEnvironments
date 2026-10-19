@@ -58,7 +58,7 @@ layout(set = 0, binding = 4, std430) restrict readonly buffer CloudParams {
 	vec4 weather_area;    // xy map centre (world XZ), z map extent (m), w extinction at density 1 (1/m)
 	vec4 motion;          // xy wind offset (world XZ, m), z evolution time, w sky light scale
 	vec4 scales;          // x shape tile (m), y detail tile (m), z detail erosion, w scattering albedo
-	vec4 light_direction; // xyz unit vector toward the key light (sun or moon)
+	vec4 light_direction; // xyz unit vector toward the key light (sun or moon), w the haze's wavelength exponent (atmosphere_haze_spectrum())
 	vec4 light_color;     // rgb key light above the atmosphere: irradiance / pi (the light's energy)
 	vec4 march;           // x view steps, y light steps, z longest light march (m), w phase g
 } params;
@@ -305,6 +305,8 @@ vec4 cloud_march(vec2 origin_xz, float h, vec3 direction, float t_limit, float j
 	vec3 sky_above = sky_ambient.above.rgb * params.motion.w;
 	vec3 sky_below = sky_ambient.below.rgb * params.motion.w;
 	float cos_theta = dot(direction, light_direction);
+	float haze_spectrum[ATMOSPHERE_SPECTRAL_SAMPLES];
+	atmosphere_haze_spectrum(params.light_direction.w, haze_spectrum);
 	float g = params.march.w;
 	float extinction = params.weather_area.w;
 	float albedo = params.scales.w;
@@ -347,7 +349,7 @@ vec4 cloud_march(vec2 origin_xz, float h, vec3 direction, float t_limit, float j
 			float mu_light = dot(local_up, light_direction);
 			float horizon_mu = atmosphere_horizon_mu(altitude);
 			float light_visibility = smoothstep(horizon_mu - 0.01, horizon_mu + 0.01, mu_light);
-			vec3 sun = light_flux * light_visibility * atmosphere_light_transmittance(transmittance_lut, altitude, max(mu_light, horizon_mu), params.layer.w);
+			vec3 sun = light_flux * light_visibility * atmosphere_light_transmittance(transmittance_lut, altitude, max(mu_light, horizon_mu), params.layer.w, haze_spectrum);
 			// Single scattering, per unit of true extinction.
 			float beam = exp(-light_depth);
 			float beam_transport = exp(-light_depth * transport_share);

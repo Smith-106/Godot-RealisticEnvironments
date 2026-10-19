@@ -27,7 +27,8 @@
  *
  * Light: the key light (sun or moon) at light_color above the atmosphere, dimmed by every
  * medium down to each sample (transmittance LUT, with the planet's shadow) and, below
- * the cloud layer, by the clouds (cloud_shade()), scattered once; plus every higher
+ * the cloud layer, by the clouds (cloud_shade()), scattered once, integrated per
+ * wavelength with the view ray's own transmittance (atmosphere_common.glslinc); plus every higher
  * order from the multiple-scattering LUT, isotropic. The other body (secondary_*) adds
  * the same without the haze's lobe (its haze scattering counts as isotropic): the volume
  * is laid out around the key light and symmetric about its vertical plane, so the
@@ -87,11 +88,18 @@ layout(push_constant, std430) restrict readonly uniform PushConstants {
 	float haze_wavelength_exponent; // atmosphere_haze_optics()
 } pc;
 
-vec3 transmittance;
-// Transmittance through the transport haze, which in-scatter reaches the observer by.
+// Per spectral sample: transmittance from the observer, the same through the transport
+// haze (which in-scatter reaches the observer by), and the key light's single scattering
+// (all but the lobe, and the lobe per unit phase). Stored as linear sRGB.
+float spectral_transmittance[ATMOSPHERE_SPECTRAL_SAMPLES];
+float spectral_transport[ATMOSPHERE_SPECTRAL_SAMPLES];
+float spectral_inscatter[ATMOSPHERE_SPECTRAL_SAMPLES];
+float spectral_lobe[ATMOSPHERE_SPECTRAL_SAMPLES];
+float haze_spectrum[ATMOSPHERE_SPECTRAL_SAMPLES];
+// The transport as linear sRGB, and the in-scatter of the light not integrated per
+// wavelength (higher orders, the secondary light, the cloud dome, airglow, the sea).
 vec3 transport;
 vec3 inscatter;
-vec3 inscatter_lobe;
 
 // atmosphere_haze_transport_share() of the haze's g, and atmosphere_haze_optics().
 float haze_transport_share;
@@ -155,7 +163,16 @@ float secondary_rayleigh_phase;
  * quadratic) densest at the start. Each segment's own extinction is exact for the
  * media's profiles; its light is taken at its middle.
  */
-void march(float mu, float cos_light, vec3 key_light, float t_start, float t_end, int steps, bool quadratic) {
+/* Linear sRGB of a spectrum (ATMOSPHERE_SPECTRUM_TO_RGB), clamped at 0. */
+vec3 spectral_band(float spectrum[ATMOSPHERE_SPECTRAL_SAMPLES]) {
+	vec3 band = vec3(0.0);
+	for (int k = 0; k < ATMOSPHERE_SPECTRAL_SAMPLES; ++k) {
+		band += ATMOSPHERE_SPECTRUM_TO_RGB[k] * spectrum[k];
+	}
+	return max(band, vec3(0.0));
+}
+
+void march(float mu, float cos_light, float key_light, float t_start, float t_end, int steps, bool quadratic) {
 	float h0 = pc.observer_altitude;
 	float r0 = ATMOSPHERE_EARTH_RADIUS + h0;
 	float rayleigh_phase = atmosphere_rayleigh_phase(cos_light);
@@ -165,36 +182,53 @@ void march(float mu, float cos_light, vec3 key_light, float t_start, float t_end
 		float s = float(i) / float(steps);
 		float t = t_start + (t_end - t_start) * (quadratic ? s * s : s);
 		float h = atmosphere_altitude_along(h0, mu, t);
+		float dt = t - previous_t;
+		// The media's coefficients at 550 nm over the segment (atmosphere_segment_media()).
+		float rayleigh_550 = ATMOSPHERE_RAYLEIGH_SCATTERING_550 * atmosphere_exponential_mean(previous_h, h, ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT);
+		float haze_550 = pc.haze_density * atmosphere_exponential_mean(previous_h, h, pc.haze_scale_height);
+		float ozone_550 = ATMOSPHERE_OZONE_ABSORPTION_550 * atmosphere_ozone_mean(previous_h, h);
+		float t_mid = 0.5 * (previous_t + t);
+		float h_mid = min(atmosphere_altitude_along(h0, mu, t_mid), pc.top_altitude);
+		// The light's cosine to the local up there: the planet curves under the ray.
+		float mu_light = clamp((r0 * pc.light_direction.y + t_mid * cos_light) / (ATMOSPHERE_EARTH_RADIUS + h_mid), -1.0, 1.0);
+		float light = key_light * cloud_shade(h_mid, t_mid);
+		vec3 sun_depth = atmosphere_light_optical_depth(transmittance_lut, h_mid, mu_light, pc.top_altitude);
+		// The key light's single scattering, per wavelength. path: the integral of the
+		// transport transmittance from the observer over the segment, per unit of
+		// scattering coefficient; its band average carries the rest below.
+		vec3 path_band = vec3(0.0);
+		for (int k = 0; k < ATMOSPHERE_SPECTRAL_SAMPLES; ++k) {
+			float rayleigh_k = rayleigh_550 * ATMOSPHERE_RAYLEIGH_SPECTRUM[k];
+			float haze_extinction_k = haze_550 * haze_spectrum[k];
+			float haze_k = haze_extinction_k * haze_optics.a;
+			float extinction_k = rayleigh_k + haze_extinction_k + ozone_550 * ATMOSPHERE_OZONE_SPECTRUM[k];
+			float extinction_transport_k = extinction_k - haze_k * (1.0 - haze_transport_share);
+			float segment_transport_k = exp(-extinction_transport_k * dt);
+			float path_k = spectral_transport[k] * (1.0 - segment_transport_k) / max(extinction_transport_k, 1e-12);
+			float sun_k = light * exp(-(sun_depth.r * ATMOSPHERE_RAYLEIGH_SPECTRUM[k] + sun_depth.g * haze_spectrum[k] + sun_depth.b * ATMOSPHERE_OZONE_SPECTRUM[k]));
+			spectral_lobe[k] += path_k * haze_k * sun_k * ATMOSPHERE_HAZE_FORWARD_SHARE;
+			spectral_inscatter[k] += path_k * sun_k * (rayleigh_k * rayleigh_phase + haze_k * ((1.0 - ATMOSPHERE_HAZE_FORWARD_SHARE) / (4.0 * ATMOSPHERE_PI)));
+			path_band += ATMOSPHERE_SPECTRUM_TO_RGB[k] * path_k;
+			spectral_transmittance[k] *= exp(-extinction_k * dt);
+			spectral_transport[k] *= segment_transport_k;
+		}
+		path_band = max(path_band, vec3(0.0));
+		// The rest, in linear sRGB band averages.
 		vec3 rayleigh;
 		vec3 haze;
 		vec3 extinction;
 		atmosphere_segment_media(previous_h, h, pc.haze_density, pc.haze_scale_height, haze_optics, 1.0, rayleigh, haze, extinction);
 		vec3 haze_transport = haze * haze_transport_share;
-		vec3 extinction_transport = extinction - (haze - haze_transport);
-		vec3 segment_transmittance = exp(-extinction * (t - previous_t));
-		vec3 segment_transport = exp(-extinction_transport * (t - previous_t));
-		// Integral of the transport transmittance from the observer over the segment, per
-		// unit of scattering coefficient.
-		vec3 path = transport * (1.0 - segment_transport) / max(extinction_transport, vec3(1e-12));
-		float t_mid = 0.5 * (previous_t + t);
-		float h_mid = min(atmosphere_altitude_along(h0, mu, t_mid), pc.top_altitude);
-		// The light's cosine to the local up there: the planet curves under the ray.
-		float mu_light = clamp((r0 * pc.light_direction.y + t_mid * cos_light) / (ATMOSPHERE_EARTH_RADIUS + h_mid), -1.0, 1.0);
-		vec3 light = key_light * cloud_shade(h_mid, t_mid);
-		vec3 sun = light * atmosphere_light_transmittance(transmittance_lut, h_mid, mu_light, pc.top_altitude);
 		vec3 multiple = light * atmosphere_multiple_scattering(ms_lut, h_mid, mu_light, pc.top_altitude, pc.haze_scale_height);
-		inscatter_lobe += path * haze * sun * ATMOSPHERE_HAZE_FORWARD_SHARE;
-		inscatter += path * (rayleigh * (sun * rayleigh_phase + multiple)
-				+ haze * sun * ((1.0 - ATMOSPHERE_HAZE_FORWARD_SHARE) / (4.0 * ATMOSPHERE_PI)) + haze_transport * multiple);
+		inscatter += path_band * (rayleigh + haze_transport) * multiple;
 		float mu_secondary = clamp((r0 * pc.secondary_direction.y + t_mid * secondary_cos) / (ATMOSPHERE_EARTH_RADIUS + h_mid), -1.0, 1.0);
 		vec3 light_secondary = pc.secondary_color * cloud_shade_secondary(h_mid);
-		vec3 sun_secondary = light_secondary * atmosphere_light_transmittance(transmittance_lut, h_mid, mu_secondary, pc.top_altitude);
+		vec3 sun_secondary = light_secondary * atmosphere_light_transmittance(transmittance_lut, h_mid, mu_secondary, pc.top_altitude, haze_spectrum);
 		vec3 multiple_secondary = light_secondary * atmosphere_multiple_scattering(ms_lut, h_mid, mu_secondary, pc.top_altitude, pc.haze_scale_height);
-		inscatter += path * (rayleigh * (sun_secondary * secondary_rayleigh_phase + multiple_secondary)
+		inscatter += path_band * (rayleigh * (sun_secondary * secondary_rayleigh_phase + multiple_secondary)
 				+ haze * sun_secondary / (4.0 * ATMOSPHERE_PI) + haze_transport * multiple_secondary);
-		inscatter += path * (rayleigh + haze_transport) * cloud_dome_inscatter(h_mid);
-		transmittance *= segment_transmittance;
-		transport *= segment_transport;
+		inscatter += path_band * (rayleigh + haze_transport) * cloud_dome_inscatter(h_mid);
+		transport = spectral_band(spectral_transport);
 		previous_t = t;
 		previous_h = h;
 	}
@@ -214,9 +248,9 @@ float airglow_van_rhijn(float h, float mu) {
 }
 
 void store(ivec3 texel) {
-	imageStore(transmittance_image, texel, vec4(transmittance, 1.0));
-	imageStore(inscatter_image, texel, vec4(inscatter, 1.0));
-	imageStore(inscatter_lobe_image, texel, vec4(inscatter_lobe, 1.0));
+	imageStore(transmittance_image, texel, vec4(spectral_band(spectral_transmittance), 1.0));
+	imageStore(inscatter_image, texel, vec4(spectral_band(spectral_inscatter) + inscatter, 1.0));
+	imageStore(inscatter_lobe_image, texel, vec4(spectral_band(spectral_lobe), 1.0));
 }
 
 void main() {
@@ -233,9 +267,11 @@ void main() {
 	vec3 direction = vec3(sin_zenith * cos(phi), mu, sin_zenith * sin(phi));
 	vec3 light = vec3(sqrt(max(1.0 - pc.light_direction.y * pc.light_direction.y, 0.0)), pc.light_direction.y, 0.0);
 	float cos_light = dot(direction, light);
-	vec3 key_light = pc.light_color;
+	// White light: one value for every wavelength.
+	float key_light = pc.light_color.g;
 	haze_transport_share = atmosphere_haze_transport_share(pc.haze_anisotropy);
 	haze_optics = atmosphere_haze_optics(pc.haze_wavelength_exponent);
+	atmosphere_haze_spectrum(pc.haze_wavelength_exponent, haze_spectrum);
 	init_cloud_light();
 	// The secondary light in the frame: x along the key light's horizontal direction.
 	vec2 key_xz = length(pc.light_direction.xz) > 1e-5 ? normalize(pc.light_direction.xz) : vec2(1.0, 0.0);
@@ -247,10 +283,14 @@ void main() {
 
 	float t_sea = atmosphere_distance_to_sea(h0, mu);
 	float t_end = t_sea >= 0.0 ? t_sea : atmosphere_distance_to_top(h0, mu, pc.top_altitude);
-	transmittance = vec3(1.0);
+	for (int k = 0; k < ATMOSPHERE_SPECTRAL_SAMPLES; ++k) {
+		spectral_transmittance[k] = 1.0;
+		spectral_transport[k] = 1.0;
+		spectral_inscatter[k] = 0.0;
+		spectral_lobe[k] = 0.0;
+	}
 	transport = vec3(1.0);
 	inscatter = vec3(0.0);
-	inscatter_lobe = vec3(0.0);
 	float t = 0.0;
 	if (size.z == 2) {
 		float t_cloud = h0 < pc.cloud_altitude ? min(atmosphere_distance_to_top(h0, mu, pc.cloud_altitude), t_end) : 0.0;
@@ -279,9 +319,9 @@ void main() {
 	if (t_sea >= 0.0) {
 		float mu_light_sea = clamp((ATMOSPHERE_EARTH_RADIUS + h0) * pc.light_direction.y / ATMOSPHERE_EARTH_RADIUS
 				+ t_end * cos_light / ATMOSPHERE_EARTH_RADIUS, -1.0, 1.0);
-		vec3 sea_irradiance = key_light * cloud_shade(0.0, t_end) * atmosphere_light_transmittance(transmittance_lut, 0.0, mu_light_sea, pc.top_altitude) * max(mu_light_sea, 0.0);
+		vec3 sea_irradiance = key_light * cloud_shade(0.0, t_end) * atmosphere_light_transmittance(transmittance_lut, 0.0, mu_light_sea, pc.top_altitude, haze_spectrum) * max(mu_light_sea, 0.0);
 		float mu_secondary_sea = clamp(((ATMOSPHERE_EARTH_RADIUS + h0) * pc.secondary_direction.y + t_end * secondary_cos) / ATMOSPHERE_EARTH_RADIUS, -1.0, 1.0);
-		sea_irradiance += pc.secondary_color * cloud_shade_secondary(0.0) * atmosphere_light_transmittance(transmittance_lut, 0.0, mu_secondary_sea, pc.top_altitude) * max(mu_secondary_sea, 0.0);
+		sea_irradiance += pc.secondary_color * cloud_shade_secondary(0.0) * atmosphere_light_transmittance(transmittance_lut, 0.0, mu_secondary_sea, pc.top_altitude, haze_spectrum) * max(mu_secondary_sea, 0.0);
 		// The cloud dome's irradiance: pi times its radiance.
 		sea_irradiance += 2.0 * ATMOSPHERE_PI * cloud_dome_inscatter(0.0);
 		inscatter += transport * sea_irradiance * (ATMOSPHERE_SEA_ALBEDO / ATMOSPHERE_PI);

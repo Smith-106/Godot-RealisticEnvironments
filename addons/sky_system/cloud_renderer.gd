@@ -190,10 +190,11 @@ func get_refresh_frames() -> int:
 ## Records the weather, raymarch and mip passes for this frame. camera_position:
 ## world x, altitude above the sea (m), world z. light_color: the key light's
 ## energy above the atmosphere (irradiance / pi); atmosphere_top: the atmosphere's top
-## altitude (m) for its transmittance LUT; sky_light_scale multiplies the sky's light.
+## altitude (m) for its transmittance LUT; haze_wavelength_exponent: the haze's
+## (CloudPreset), for the LUT's colour; sky_light_scale multiplies the sky's light.
 func render(camera_position : Vector3, preset : CloudPreset, wind_offset : Vector2, evolution_time : float,
-		light_direction : Vector3, light_color : Color, atmosphere_top : float, sky_light_scale : float) -> void:
-	var params := _pack_params(camera_position, preset, wind_offset, evolution_time, light_direction, light_color, atmosphere_top, sky_light_scale)
+		light_direction : Vector3, light_color : Color, atmosphere_top : float, haze_wavelength_exponent : float, sky_light_scale : float) -> void:
+	var params := _pack_params(camera_position, preset, wind_offset, evolution_time, light_direction, light_color, atmosphere_top, haze_wavelength_exponent, sky_light_scale)
 	_device.buffer_update(_params_buffer, 0, params.size(), params)
 
 	var cycle_length := update_stride * update_stride
@@ -260,13 +261,13 @@ func render(camera_position : Vector3, preset : CloudPreset, wind_offset : Vecto
 
 
 func _pack_params(camera_position : Vector3, preset : CloudPreset, wind_offset : Vector2, evolution_time : float,
-		light_direction : Vector3, light_color : Color, atmosphere_top : float, sky_light_scale : float) -> PackedByteArray:
+		light_direction : Vector3, light_color : Color, atmosphere_top : float, haze_wavelength_exponent : float, sky_light_scale : float) -> PackedByteArray:
 	return PackedFloat32Array([
 		preset.base_altitude, preset.base_altitude + preset.thickness, max_distance, atmosphere_top,
 		camera_position.x, camera_position.z, max_distance * 2.0, BASE_EXTINCTION * preset.density,
 		wind_offset.x, wind_offset.y, evolution_time, sky_light_scale,
 		preset.shape_scale, preset.detail_scale, preset.detail_erosion, preset.scattering_albedo,
-		light_direction.x, light_direction.y, light_direction.z, 0.0,
+		light_direction.x, light_direction.y, light_direction.z, haze_wavelength_exponent,
 		light_color.r, light_color.g, light_color.b, 0.0,
 		float(view_steps), float(light_steps), MAX_LIGHT_DISTANCE, PHASE_G,
 	]).to_byte_array()

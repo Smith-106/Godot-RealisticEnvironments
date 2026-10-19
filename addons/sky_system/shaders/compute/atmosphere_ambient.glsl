@@ -135,7 +135,7 @@ void main() {
 		float light_y = pc.light_direction.y;
 		vec3 size_f = vec3(size);
 		vec3 uvw = vec3(atmosphere_unit_to_uv(0.0, size_f.x),
-				clamp(atmosphere_view_y(h, light_y), 0.5 / size_f.y, 1.0 - 0.5 / size_f.y), (float(slice) + 0.5) / size_f.z);
+				atmosphere_view_v(atmosphere_view_y(h, light_y), size_f.y), (float(slice) + 0.5) / size_f.z);
 		vec3 lobe = textureLod(inscatter_lobe_volume, uvw, 0.0).rgb;
 		if (pc.use_clouds > 0.5) {
 			lobe *= 1.0 - textureLod(cloud_cubemap, pc.light_direction, CLOUD_LOD).a;

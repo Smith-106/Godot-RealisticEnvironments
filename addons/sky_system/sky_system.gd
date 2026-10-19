@@ -114,9 +114,14 @@ const SUN_ANGULAR_RADIUS := 0.00465
 const MOON_ANGULAR_RADIUS := 0.00465
 ## As shaders/compute/atmosphere_common.glslinc.
 const ATMOSPHERE_EARTH_RADIUS := 6371000.0
-const ATMOSPHERE_RAYLEIGH_SCATTERING := Vector3(5.802e-6, 13.558e-6, 33.1e-6)
+## As atmosphere_common.glslinc: the media at 550 nm and the spectral samples.
+const ATMOSPHERE_RAYLEIGH_SCATTERING_550 := 13.558e-6
+const ATMOSPHERE_OZONE_ABSORPTION_550 := 1.881e-6
+const ATMOSPHERE_WAVELENGTH_RATIO := [0.72727, 0.76364, 0.80000, 0.83636, 0.87273, 0.90909, 0.94545, 0.98182, 1.01818, 1.05455, 1.09091, 1.12727, 1.16364, 1.20000, 1.23636, 1.27273]
+const ATMOSPHERE_RAYLEIGH_SPECTRUM := [3.57446, 2.94072, 2.44141, 2.04371, 1.72380, 1.46410, 1.25152, 1.07616, 0.93046, 0.80861, 0.70607, 0.61928, 0.54542, 0.48225, 0.42797, 0.38112]
+const ATMOSPHERE_OZONE_SPECTRUM := [0.00310, 0.01240, 0.04651, 0.13953, 0.29457, 0.48062, 0.74419, 0.93023, 1.06977, 1.44186, 1.59690, 1.42636, 1.00775, 0.69767, 0.35349, 0.26357]
+const ATMOSPHERE_SPECTRUM_TO_RGB := [Vector3(0.00186, -0.00203, 0.01500), Vector3(0.01670, -0.01889, 0.14268), Vector3(0.03454, -0.04368, 0.38541), Vector3(0.00278, -0.01968, 0.36614), Vector3(-0.04805, 0.03975, 0.17315), Vector3(-0.09579, 0.12062, 0.04594), Vector3(-0.14384, 0.25087, -0.01213), Vector3(-0.08324, 0.29720, -0.03250), Vector3(0.06141, 0.25418, -0.03432), Vector3(0.25355, 0.14657, -0.02582), Vector3(0.38422, 0.03043, -0.01423), Vector3(0.33935, -0.02229, -0.00620), Vector3(0.18380, -0.02082, -0.00222), Vector3(0.06849, -0.00893, -0.00067), Vector3(0.01950, -0.00264, -0.00018), Vector3(0.00474, -0.00065, -0.00004)]
 const ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT := 8000.0
-const ATMOSPHERE_OZONE_ABSORPTION := Vector3(0.650e-6, 1.881e-6, 0.085e-6)
 const ATMOSPHERE_OZONE_CENTER := 25000.0
 const ATMOSPHERE_OZONE_HALF_WIDTH := 15000.0
 ## As TRANSMITTANCE_STEPS in shaders/compute/atmosphere_transmittance.glsl.
@@ -336,9 +341,9 @@ var _moon_brightness := 1.0
 ## light coloured by the atmosphere along their direction.
 var _sun_color := Color.WHITE
 var _moon_color := Color.WHITE
-## pi * energy * transmittance of the air (not the haze) along the sun's direction,
-## and the same for the full moon: the sky shader's disks, which the haze, the clouds
-## and the moon's phase dim themselves.
+## pi * energy of the sun and of the full moon above the atmosphere (white): the sky
+## shader's disks, which the atmosphere's view volume (air and haze), the clouds and
+## the moon's phase dim themselves.
 var _sun_irradiance := Color.BLACK
 var _moon_irradiance := Color.BLACK
 ## Share of the sun's and the moon's light that reaches the sea, per channel: the
@@ -702,9 +707,11 @@ func _update_lighting_state() -> void:
 	_moon_transmittance = _get_body_transmittance(_moon_direction, MOON_ANGULAR_RADIUS, true)
 	_sun_color = _light_color(_get_atmosphere_transmittance(0.0, _above_horizon(_sun_direction), true))
 	_moon_color = _light_color(_get_atmosphere_transmittance(0.0, _above_horizon(_moon_direction), true))
-	# The disks are drawn behind the haze and the clouds, which dim them themselves.
-	_sun_irradiance = _get_atmosphere_transmittance(0.0, _above_horizon(_sun_direction), false) * (_get_sun_energy() * PI)
-	_moon_irradiance = _get_atmosphere_transmittance(0.0, _above_horizon(_moon_direction), false) * (MOON_ENERGY * moon_energy_multiplier * PI)
+	# The disks are drawn in space: the sky's view volume dims them by the whole
+	# atmosphere along each view ray, per colour (dimming them here as well counted the
+	# air twice).
+	_sun_irradiance = Color.WHITE * (_get_sun_energy() * PI)
+	_moon_irradiance = Color.WHITE * (MOON_ENERGY * moon_energy_multiplier * PI)
 	_update_planets()
 
 
@@ -873,9 +880,8 @@ func _get_atmosphere_transmittance(altitude : float, direction : Vector3, with_h
 	var root := sqrt(b * b + c)
 	var ray_length := c / (b + root) if mu >= 0.0 else root - b
 	var haze_density := _haze_density if with_haze else 0.0
-	# atmosphere_haze_optics(): the whole haze's extinction per channel (the direct beam).
-	var haze_spectrum := Vector3(pow(680.0 / 550.0, -_haze_wavelength_exponent), 1.0, pow(440.0 / 550.0, -_haze_wavelength_exponent))
-	var optical_depth := Vector3.ZERO
+	# Optical depths at 550 nm: air, haze (all of it: this is the direct beam), ozone.
+	var depth := Vector3.ZERO
 	var previous_t := 0.0
 	var previous_height := h
 	for i in range(1, ATMOSPHERE_TRANSMITTANCE_STEPS + 1):
@@ -884,14 +890,17 @@ func _get_atmosphere_transmittance(altitude : float, direction : Vector3, with_h
 		# Altitude along the ray (atmosphere_altitude_along()).
 		var k := t * (2.0 * r * mu + t)
 		var height := h + k / (sqrt(r * r + k) + r)
-		# Mean extinction over the step (atmosphere_mean_extinction()).
-		var extinction := haze_spectrum * (haze_density * _exponential_mean(previous_height, height, _haze_scale_height)) \
-				+ ATMOSPHERE_RAYLEIGH_SCATTERING * _exponential_mean(previous_height, height, ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT) \
-				+ ATMOSPHERE_OZONE_ABSORPTION * _ozone_mean(previous_height, height)
-		optical_depth += extinction * (t - previous_t)
+		depth += Vector3(ATMOSPHERE_RAYLEIGH_SCATTERING_550 * _exponential_mean(previous_height, height, ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT),
+				haze_density * _exponential_mean(previous_height, height, _haze_scale_height),
+				ATMOSPHERE_OZONE_ABSORPTION_550 * _ozone_mean(previous_height, height)) * (t - previous_t)
 		previous_t = t
 		previous_height = height
-	return Color(exp(-optical_depth.x), exp(-optical_depth.y), exp(-optical_depth.z))
+	# Integrated over the spectrum (atmosphere_band_transmittance()).
+	var band := Vector3.ZERO
+	for i in ATMOSPHERE_SPECTRUM_TO_RGB.size():
+		var haze_spectrum := pow(ATMOSPHERE_WAVELENGTH_RATIO[i], -_haze_wavelength_exponent)
+		band += ATMOSPHERE_SPECTRUM_TO_RGB[i] * exp(-(depth.x * ATMOSPHERE_RAYLEIGH_SPECTRUM[i] + depth.y * haze_spectrum + depth.z * ATMOSPHERE_OZONE_SPECTRUM[i]))
+	return Color(maxf(band.x, 0.0), maxf(band.y, 0.0), maxf(band.z, 0.0))
 
 
 ## As atmosphere_exponential_mean().
@@ -1423,7 +1432,7 @@ func _process_clouds(delta : float) -> void:
 	_cloud_renderer.max_distance = cloud_max_distance
 	var camera_position := _get_cloud_camera_position()
 	_cloud_renderer.render(Vector3(camera_position.x, camera_position.y - sea_level, camera_position.z), _cloud_state,
-		_cloud_wind_offset, _cloud_evolution_time, light_direction, light_color, _atmosphere_renderer.get_top_altitude(), cloud_ambient_intensity)
+		_cloud_wind_offset, _cloud_evolution_time, light_direction, light_color, _atmosphere_renderer.get_top_altitude(), _haze_wavelength_exponent, cloud_ambient_intensity)
 
 	# Re-sending the parameters once per full refresh also makes the sky
 	# re-render its radiance map, so ambient light and reflections follow the clouds.

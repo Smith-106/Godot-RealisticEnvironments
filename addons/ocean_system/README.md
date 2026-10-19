@@ -119,9 +119,11 @@ frame.
 
 ## Limits
 
-- Below the water the surface is drawn as seen from under it (Snell's window, total
-  internal reflection, the water between), but nothing else is: objects under the
-  water get no underwater fog and there are no light shafts.
+- Below the water the camera sees through the water (its colour and haze, light
+  shafts from the waves) and the surface from under it (Snell's window, total
+  internal reflection). The camera counts as underwater by the wave height at its
+  position, so a lens half in the water shows one or the other. Hull cutouts seen
+  from below can show the sky through a hull's waterline footprint.
 - One ocean per world, with one depth for the whole sea (no shores).
 - Only the drawing is curved. Queries, buoyancy and the wake simulation treat
   the sea as flat.

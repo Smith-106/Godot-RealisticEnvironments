@@ -17,9 +17,9 @@ uniform vec3 sun_disk_direction = vec3(1.0, 0.0, 0.0);
 uniform vec4 sun_color : source_color = vec4(1.0, 0.92, 0.72, 1.0);
 // Share of the disk above the horizon.
 uniform float sun_visibility : hint_range(0.0, 1.0) = 1.0;
-// The sun's light through the air but not the haze, pi * energy * transmittance
-// (irradiance in the units of the scene's lights). The disk shows it spread over its
-// solid angle; the haze dims it here (the atmosphere's view volume).
+// The sun's light above the atmosphere, pi * energy (irradiance in the units of the
+// scene's lights). The disk shows it spread over its solid angle; the atmosphere's view
+// volume dims it along each view ray (air and haze, spectrally).
 uniform vec3 sun_irradiance = vec3(3.0);
 uniform float sun_disk_size : hint_range(0.001, 0.05) = 0.00465;
 uniform float sun_halo_size : hint_range(0.01, 0.5) = 0.075;
@@ -73,28 +73,42 @@ float refraction_at_apparent(float h) {
 	return radians(1.0 / 60.0) / tan(radians(degrees_h + 7.31 / (degrees_h + 4.4)));
 }
 
-/* The direction a view ray came from above the air: bent back down by the refraction. */
-vec3 unrefracted(vec3 view_direction) {
+// Air's refractivity (n - 1) at the r, g and b bands' wavelengths (680, 550, 440 nm) over
+// its value at 550 nm (Ciddor 1996): blue is bent most. At the horizon the sun's blue
+// image stands about 0.6' above its red one, so its upper rim turns green as it sets (the
+// green flash: the blue is gone through that much air). A rim that thin needs a long lens.
+const vec3 AIR_DISPERSION = vec3(0.99338, 1.0, 1.01107);
+
+/*
+ * The direction a view ray came from above the air: bent back down by the refraction,
+ * times dispersion (AIR_DISPERSION's channel) for that colour.
+ */
+vec3 unrefracted(vec3 view_direction, float dispersion) {
 	vec3 direction = normalize(view_direction);
 	float horizontal = length(direction.xz);
 	if (horizontal < 1e-5) {
 		return direction;
 	}
 	float elevation = asin(clamp(direction.y, -1.0, 1.0));
-	float true_elevation = elevation - max(refraction_at_apparent(elevation), 0.0);
+	float true_elevation = elevation - max(refraction_at_apparent(elevation), 0.0) * dispersion;
 	return vec3(direction.x / horizontal * cos(true_elevation), sin(true_elevation), direction.z / horizontal * cos(true_elevation));
 }
 
 /*
  * Coverage (0-1) of a body's disk of angular radius disk_size (true_direction: where the
- * body is) along a view ray, and (r) the ray's distance from its centre in radii. The
- * edge is softened over about a pixel (edge_size, rad).
+ * body is) along a view ray, and (r) the ray's distance from its centre in radii, per
+ * colour: each is refracted by its own amount (AIR_DISPERSION). The edge is softened over
+ * about a pixel (edge_size, rad).
  */
-float body_disk(vec3 view_direction, vec3 true_direction, float disk_size, float edge_size, out float r) {
-	float alignment = dot(unrefracted(view_direction), normalize(true_direction));
-	float angular_distance = acos(clamp(alignment, -1.0, 1.0));
-	r = angular_distance / disk_size;
-	return 1.0 - smoothstep(disk_size - 0.5 * edge_size, disk_size + 0.5 * edge_size, angular_distance);
+vec3 body_disk(vec3 view_direction, vec3 true_direction, float disk_size, float edge_size, out vec3 r) {
+	vec3 coverage;
+	for (int c = 0; c < 3; ++c) {
+		float alignment = dot(unrefracted(view_direction, AIR_DISPERSION[c]), normalize(true_direction));
+		float angular_distance = acos(clamp(alignment, -1.0, 1.0));
+		r[c] = angular_distance / disk_size;
+		coverage[c] = 1.0 - smoothstep(disk_size - 0.5 * edge_size, disk_size + 0.5 * edge_size, angular_distance);
+	}
+	return coverage;
 }
 
 /*
@@ -102,10 +116,10 @@ float body_disk(vec3 view_direction, vec3 true_direction, float disk_size, float
  * per channel. I(mu) = mu^a (Hestroffer and Magnan 1998, a = -0.023 + 0.292 / lambda in
  * micrometres at 680, 550 and 440 nm), whose mean over the disk is 2 / (a + 2).
  */
-vec3 sun_limb_darkening(float r) {
+vec3 sun_limb_darkening(vec3 r) {
 	const vec3 exponent = vec3(0.406, 0.508, 0.641);
-	float mu = sqrt(max(1.0 - r * r, 0.0));
-	return pow(vec3(max(mu, 1e-4)), exponent) * (exponent + 2.0) * 0.5;
+	vec3 mu = sqrt(max(vec3(1.0) - r * r, vec3(0.0)));
+	return pow(max(mu, vec3(1e-4)), exponent) * (exponent + 2.0) * 0.5;
 }
 
 float body_halo(vec3 view_direction, vec3 body_direction, float halo_size) {
@@ -122,7 +136,7 @@ float body_halo(vec3 view_direction, vec3 body_direction, float halo_size) {
  */
 float moon_lighting(vec3 view_direction, vec3 body_direction, vec3 light_direction, float disk_size) {
 	vec3 moon_dir = normalize(body_direction);
-	vec3 view_dir = unrefracted(view_direction);
+	vec3 view_dir = unrefracted(view_direction, 1.0);
 	vec3 sun_dir = normalize(light_direction);
 	vec3 tangent_x = sun_dir - moon_dir * dot(sun_dir, moon_dir);
 	float tangent_len = length(tangent_x);
@@ -176,11 +190,11 @@ float cloud_distance(vec3 direction) {
 void sky() {
 	// A pixel's angular size (the radiance map's texels are far coarser: a soft edge there).
 	float edge_size = AT_CUBEMAP_PASS ? max(sun_disk_size * 0.18, 0.0005) : max(length(fwidth(EYEDIR)), 1e-5);
-	float sun_r;
-	float sun_disk = body_disk(EYEDIR, sun_disk_direction, sun_disk_size, edge_size, sun_r);
+	vec3 sun_r;
+	vec3 sun_disk = body_disk(EYEDIR, sun_disk_direction, sun_disk_size, edge_size, sun_r);
 	float sun_halo = body_halo(EYEDIR, sun_direction, sun_halo_size) * 0.32;
-	float moon_r;
-	float moon_disk = body_disk(EYEDIR, moon_disk_direction, moon_disk_size, edge_size, moon_r);
+	vec3 moon_r;
+	vec3 moon_disk = body_disk(EYEDIR, moon_disk_direction, moon_disk_size, edge_size, moon_r);
 	float moon_halo = body_halo(EYEDIR, moon_direction, sun_halo_size) * 0.32;
 	float moon_lit = moon_lighting(EYEDIR, moon_disk_direction, sun_disk_direction, moon_disk_size) * moon_surface_brightness + moon_earthshine;
 
@@ -200,8 +214,13 @@ void sky() {
 		sun_halo_color = sun_irradiance / PI * radiance_sun_halo_strength;
 		moon_halo_color = moon_irradiance * moon_surface_brightness / PI * radiance_sun_halo_strength * moon_phase;
 	}
-	vec3 space = (sun_disk_color * sun_disk + sun_halo_color * sun_halo) * sun_visibility
-			+ (moon_disk_color * moon_disk * moon_lit + moon_halo_color * moon_halo) * moon_visibility;
+	// The camera's view needs no share above the horizon: the sea in front hides the rest,
+	// and the last rim stays as bright as it is (the green flash). The radiance map has no
+	// sea in front of it.
+	float sun_shown = AT_CUBEMAP_PASS ? sun_visibility : 1.0;
+	float moon_shown = AT_CUBEMAP_PASS ? moon_visibility : 1.0;
+	vec3 space = sun_disk_color * sun_disk * sun_shown + sun_halo_color * sun_halo * sun_visibility
+			+ moon_disk_color * moon_disk * moon_lit * moon_shown + moon_halo_color * moon_halo * moon_visibility;
 	if (milky_way_scale > 0.0) {
 		// The radiance map's faces are coarser than the texture: read a blurred mip.
 		space += milky_way_radiance(EYEDIR, AT_CUBEMAP_PASS ? 2.0 : 0.0);

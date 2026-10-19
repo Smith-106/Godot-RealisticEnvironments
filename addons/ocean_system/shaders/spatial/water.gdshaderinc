@@ -36,11 +36,6 @@
 #define MAX_LOD_LEVELS 16
 // Radius (m) of the sphere the water is drawn on (OceanSystem.EARTH_RADIUS).
 #define EARTH_RADIUS 6371000.0
-#define WATER_IOR 1.333
-// Scattering by water molecules (1/m; Morel: 0.00193 (550 nm / lambda)^4.32 at the sRGB
-// primaries' wavelengths), and the share particles scatter backward (Petzold, about 1.8%).
-#define WATER_MOLECULAR_SCATTERING vec3(0.0012, 0.0019, 0.0040)
-#define WATER_PARTICLE_BACKSCATTER_RATIO 0.018
 // Light paths through wave crests (crest_light_path()): march steps 0.25 * 2^k m, and the
 // length assumed when the march does not leave the water.
 #ifndef CREST_MARCH_STEPS
@@ -89,15 +84,6 @@
 #define REFRACTION_SILHOUETTE_MARGIN 3.0
 #define REFRACTION_NEAR 0.05
 #define REFRACTION_MAX_DISTANCE 64.0
-// Caustics (caustic_light()): angular diameter (rad) of the sun's disk, which blurs them
-// by that times the light's path; the share of the direct sun in a clear sky's light on
-// a level surface; and the softening of the focus singularity (peak about 1 / it).
-#define SUN_ANGULAR_DIAMETER 0.0093
-#define CAUSTIC_CLEAR_SKY_DIRECT_SHARE 0.8
-#define CAUSTIC_SOFTENING 0.12
-// Mean cosine of the downwelling light's directions below the surface (about 0.8 under a
-// high sun): its diffuse attenuation is K_d = (a + bb) / mean cosine (Kirk 1984).
-#define WATER_DOWNWELLING_MEAN_COSINE 0.8
 
 uniform vec4 foam_color : source_color;
 // Optical properties of the water, per sRGB channel (1/m): absorption, and scattering by
@@ -178,6 +164,9 @@ uniform int water_debug_view : hint_range(0, 15) = 0;
 // clouds and atmosphere and the planar reflection are stored, and EMISSION (which Godot
 // exposes itself) divides by it.
 uniform float scene_exposure = 1.0;
+// Irradiance on a level surface just above the water (scene units, unexposed), for the
+// water's own light seen from below (underwater_path_light()). Set by OceanSystem.
+uniform vec3 underwater_irradiance = vec3(3.14159);
 uniform bool planar_reflection_enabled = false;
 // Screen-space reflections (OceanSystem.reflection_mode): the reflected ray is marched
 // against the opaque scene the camera already drew (scene_color, scene_depth).
@@ -248,13 +237,12 @@ varying float crest_transmission;
 varying vec2 specular_alpha;
 // Fragment -> light(), for a surface seen from below (0 from above): rgb the transmittance
 // of the water between it and the camera, a the share of the surface's light from above
-// that reaches the camera through the surface (1 - Fresnel, foam covers it); and
-// underwater_inscatter the radiance the water between scatters toward the camera per unit
-// of irradiance at the surface (underwater_view()).
+// that reaches the camera through the surface (1 - Fresnel, foam covers it).
 varying vec4 underwater_view_transmission;
-varying vec3 underwater_inscatter;
 // Fragment -> light(): 1 for a surface seen from below.
 varying float seen_from_below;
+
+#include "res://addons/ocean_system/shaders/spatial/ocean_common.gdshaderinc"
 
 /*
  * How far the water at world XZ is drawn below the plane touching the sphere under
@@ -345,7 +333,9 @@ void atmosphere_sea_volumes(vec3 direction, float slice, out vec3 transmittance,
 	// toward the horizon; directions below it (none here: reflections point up) mirror it.
 	float zenith = acos(clamp(direction.y, -1.0, 1.0)) / (0.5 * PI);
 	float y = zenith < 1.0 ? 0.5 * (1.0 - sqrt(1.0 - zenith)) : 0.5 + 0.5 * sqrt(min(zenith - 1.0, 1.0));
-	vec3 uvw = vec3(0.5 / size.x + x * (1.0 - 1.0 / size.x), clamp(y, 0.5 / size.y, 1.0 - 0.5 / size.y), (slice + 0.5) / size.z);
+	// On its own side of the horizon (the sky system's atmosphere_view_v()).
+	y = y < 0.5 ? clamp(y, 0.5 / size.y, 0.5 - 0.5 / size.y) : clamp(y, 0.5 + 0.5 / size.y, 1.0 - 0.5 / size.y);
+	vec3 uvw = vec3(0.5 / size.x + x * (1.0 - 1.0 / size.x), y, (slice + 0.5) / size.z);
 	transmittance = textureLod(sky_atmosphere_transmittance, uvw, 0.0).rgb;
 	inscatter = textureLod(sky_atmosphere_inscatter, uvw, 0.0).rgb;
 	lobe = textureLod(sky_atmosphere_inscatter_lobe, uvw, 0.0).rgb;
@@ -382,7 +372,8 @@ vec4 aerial_perspective_fog(vec3 position) {
 			? 0.5 * (1.0 - sqrt(max(1.0 - zenith / zenith_horizon, 0.0)))
 			: 0.5 + 0.5 * sqrt(clamp((zenith - zenith_horizon) / max(beta, 1e-6), 0.0, 1.0));
 	float slice = sqrt(clamp(distance / aerial_max_distance, 0.0, 1.0)) * (size.z - 2.0);
-	vec3 uvw = vec3(0.5 / size.x + atmosphere_light_azimuth_x(direction) * (1.0 - 1.0 / size.x), clamp(y, 0.5 / size.y, 1.0 - 0.5 / size.y), (slice + 0.5) / size.z);
+	y = y < 0.5 ? clamp(y, 0.5 / size.y, 0.5 - 0.5 / size.y) : clamp(y, 0.5 + 0.5 / size.y, 1.0 - 0.5 / size.y);
+	vec3 uvw = vec3(0.5 / size.x + atmosphere_light_azimuth_x(direction) * (1.0 - 1.0 / size.x), y, (slice + 0.5) / size.z);
 	vec3 transmittance = textureLod(aerial_transmittance, uvw, 0.0).rgb;
 	vec3 inscatter = textureLod(aerial_inscatter, uvw, 0.0).rgb + textureLod(aerial_inscatter_lobe, uvw, 0.0).rgb * atmosphere_lobe_phase(direction, 0.0);
 	float opacity = 1.0 - dot(transmittance, vec3(1.0 / 3.0));
@@ -819,10 +810,6 @@ float water_specular_brdf(vec3 normal, vec3 view, vec3 light_direction, float ro
 	return distribution * visibility * fresnel;
 }
 
-/* Backscattering coefficient (1/m): half the molecular scattering, and the particles' share. */
-vec3 water_backscattering() {
-	return 0.5 * WATER_MOLECULAR_SCATTERING + WATER_PARTICLE_BACKSCATTER_RATIO * water_scattering;
-}
 
 /*
  * Transmittance of the water to a point behind the surface: the view ray's path through
@@ -1006,41 +993,7 @@ vec3 find_reflected_scene(vec3 origin, vec3 direction, mat4 projection, mat4 inv
 	return vec3(0.0);
 }
 
-/* Cascade i's wave slope (gradient of the height) at a rest position, from mip lod. */
-vec2 cascade_slope(uint i, vec2 rest_xz, float lod) {
-	vec4 scales = map_scales[i];
-	vec4 blend_state = spectrum_blend_states[i];
-	float b_weight = wave_frame_blends[i].x;
-	vec3 coords = vec3(rest_xz * scales.xy, blend_state.x);
-	vec2 slope = mix(textureLod(normals_a, coords, lod).xy, textureLod(normals_b, coords, lod).xy, b_weight) * blend_state.z;
-	// Uniform branch: the pending spectrum is only sampled during a crossfade.
-	if (blend_state.w > 0.0) {
-		coords.z = blend_state.y;
-		slope += mix(textureLod(normals_a, coords, lod).xy, textureLod(normals_b, coords, lod).xy, b_weight) * blend_state.w;
-	}
-	return slope;
-}
 
-/*
- * Variance of the wave slopes within a footprint of width meters around a rest position,
- * summed over the cascades: what the mips average away there (E|g|^2 - |E g|^2).
- */
-float slope_variance_within(vec2 rest_xz, float width) {
-	float map_size = float(textureSize(normals_a, 0).x);
-	float variance = 0.0;
-	uint cascade_count = min(uint(num_cascades), uint(fragment_cascade_limit));
-	for (uint i = 0U; i < cascade_count; ++i) {
-		vec4 scales = map_scales[i];
-		vec4 blend_state = spectrum_blend_states[i];
-		float texel = 1.0 / (map_size * max(scales.x, scales.y));
-		float lod = log2(max(width / texel, 1.0));
-		vec4 a = textureLod(normals_a, vec3(rest_xz * scales.xy, blend_state.x), lod);
-		vec4 b = textureLod(normals_b, vec3(rest_xz * scales.xy, blend_state.x), lod);
-		vec4 m = mix(a, b, wave_frame_blends[i].x);
-		variance += max(m.z - dot(m.xy, m.xy), 0.0) * blend_state.z * blend_state.z;
-	}
-	return variance * normal_scale * normal_scale;
-}
 
 /*
  * Caustics: the waves focus and spread the sunlight that reaches what lies below.
@@ -1082,38 +1035,10 @@ float caustic_light(vec3 hit, vec3 hit_normal, vec3 to_sun, vec3 surface, vec2 r
 	// Where that light entered: back along the refracted ray, at the matching rest position.
 	vec2 entry_rest = rest_xz + (hit.xz - down.xz * path - surface.xz);
 	float k = 1.0 - to_sun.y / (WATER_IOR * cos_t);
-	float blur = max(SUN_ANGULAR_DIAMETER * path, pixel_size);
-	float mixing = path * k * sqrt(slope_variance_within(entry_rest, 1.0e6));
-	for (int iteration = 0; iteration < 2; ++iteration)
-		mixing = path * k * sqrt(slope_variance_within(entry_rest, max(mixing, blur)));
-	blur = max(blur, mixing);
-	float map_size = float(textureSize(normals_a, 0).x);
-	mat2 hessian = mat2(0.0);
-	uint cascade_count = min(uint(num_cascades), uint(fragment_cascade_limit));
-	for (uint i = 0U; i < cascade_count; ++i) {
-		vec4 scales = map_scales[i];
-		float texel = 1.0 / (map_size * max(scales.x, scales.y));
-		float e = max(blur, texel);
-		float lod = log2(e / texel);
-		vec2 dx = vec2(e, 0.0);
-		vec2 dz = vec2(0.0, e);
-		hessian[0] += (cascade_slope(i, entry_rest + dx, lod) - cascade_slope(i, entry_rest - dx, lod)) / (2.0 * e);
-		hessian[1] += (cascade_slope(i, entry_rest + dz, lod) - cascade_slope(i, entry_rest - dz, lod)) / (2.0 * e);
-	}
-	mat2 jacobian = mat2(1.0) - path * k * normal_scale * hessian;
-	float focus = inversesqrt(determinant(jacobian) * determinant(jacobian) + CAUSTIC_SOFTENING * CAUSTIC_SOFTENING);
+	float focus = caustic_focus(entry_rest, path, k, max(SUN_ANGULAR_DIAMETER * path, pixel_size));
 	return 1.0 + share * (focus - 1.0);
 }
 
-/*
- * Radiance of optically deep water just below the surface per unit of the irradiance there
- * (rrs, 1/sr): 0.0949 u + 0.0794 u^2 with u = bb / (a + bb) (Gordon et al. 1988).
- */
-vec3 water_subsurface_reflectance() {
-	vec3 backscattering = water_backscattering();
-	vec3 u = backscattering / (water_absorption + backscattering);
-	return (0.0949 + 0.0794 * u) * u;
-}
 
 /*
  * Albedo of optically deep water (radiance = albedo * irradiance / PI), from its optical
@@ -1166,11 +1091,6 @@ float water_transmission_btdf(vec3 normal, vec3 to_view, vec3 to_light, float ro
 	return i_h * -o_h * WATER_IOR * WATER_IOR * transmission * distribution * 4.0 * visibility / max(denominator * denominator, 1e-6);
 }
 
-/* Henyey-Greenstein phase function (1/sr). */
-float henyey_greenstein(float cos_theta, float g) {
-	float g2 = g * g;
-	return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * cos_theta, 1e-6), 1.5));
-}
 
 /*
  * Height of the FFT waves at rest position rest_xz, blended like the vertex shader and
@@ -1681,47 +1601,50 @@ void fragment() {
 		crest_transmission = 0.0;
 		specular_alpha = vec2(1.0);
 		underwater_view_transmission = vec4(0.0);
-		underwater_inscatter = vec3(0.0);
 		seen_from_below = 0.0;
 	} else if (from_below) {
 		// Snell's window: the sky's light crosses the surface within the critical angle
 		// (48.6 degrees) of the normal, squeezed from the whole sky into that cone, so its
 		// radiance rises by n^2; past it the surface reflects the water below totally.
 		// The water between the camera and the surface dims all of it and scatters its
-		// own light toward the camera. The water's light, looking up or along, is about
-		// the deep water's (water_subsurface_reflectance()) under the light at the
-		// surface, which the downwelling attenuation dims over the depth the path crosses.
+		// own light toward the camera, and the total reflection shows the water's light
+		// looking down from the surface (underwater_path_light(), as the underwater view).
 		vec3 toward_surface = -view_direction_world;
 		float inside_fresnel = fresnel_dielectric(saturate(dot(toward_surface, world_normal)), WATER_IOR);
 		vec3 sky_through = vec3(0.0);
 		if (inside_fresnel < 1.0) {
-			vec3 to_sky = refract(toward_surface, -world_normal, WATER_IOR);
-			to_sky.y = abs(to_sky.y);
-			sky_through = sample_rough_procedural_environment(normalize(to_sky), effective_reflection_roughness, 1.0, 1.0, water_body_radiance()) * (WATER_IOR * WATER_IOR);
+			vec3 to_sky = normalize(refract(toward_surface, -world_normal, WATER_IOR));
+			sky_through = sample_rough_procedural_environment(vec3(to_sky.x, abs(to_sky.y), to_sky.z), effective_reflection_roughness, 1.0, 1.0, water_body_radiance());
+			// What stands above the water in the window (a hull, a mast): the refracted ray
+			// marched against the opaque scene on screen, like the screen-space reflections.
+			// The screen holds it as drawn in air, before the underwater view dimmed it.
+			vec3 hit = find_reflected_scene(VERTEX, (VIEW_MATRIX * vec4(to_sky, 0.0)).xyz, PROJECTION_MATRIX, INV_PROJECTION_MATRIX);
+			if (hit.z > 0.0) {
+				// Explicit LOD: this follows the hull discard.
+				sky_through = mix(sky_through, textureLod(scene_color, hit.xy, 0.0).rgb, hit.z);
+			}
+			sky_through *= WATER_IOR * WATER_IOR;
 		}
 		float path = distance(CAMERA_POSITION_WORLD, drawn_position);
 		vec3 path_transmittance = exp(-(water_absorption + water_scattering + WATER_MOLECULAR_SCATTERING) * path);
-		vec3 downwelling_attenuation = (water_absorption + water_backscattering()) / WATER_DOWNWELLING_MEAN_COSINE;
-		// Mean of exp(-K_d depth) over the path, its depth going from the surface to the camera's.
-		vec3 depth_attenuation = downwelling_attenuation * max(water_level - CAMERA_POSITION_WORLD.y, 0.0);
-		vec3 mean_light = mix(vec3(1.0) - 0.5 * depth_attenuation, (vec3(1.0) - exp(-depth_attenuation)) / max(depth_attenuation, vec3(1e-4)), step(vec3(1e-4), depth_attenuation));
-		vec3 water_light = water_subsurface_reflectance() * mean_light;
 		float through = (1.0 - inside_fresnel) * (1.0 - foam_factor);
-		// The light the water gets from the sky: pi times its mean radiance, the clouds' included.
-		vec3 sky_irradiance = PI * sample_rough_procedural_environment(vec3(0.0, 1.0, 0.0), 1.0, 1.0, 0.0, water_body_radiance());
-		vec3 water_reflected = inside_fresnel * (1.0 - foam_factor) * path_transmittance + (vec3(1.0) - path_transmittance);
+		vec3 sun = normalize(sky_sun_direction);
+		vec3 inscatter = underwater_path_light(toward_surface, max(water_level - CAMERA_POSITION_WORLD.y, 0.0), path, underwater_irradiance, sun, sky_sun_visibility)
+				+ underwater_shafts(CAMERA_POSITION_WORLD, toward_surface, path, underwater_irradiance, sun, sky_sun_visibility,
+					2.0 / (abs(PROJECTION_MATRIX[1][1]) * VIEWPORT_SIZE.y), interleaved_gradient_noise(FRAGCOORD.xy));
+		vec3 reflected_water = underwater_path_light(reflect(toward_surface, -world_normal), 0.0, 1.0e6, underwater_irradiance, sun, sky_sun_visibility);
+		vec3 water_light = (inside_fresnel * (1.0 - foam_factor) * reflected_water * path_transmittance + inscatter) * scene_exposure;
 		ALBEDO = foam_color.rgb * mix(0.75, 1.0, detail) * foam_factor * path_transmittance;
 		METALLIC = 0.0;
 		ROUGHNESS = mix(effective_reflection_roughness, foam_roughness, foam_factor);
 		SPECULAR = 0.0;
-		EMISSION = (sky_through * through * path_transmittance + sky_irradiance * water_light * water_reflected) / scene_exposure;
+		EMISSION = (sky_through * through * path_transmittance + water_light) / scene_exposure;
 		// Underwater the air's haze does not apply.
 		FOG = vec4(0.0);
 		light_specular_scale = 0.0;
 		crest_transmission = 0.0;
 		specular_alpha = clear_alpha;
 		underwater_view_transmission = vec4(path_transmittance, through * sun_specular_strength);
-		underwater_inscatter = water_light * water_reflected;
 		seen_from_below = 1.0;
 	} else {
 		ALBEDO = base_albedo;
@@ -1736,7 +1659,6 @@ void fragment() {
 		crest_transmission = (1.0 - sky_fresnel) * (1.0 - foam_factor);
 		specular_alpha = mix(clear_alpha, vec2(foam_roughness * foam_roughness), foam_factor);
 		underwater_view_transmission = vec4(0.0);
-		underwater_inscatter = vec3(0.0);
 		seen_from_below = 0.0;
 #ifndef WATER_NO_SKY_POINTS
 		if (sky_point_count > 0) {
@@ -1754,13 +1676,11 @@ void light() {
 	float no_l = dot(NORMAL, LIGHT);
 	vec3 up = (VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz;
 	if (seen_from_below > 0.5) {
-		// Seen from below (fragment()): foam lit through from above, the light scattered by
-		// the water between (underwater_inscatter, per unit of the light at the surface) and
-		// the light seen through the surface, dimmed by that water.
+		// Seen from below (fragment()): foam lit through from above, and the light seen
+		// through the surface, dimmed by the water between (its own light is EMISSION).
 		float foam_light = max(no_l + FOAM_WRAP, 0.0) / (1.0 + FOAM_WRAP)
 			+ FOAM_TRANSMISSION * pow(max(dot(-VIEW, LIGHT), 0.0), FOAM_TRANSMISSION_POWER);
 		DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * foam_light / PI;
-		SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * max(dot(up, LIGHT), 0.0) * underwater_inscatter;
 		if (no_l > 0.0) {
 			SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * (no_l / PI) * water_transmission_btdf(NORMAL, VIEW, LIGHT, ROUGHNESS)
 					* underwater_view_transmission.rgb * underwater_view_transmission.a;

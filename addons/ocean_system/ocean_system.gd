@@ -37,6 +37,7 @@ const WATER_SHADERS : Array[Shader] = [
 ]
 const EDITOR_WATER_PREVIEW_MESH := preload('res://addons/ocean_system/editor_water_preview_mesh.tres')
 const OceanReflectionRenderer := preload('res://addons/ocean_system/ocean_reflection_renderer.gd')
+const UNDERWATER_SHADER := preload('res://addons/ocean_system/shaders/spatial/underwater.gdshader')
 const MAX_CASCADES := 8
 ## The FFT sizes simulation_map_size accepts (fft_compute.glsl has one version each).
 const SIMULATION_MAP_SIZES : Array[int] = [128, 256, 512, 1024]
@@ -499,6 +500,12 @@ var _peak_wavelength_reported := false
 ## shared by the surface queries and the interaction simulation's ticks.
 var _cascade_data := PackedByteArray()
 var _reflection_renderer : OceanReflectionRenderer
+## The underwater view (underwater.gdshader): an internal full-screen quad shown while the
+## camera is below the waves, drawn just before the water. Null in the editor.
+var _underwater : MeshInstance3D
+var _underwater_material : ShaderMaterial
+## Whether this ocean has a surface query out for the camera (released in _exit_tree()).
+var _camera_query_submitted := false
 ## The CDLOD mesh (runtime only; in the editor it only sends the uniforms) and the
 ## hull footprints' cutouts and simulation records.
 var _lod_grid := OceanLodGrid.new(_set_water_shader_parameter)
@@ -522,6 +529,9 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	if _surface_queries != null:
+		if _camera_query_submitted:
+			_surface_queries.release_query(self)
+			_camera_query_submitted = false
 		WaterSurface.unregister(get_world_3d(), _surface_queries)
 
 func _ready() -> void:
@@ -537,6 +547,7 @@ func _ready() -> void:
 	_setup_water_mesh()
 	_setup_wave_generator()
 	_setup_interaction()
+	_setup_underwater()
 	_push_all_shader_parameters()
 
 func _process(delta : float) -> void:
@@ -549,6 +560,7 @@ func _process(delta : float) -> void:
 	if _aerial_perspective_enabled:
 		_set_water_shader_parameter(&'aerial_observer', _sky_source.call(&'get_atmosphere_view_observer'))
 	_update_scene_exposure()
+	_update_underwater(camera)
 	_time += delta
 	_surface_queries.advance_clock(_time, get_physics_process_delta_time())
 	# No generator means no cascades: a flat ocean.
@@ -1127,6 +1139,56 @@ func _update_planar_reflection_settings() -> void:
 	_reflection_renderer.clip_bias = reflection_clip_bias
 	_reflection_renderer.apply(self, water_level)
 
+## Creates the underwater view (runtime only): a quad the shader stretches over the
+## screen, never culled, drawn just before the water (one render priority below it).
+func _setup_underwater() -> void:
+	if Engine.is_editor_hint() or _underwater != null:
+		return
+	_underwater_material = ShaderMaterial.new()
+	_underwater_material.shader = UNDERWATER_SHADER
+	_underwater_material.render_priority = get_water_material().render_priority - 1
+	for parameter : StringName in _parameter_cache:
+		_underwater_material.set_shader_parameter(parameter, _parameter_cache[parameter])
+	var quad := QuadMesh.new()
+	quad.size = Vector2(2.0, 2.0)
+	_underwater = MeshInstance3D.new()
+	_underwater.name = &"UnderwaterView"
+	_underwater.mesh = quad
+	_underwater.material_override = _underwater_material
+	_underwater.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_underwater.custom_aabb = AABB(Vector3.ONE * -1.0e6, Vector3.ONE * 2.0e6)
+	_underwater.visible = false
+	add_child(_underwater, false, Node.INTERNAL_MODE_BACK)
+
+## Shows the underwater view while the camera is below the waves over it (a surface query
+## at the camera, a frame or two old), and sends it and the water the light at the surface.
+func _update_underwater(camera : Camera3D) -> void:
+	if _underwater == null:
+		return
+	if camera == null:
+		_underwater.visible = false
+		return
+	_surface_queries.submit_query(self, PackedVector3Array([camera.global_position]))
+	_camera_query_submitted = true
+	var result := _surface_queries.get_query_result(self)
+	var below := false
+	if result != null and not result.samples.is_empty():
+		var surface := result.samples[0].extrapolated_height(_surface_queries.get_query_age(result))
+		below = camera.global_position.y < surface
+	_underwater.visible = below
+	# Both the underwater view and the surface seen from below light the water with it.
+	_set_water_shader_parameter(&'underwater_irradiance', _get_surface_irradiance())
+
+## Irradiance (scene units, unexposed) on a level surface just above the water: the sky
+## source's light meter (sun, moon and sky), else a white light of energy 1 overhead.
+func _get_surface_irradiance() -> Vector3:
+	if _sky_source != null and _sky_source.has_method(&'get_scene_illuminance') and _sky_source.has_method(&'get_illuminance_unit_lux'):
+		var lux := float(_sky_source.call(&'get_scene_illuminance'))
+		var unit := float(_sky_source.call(&'get_illuminance_unit_lux'))
+		if lux >= 0.0 and unit > 0.0:
+			return Vector3.ONE * (lux / unit)
+	return Vector3.ONE * PI
+
 ## The water sums its reflections pre-exposed (the sky source's textures and the planar
 ## reflection are stored that way) and divides EMISSION by the camera's exposure.
 func _update_scene_exposure() -> void:
@@ -1148,6 +1210,10 @@ func _set_water_shader_parameter(parameter: StringName, value: Variant, force :=
 	# Arrays are copied: a caller may edit its array in place and send it again.
 	_parameter_cache[parameter] = value.duplicate() if value is Array or typeof(value) >= TYPE_PACKED_BYTE_ARRAY else value
 	get_water_material().set_shader_parameter(parameter, value)
+	# The underwater view reads the same water optics and waves under the same names
+	# (parameters it does not declare are ignored).
+	if _underwater_material != null:
+		_underwater_material.set_shader_parameter(parameter, value)
 
 func _dispatch_surface_queries() -> void:
 	# Nothing to sample until the first FFT output exists (or ever, with no cascades).

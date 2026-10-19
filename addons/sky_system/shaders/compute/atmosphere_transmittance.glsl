@@ -37,8 +37,10 @@ void main() {
 	float h = altitude_mu.x;
 	float mu = altitude_mu.y;
 	float ray_length = atmosphere_distance_to_top(h, mu, pc.top_altitude);
-	float transport = atmosphere_haze_transport_share(pc.haze_anisotropy);
-	vec4 haze_optics = atmosphere_haze_optics(pc.haze_wavelength_exponent);
+	// The haze's optical depth light transport sees: its forward peak's scattering is
+	// left out, its absorption (atmosphere_haze_optics()) stays.
+	float albedo = atmosphere_haze_optics(pc.haze_wavelength_exponent).a;
+	float haze_transport = 1.0 - albedo * (1.0 - atmosphere_haze_transport_share(pc.haze_anisotropy));
 	vec3 optical_depth = vec3(0.0);
 	float previous_t = 0.0;
 	float previous_h = h;
@@ -46,9 +48,12 @@ void main() {
 		float s = float(i) / float(TRANSMITTANCE_STEPS);
 		float t = ray_length * s * s;
 		float step_h = atmosphere_altitude_along(h, mu, t);
-		optical_depth += atmosphere_mean_extinction(previous_h, step_h, pc.haze_density, pc.haze_scale_height, haze_optics, transport) * (t - previous_t);
+		optical_depth += vec3(ATMOSPHERE_RAYLEIGH_SCATTERING_550 * atmosphere_exponential_mean(previous_h, step_h, ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT),
+				pc.haze_density * haze_transport * atmosphere_exponential_mean(previous_h, step_h, pc.haze_scale_height),
+				ATMOSPHERE_OZONE_ABSORPTION_550 * atmosphere_ozone_mean(previous_h, step_h)) * (t - previous_t);
 		previous_t = t;
 		previous_h = step_h;
 	}
-	imageStore(transmittance_image, texel, vec4(exp(-optical_depth), 1.0));
+	// Optical depths at 550 nm, not colour: consumers integrate them over the spectrum.
+	imageStore(transmittance_image, texel, vec4(optical_depth, 1.0));
 }
