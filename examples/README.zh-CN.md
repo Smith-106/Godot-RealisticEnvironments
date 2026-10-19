@@ -18,15 +18,16 @@
 
 **漂浮物。** `crate.tscn` 和 `barrel.tscn` 都是一个 `RigidBody3D`（质量、网格、碰撞
 形状），带有 `BuoyantBody` 和 `BuoyancyProbeVolume`。探针体积的 `source_paths` 指向
-网格。每个探针的体积是物体体积除以探针数，水柱高度是物体的高度。探针由
-**Generate All Probes** 放置，并随场景保存。物体排开的水与它自身一样重时达到平衡：
-250 千克、1 立方米的箱子有四分之一浸在水中。
+网格，探针由 **Generate All Probes** 根据网格烘焙，并随场景保存。物体排开的水与它自身
+一样重时达到平衡：250 千克、1 立方米的箱子有四分之一浸在水中。这么轻的立方体平面朝上
+并不稳定，所以会像真实的箱子一样翻到一条棱上。
 
 **船。** `simple_boat.tscn` 是 `addons/boat_template/boat.tscn` 的继承场景：
 
 1. `Model` 是 `assets/simple_hull.obj`，由 `tools/make_example_hull.py` 生成
    （船头朝 −Z）。
-2. 根节点设置 `mass`、`center_of_mass` 以及驾驶和稳定性参数。`CollisionShape3D`
+2. 根节点设置 `mass`、`center_of_mass`（位于船体浮心上方，由探针体积的警告给出）以及
+   驾驶参数。`CollisionShape3D`
    使用由网格生成的凸形状。
 3. `BuoyancyProbeVolume`：`source_paths` → `Model`，然后
    **Generate All Probes**。

@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文**
 
-`boat.tscn` 是一艘已经接好所有系统的船：驾驶、稳定性、浮力和沉没、受击生命值、船体
+`boat.tscn` 是一艘已经接好所有系统的船：驾驶、浮力和沉没、受击生命值、船体
 挖空和尾迹、船头浪花，以及相机锚点。要做一艘船，从它创建一个**继承场景**。
 
 需要 `core`、`ocean_system`、`sky_system`（浪花使用它的大气雾霭）、`buoyancy_system`
@@ -12,7 +12,7 @@
 ## 工作原理
 
 ```
-Boat (RigidBody3D, FloatingBoat)   drive input, stability, model animation
+Boat (RigidBody3D, FloatingBoat)   drive input, model animation
 ├─ CollisionShape3D           placeholder box: replace it
 ├─ BuoyantBody                buoyancy and sinking  ← Hitboxes.group_destroyed
 ├─ BuoyancyProbeVolume
@@ -24,8 +24,9 @@ Boat (RigidBody3D, FloatingBoat)   drive input, stability, model animation
 ```
 
 - **`FloatingBoat`**（根节点）在 `player_controlled` 打开时推动船前进并转向。速度超过
-  `max_forward_speed` / `max_reverse_speed` 后不再加推力，低速时转向变弱。可选的分轴
-  角阻尼和横摇回正弹簧用来增加稳定性。不受玩家控制的船照样漂浮、受伤、沉没并激起尾迹。
+  `max_forward_speed` / `max_reverse_speed` 后不再加推力，低速时转向变弱。保持正浮、
+  水对船体的侧向抓力和阻力都来自浮力系统，由船体形状和船的质量决定：没有龙骨的船体
+  转弯时会侧滑。不受玩家控制的船照样漂浮、受伤、沉没并激起尾迹。
 - 浮力、生命值和尾迹来自其他插件的节点（见它们的 README）。`hull` 分组被摧毁时，
   船会沉没。
 - **`BowSpray`** 读取船艏柱处的水面。船艏切开水面时，它甩出一片片水滴；船头猛地扎进
@@ -35,9 +36,10 @@ Boat (RigidBody3D, FloatingBoat)   drive input, stability, model animation
 ## 使用方法
 
 1. 通过 **场景 > 新建继承场景** 从 `boat.tscn` 创建场景，加入你的模型，船头朝 −Z。
-2. 替换碰撞形状，设置 `mass` 和 `center_of_mass`。
-3. 在 `BuoyancyProbeVolume` 上设置 `source_paths`、`design_waterline_y` 和探针尺寸，
-   点击 **Generate All Probes**，然后保存（见 `buoyancy_system`）。
+2. 替换碰撞形状，设置船真实的 `mass` 和 `center_of_mass`。
+3. 在 `BuoyancyProbeVolume` 上把 `source_paths` 设为船体，点击 **Generate All Probes**，
+   然后保存。如果它的警告说船浮起时是倾斜的，按警告移动 `center_of_mass`（见
+   `buoyancy_system`）。
 4. 在 `HullWaterFootprint` 上把 `bake_source_paths` 设为只包含船体，点击
    **Bake Profile**，然后保存（见 `ocean_system`）。
 5. 在 `Hitboxes` 下添加 `ProjectileHitbox` 区域，并在 `group_max_health` 中列出它们的

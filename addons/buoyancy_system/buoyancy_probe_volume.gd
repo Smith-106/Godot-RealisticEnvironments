@@ -2,10 +2,12 @@
 class_name BuoyancyProbeVolume
 extends Node3D
 ## A body's buoyancy probes (BuoyancyProbeNode and BuoyancyFxProbeNode children),
-## which BuoyantBody samples. In the editor it generates physical probes inside the
-## hull's design waterline and contact (FX) probes along its edge, from the meshes
-## under source_paths; save the scene to keep them. Probes are never generated at
-## runtime.
+## which BuoyantBody samples. In the editor it bakes the hull under source_paths into
+## physical probes, columns on a grid over the hull's plan that measure its shape
+## (waterplane area at every height, its sides), and places contact (FX) probes
+## along the waterline it floats at; save the scene to keep them. Its configuration
+## warnings report how the body floats (draft, trim, heel, stability) for its mass
+## and centre of mass. Probes are never generated at runtime.
 
 ## Emitted when probes are added, removed, enabled, disabled or edited, or the
 ## volume itself is toggled. BuoyantBody rebuilds its probe cache on it.
@@ -14,6 +16,13 @@ signal probes_changed
 const GENERATED_PROBES_NAME := "GeneratedProbes"
 const DEBUG_NODE_NAME := "DebugDraw"
 const EPSILON := 0.0001
+## Raster cells per column side when baking (the hull's slices are measured on
+## a grid this much finer than the columns').
+const RASTER_PER_COLUMN := 6
+## Height bands of each column's area_profile.
+const PROFILE_BANDS := 8
+## Water density (kg/m³) of the report without a BuoyantBody on the body.
+const DEFAULT_WATER_DENSITY := 1025.0
 
 const PHYSICAL_COLOR := Color(0.1, 0.8, 1.0, 0.9)
 const FX_COLOR := Color(1.0, 0.62, 0.14, 0.9)
@@ -27,8 +36,6 @@ const PHYSICAL_DEBUG_CROSS_SIZE := 0.16
 const DEBUG_FORCE_SCALE := 0.015
 const DEBUG_BODY_FORCE_SCALE := 0.004
 const DEBUG_CENTER_OF_MASS_SIZE := 0.35
-const DEBUG_SHOW_WATERLINE_INTERSECTION := true
-const DEBUG_SHOW_WATERLINE_CONVEX_HULL := true
 
 ## Enables this probe volume for buoyancy sampling and contact events.
 @export var enabled := true :
@@ -37,25 +44,27 @@ const DEBUG_SHOW_WATERLINE_CONVEX_HULL := true
 		probes_changed.emit()
 
 @export_group("Generation")
-## Mesh roots the generator slices at design_waterline_y for the hull's waterline
-## outline. Empty: the parent's meshes.
+## Mesh roots of the hull the probes are baked from. Empty: the parent's meshes.
 @export var source_paths : Array[NodePath] = []
-## Local-space height of the static design waterline used by probe generation.
-@export var design_waterline_y := 0.0 :
-	set(value):
-		design_waterline_y = value
-		_queue_debug_rebuild()
+## Local height (m) above which the hull no longer keeps water out. Below it, the
+## hull displaces everything at each height that the water cannot reach from the side:
+## its solid parts and the air its sides enclose (an open boat's inside below the
+## gunwale), but not what open water flows between (a lattice tower). Lower it to a
+## deck below which a superstructure lets water in. Infinite: the whole mesh.
+@export var watertight_top_y := INF
 ## Local X coordinate used as the mirror plane when symmetric generation is enabled.
 @export var symmetry_plane_x := 0.0
-## Mirrors physical probes across the local YZ plane for stable left/right balance.
+## Bakes the columns of one side of symmetry_plane_x and mirrors them, so the
+## body floats level whatever small asymmetries its mesh has.
 @export var mirror_across_yz_plane := true
 ## Interprets the bow as local -Z when tagging generated FX/contact probes.
 @export var bow_is_negative_z := true
-## Target number of generated physical buoyancy probes.
-@export_range(1, 256, 1) var physical_probe_count := 12
+## About how many columns cover the hull's plan. More follow its shape more closely
+## (and cost a little more each physics tick).
+@export_range(1, 256, 1) var physical_probe_count := 24
 ## Target number of generated FX/contact probes around the waterline edge.
 @export_range(0, 256, 1) var fx_probe_count := 24
-## Fraction of hull length skipped near bow and stern when placing physical probes.
+## Fraction of hull length skipped near bow and stern when placing contact probes.
 @export_range(0.0, 0.45, 0.01) var longitudinal_margin_fraction := 0.08
 ## Generates the physical probes in the editor when this volume has none yet.
 @export var editor_auto_generate_if_empty := true
@@ -66,19 +75,6 @@ const DEBUG_SHOW_WATERLINE_CONVEX_HULL := true
 ## Replaces all generated probes (generate_probes()).
 @export_tool_button("Generate All Probes", "Reload") var generate_all_probes_action := generate_probes
 @export_subgroup("New Probes")
-## Volume (m³) each new physical probe displaces when fully submerged. Together they
-## should hold well over the body's weight (its mass / water density).
-@export_range(0.001, 100000.0, 0.001, "or_greater", "suffix:m³") var generated_probe_volume := 1.0
-## Height of each new physical probe's water column, generated_probe_freeboard included.
-@export_range(0.01, 100.0, 0.01, "or_greater", "suffix:m") var generated_probe_buoyancy_height := 1.2
-## Height of each new physical probe's column top above design_waterline_y.
-## The hull above the waterline (up to the deck or gunwale) is reserve buoyancy: with
-## the column ending at the waterline, waves above it cannot lift the hull.
-@export_range(0.0, 100.0, 0.01, "or_greater", "suffix:m") var generated_probe_freeboard := 0.0
-## Forward/back drag multiplier of each new physical probe.
-@export_range(0.0, 100.0, 0.01, "or_greater") var generated_probe_longitudinal_drag_multiplier := 1.0
-## Side-to-side drag multiplier of each new physical probe.
-@export_range(0.0, 100.0, 0.01, "or_greater") var generated_probe_lateral_drag_multiplier := 1.0
 ## Editor display radius of each new contact (FX) probe.
 @export_range(0.01, 5.0, 0.01, "or_greater", "suffix:m") var generated_fx_probe_display_radius := 0.12
 
@@ -159,69 +155,215 @@ func generate_probes(physical := true, fx := true) -> void:
 		push_error("BuoyancyProbeVolume %s: probes can only be generated in the editor; generate and save them before running." % get_path())
 		return
 	var start_usec := Time.get_ticks_usec()
-	var context := _get_generation_context()
 	var root := _get_or_create_generated_root()
+	root.transform = Transform3D.IDENTITY
 	var counts := PackedStringArray()
 	if physical:
 		_clear_generated_probes(root, false)
-		counts.push_back("%d physical" % _generate_physical_probes(root, context))
+		counts.push_back("%d physical" % _generate_physical_probes(root, HullSlicer.collect_triangles(_get_source_mesh_instances(), global_transform.affine_inverse())))
+		_invalidate_probe_cache()
 	if fx:
+		# On the waterline the new physical probes float at.
 		_clear_generated_probes(root, true)
-		counts.push_back("%d FX" % _generate_fx_probes(root, context))
+		counts.push_back("%d FX" % _generate_fx_probes(root, _get_generation_context(_get_waterline_y())))
 	_finalize_generation()
-	print("BuoyancyProbeVolume generated %s probes from %d waterline segments in %.2f ms: %s" % [" and ".join(counts), int(context["segment_count"]), float(Time.get_ticks_usec() - start_usec) / 1000.0, get_path()])
+	print("BuoyancyProbeVolume generated %s probes in %.0f ms: %s" % [" and ".join(counts), float(Time.get_ticks_usec() - start_usec) / 1000.0, get_path()])
+	var report := get_hydrostatics_report()
+	if not report.is_empty():
+		print("  ", report)
 
 
-func _get_generation_context() -> Dictionary:
+## The hull's outline at the waterline y (local) and its bounds, for the contact probes.
+func _get_generation_context(y : float) -> Dictionary:
 	var source_mesh_instances := _get_source_mesh_instances()
 	if source_mesh_instances.is_empty():
 		push_warning("%s found no MeshInstance3D sources for buoyancy probe generation." % str(get_path()))
-	var segments := _build_waterline_segments(source_mesh_instances)
-	var bounds := _get_segments_bounds(segments)
+	var segments := _build_waterline_segments(source_mesh_instances, y)
+	var bounds := _get_segments_bounds(segments, y)
 	if bounds.size.length_squared() <= EPSILON:
 		bounds = _get_source_bounds_in_local_space(source_mesh_instances)
 	if bounds.size.length_squared() <= EPSILON:
-		bounds = AABB(Vector3(-1.5, design_waterline_y, -3.0), Vector3(3.0, 0.01, 6.0))
+		bounds = AABB(Vector3(-1.5, y, -3.0), Vector3(3.0, 0.01, 6.0))
 	var hull_points := _build_waterline_hull_points(segments, bounds)
-	return {
-		"segments": segments,
-		"hull_points": hull_points,
-		"bounds": bounds,
-		"segment_count": segments.size(),
-		"owner": _get_generated_node_owner(),
-	}
+	return {"y": y, "hull_points": hull_points, "bounds": bounds}
 
 
-func _generate_physical_probes(root: Node, context: Dictionary) -> int:
-	var hull_points : Array = context.get("hull_points", [])
-	var bounds : AABB = context.get("bounds", AABB())
-	var physical_specs := _build_physical_probe_specs(hull_points, bounds)
-	var generated_owner : Node = context.get("owner", _get_generated_node_owner())
-	var physical_count := 0
-	for spec in physical_specs:
+func _generate_physical_probes(root: Node, triangles: PackedVector3Array) -> int:
+	var columns := _bake_columns(triangles)
+	if columns.is_empty():
+		push_warning("%s: the hull meshes under source_paths have no volume below watertight_top_y; no physical probes." % get_path())
+	var generated_owner := _get_generated_node_owner()
+	for i in columns.size():
+		var column : Dictionary = columns[i]
 		var probe := BuoyancyProbeNode.new()
-		probe.name = "Probe_%03d" % physical_count
-		probe.position = Vector3(float(spec["x"]), design_waterline_y + generated_probe_freeboard, float(spec["z"]))
-		probe.volume = generated_probe_volume
-		probe.buoyancy_height = generated_probe_buoyancy_height
-		probe.longitudinal_drag_multiplier = generated_probe_longitudinal_drag_multiplier
-		probe.lateral_drag_multiplier = generated_probe_lateral_drag_multiplier
+		probe.name = "Probe_%03d" % i
+		probe.position = column["position"]
+		probe.height = column["height"]
+		probe.area_profile = column["area_profile"]
+		probe.side_panels = column["side_panels"]
 		root.add_child(probe)
 		probe.owner = generated_owner
-		physical_count += 1
-	return physical_count
+	return columns.size()
+
+
+## The plan (x, z) bounds of the triangles reaching below watertight_top_y.
+func _get_plan_bounds(triangles : PackedVector3Array) -> Rect2:
+	var plan := Rect2()
+	var found := false
+	for i in range(0, triangles.size() - 2, 3):
+		if minf(triangles[i].y, minf(triangles[i + 1].y, triangles[i + 2].y)) >= watertight_top_y:
+			continue
+		for vertex in [triangles[i], triangles[i + 1], triangles[i + 2]]:
+			var point := Vector2(vertex.x, vertex.z)
+			plan = plan.expand(point) if found else Rect2(point, Vector2.ZERO)
+			found = true
+	return plan
+
+
+## The hull's columns: a square grid over its plan (physical_probe_count cells or
+## so), each measured on the hull's slices (_HullSlices): its cross-section at every
+## height, and the sides it owns (each slice of the hull's side belongs to the column
+## just inside it).
+func _bake_columns(triangles: PackedVector3Array) -> Array[Dictionary]:
+	var mirror := mirror_across_yz_plane
+	var plan := _get_plan_bounds(triangles)
+	if plan.get_area() <= EPSILON:
+		return []
+	var spacing := sqrt(plan.get_area() / maxf(physical_probe_count, 1))
+	var slices := _HullSlices.new(triangles, watertight_top_y, plan, spacing / RASTER_PER_COLUMN)
+	# The grid is sized for the target count, then again for the cells the hull fills.
+	var cells : Array[Dictionary] = []
+	for attempt in 2:
+		if attempt > 0:
+			spacing *= sqrt(float(cells.size() * (2 if mirror else 1)) / physical_probe_count)
+		cells = _measure_cells(slices, spacing, mirror)
+		if cells.is_empty():
+			return []
+	var step := 1.5 * slices.resolution
+	for level in slices.levels.size():
+		var y := slices.get_level_height(level)
+		var points := slices.segments[level]
+		for i in range(0, points.size(), 2):
+			var a := points[i]
+			var b := points[i + 1]
+			var length := a.distance_to(b)
+			var middle := (a + b) * 0.5
+			if length <= EPSILON or (mirror and middle.x < symmetry_plane_x):
+				continue
+			var normal := Vector2(b.y - a.y, a.x - b.x) / length
+			var hull_front := slices.is_hull(level, middle + normal * step)
+			if hull_front == slices.is_hull(level, middle - normal * step):
+				continue # Enclosed (an inner wall), or a sliver in open water.
+			if hull_front:
+				normal = -normal
+			var owner_cell := cells[_nearest_cell(cells, middle - normal * step)]
+			var bottom : float = owner_cell["position"].y
+			if y < bottom or y > bottom + owner_cell["height"]:
+				continue
+			# Averaged over the column's levels: a side length per unit of height.
+			var panels : PackedVector2Array = owner_cell["side_panels"]
+			var bin := posmod(roundi(atan2(normal.y, normal.x) / (TAU / BuoyancyProbeNode.SIDE_PANEL_BINS)), BuoyancyProbeNode.SIDE_PANEL_BINS)
+			panels[bin] += normal * (length * slices.level_height / owner_cell["height"])
+			owner_cell["side_panels"] = panels
+	var columns : Array[Dictionary] = []
+	for cell in cells:
+		columns.push_back(cell)
+		if mirror:
+			columns.push_back(_mirrored_column(cell))
+	columns.sort_custom(func(a : Dictionary, b : Dictionary) -> bool:
+		var pa : Vector3 = a["position"]
+		var pb : Vector3 = b["position"]
+		return pa.z < pb.z - EPSILON or (absf(pa.z - pb.z) <= EPSILON and pa.x < pb.x))
+	return columns
+
+
+## The grid cells of side spacing the hull fills, each with its lowest point, height
+## and band areas. Mirrored: only those right of symmetry_plane_x, where the grid starts.
+func _measure_cells(slices : _HullSlices, spacing : float, mirror : bool) -> Array[Dictionary]:
+	var plan := slices.plan
+	var origin_x := symmetry_plane_x if mirror else plan.position.x
+	var count_x := maxi(ceili((plan.end.x - origin_x) / spacing - EPSILON), 1)
+	var count_z := maxi(ceili(plan.size.y / spacing - EPSILON), 1)
+	var origin_z := plan.get_center().y - count_z * spacing * 0.5
+	var cells : Array[Dictionary] = []
+	for iz in count_z:
+		for ix in count_x:
+			var cell := Rect2(origin_x + ix * spacing, origin_z + iz * spacing, spacing, spacing)
+			var areas := PackedFloat32Array()
+			var first := -1
+			var last := -1
+			for level in slices.levels.size():
+				var area := slices.get_area(level, cell)
+				areas.push_back(area)
+				if area > 0.0:
+					first = level if first < 0 else first
+					last = level
+			if first < 0:
+				continue
+			var bottom := slices.get_level_height(first) - 0.5 * slices.level_height
+			var height := (last - first + 1) * slices.level_height
+			# Each band's mean section, from the levels it spans (partly at its ends).
+			var band := height / PROFILE_BANDS
+			var profile := PackedFloat32Array()
+			profile.resize(PROFILE_BANDS)
+			for k in PROFILE_BANDS:
+				var band_bottom := bottom + k * band
+				var volume := 0.0
+				for level in range(first, last + 1):
+					var level_bottom := slices.get_level_height(level) - 0.5 * slices.level_height
+					volume += areas[level] * maxf(minf(level_bottom + slices.level_height, band_bottom + band) - maxf(level_bottom, band_bottom), 0.0)
+				profile[k] = volume / band
+			var panels := PackedVector2Array()
+			panels.resize(BuoyancyProbeNode.SIDE_PANEL_BINS)
+			cells.push_back({
+				"position": Vector3(cell.get_center().x, bottom, cell.get_center().y),
+				"height": height,
+				"area_profile": profile,
+				"side_panels": panels,
+			})
+	return cells
+
+
+## Index of the cell nearest point (in the plan).
+func _nearest_cell(cells : Array[Dictionary], point : Vector2) -> int:
+	var nearest := 0
+	var nearest_distance := INF
+	for i in cells.size():
+		var center : Vector3 = cells[i]["position"]
+		var distance := Vector2(center.x, center.z).distance_squared_to(point)
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest = i
+	return nearest
+
+
+## cell mirrored across symmetry_plane_x.
+func _mirrored_column(cell : Dictionary) -> Dictionary:
+	var mirrored := cell.duplicate(true)
+	var center : Vector3 = cell["position"]
+	mirrored["position"] = Vector3(2.0 * symmetry_plane_x - center.x, center.y, center.z)
+	var panels : PackedVector2Array = cell["side_panels"]
+	var mirrored_panels := PackedVector2Array()
+	mirrored_panels.resize(panels.size())
+	for bin in panels.size():
+		# A normal (x, z) mirrors to (-x, z): its angle t to pi - t.
+		@warning_ignore("integer_division")
+		var mirrored_bin := posmod(BuoyancyProbeNode.SIDE_PANEL_BINS / 2 - bin, BuoyancyProbeNode.SIDE_PANEL_BINS)
+		mirrored_panels[mirrored_bin] = Vector2(-panels[bin].x, panels[bin].y)
+	mirrored["side_panels"] = mirrored_panels
+	return mirrored
 
 
 func _generate_fx_probes(root: Node, context: Dictionary) -> int:
-	var hull_points : Array = context.get("hull_points", [])
-	var bounds : AABB = context.get("bounds", AABB())
+	var hull_points : Array = context["hull_points"]
+	var bounds : AABB = context["bounds"]
 	var fx_specs := _build_fx_probe_specs(hull_points, bounds)
-	var generated_owner : Node = context.get("owner", _get_generated_node_owner())
+	var generated_owner := _get_generated_node_owner()
 	var fx_count := 0
 	for spec in fx_specs:
 		var probe := BuoyancyFxProbeNode.new()
 		probe.name = "FxProbe_%03d_%s" % [fx_count, str(spec.get("tag", "side")).capitalize()]
-		probe.position = Vector3(float(spec["x"]), design_waterline_y, float(spec["z"]))
+		probe.position = Vector3(float(spec["x"]), float(context["y"]), float(spec["z"]))
 		probe.display_radius = generated_fx_probe_display_radius
 		probe.tag = str(spec.get("tag", "side"))
 		probe.enter_depth_threshold = enter_depth_threshold
@@ -242,7 +384,25 @@ func _finalize_generation() -> void:
 func _get_configuration_warnings() -> PackedStringArray:
 	if _get_physical_probes().is_empty():
 		return PackedStringArray(["No buoyancy probes: the body does not float. Set source_paths to the hull meshes, press Generate All Probes, and save the scene."])
-	return PackedStringArray()
+	var warnings := PackedStringArray()
+	var h := _get_hydrostatics()
+	if h.is_empty():
+		return warnings
+	if not h.has("waterline"):
+		warnings.push_back(get_hydrostatics_report() + " Give it more hull (watertight_top_y) or less mass.")
+		return warnings
+	var gm : Vector2 = h["metacentric_height"]
+	if gm.x <= 0.0 or gm.y <= 0.0:
+		warnings.push_back("Unstable upright: its metacentric height is %.2f m across and %.2f m along, so it rolls over and floats tilted or on its side (as a light cube or a log does). For a hull that should float upright, lower the body's center_of_mass (custom mode) or widen the hull." % [gm.x, gm.y])
+	if absf(h["heel_degrees"]) > 2.0 or absf(h["trim_degrees"]) > 3.0:
+		var center : Vector3 = h["buoyancy_center"]
+		warnings.push_back("Floats heeled %.1f and trimmed %.1f degrees: its centre of mass is off the hull's centre of buoyancy. To float level, set the body's center_of_mass (custom mode) to x = %.2f, z = %.2f." % [h["heel_degrees"], h["trim_degrees"], center.x, center.z])
+	if h["freeboard"] < 0.05 * h["hull_height"]:
+		warnings.push_back("Floats with only %.2f m freeboard: the smallest wave floods it. Give it more hull (watertight_top_y) or less mass." % h["freeboard"])
+	var fx_probes := _get_fx_probes()
+	if not fx_probes.is_empty() and absf(fx_probes[0].position.y - h["waterline_local"]) > maxf(0.05, 0.1 * h["hull_height"]):
+		warnings.push_back("The contact probes are at local y = %.2f m, but the body floats with its waterline at %.2f m: press Generate FX Probes." % [fx_probes[0].position.y, h["waterline_local"]])
+	return warnings
 
 
 ## States of the enabled physical probes, created once per probe and reused.
@@ -280,21 +440,21 @@ func _get_or_create_state(probe : Node3D, is_fx_probe : bool, tag : String, ente
 
 
 ## Called by BuoyantBody each tick with the body's centre of mass and forces, for the debug draw.
-func set_debug_body_state(center_of_mass_world: Vector3, gravity_force: Vector3, external_force: Vector3, has_state: bool) -> void:
+func set_debug_body_state(center_of_mass_world: Vector3, gravity_force: Vector3, external_force: Vector3) -> void:
 	if not debug_enabled:
 		return
 	_debug_body_state = {
 		"center_of_mass_world": center_of_mass_world,
 		"gravity_force": gravity_force,
 		"external_force": external_force,
-		"has_state": has_state,
 	}
 	_queue_debug_rebuild()
 
 
-func _build_waterline_segments(mesh_instances: Array[MeshInstance3D]) -> Array[Dictionary]:
+## The hull's outline at local height y.
+func _build_waterline_segments(mesh_instances: Array[MeshInstance3D], y : float) -> Array[Dictionary]:
 	var triangles := HullSlicer.collect_triangles(mesh_instances, global_transform.affine_inverse())
-	var points := HullSlicer.slice(triangles, design_waterline_y)
+	var points := HullSlicer.slice(triangles, y)
 	var segments : Array[Dictionary] = []
 	for i in range(0, points.size(), 2):
 		segments.push_back({"a": points[i], "b": points[i + 1]})
@@ -370,41 +530,6 @@ func _build_convex_hull_2d(points: Array) -> Array:
 
 func _cross_2d(a: Vector2, b: Vector2, c: Vector2) -> float:
 	return (b - a).cross(c - a)
-
-
-func _build_physical_probe_specs(hull_points: Array, bounds: AABB) -> Array[Dictionary]:
-	var specs : Array[Dictionary] = []
-	var target_count := maxi(physical_probe_count, 1)
-	if mirror_across_yz_plane:
-		@warning_ignore("integer_division")
-		var pair_count := target_count / 2
-		var station_count := maxi(pair_count, 1)
-		for station_index in station_count:
-			var z := _get_station_z(station_index, station_count, bounds)
-			var interval := _get_hull_interval_at_z(hull_points, bounds, z)
-			var half_width := _get_symmetric_half_width(interval)
-			if half_width <= EPSILON:
-				continue
-			var x_offset := half_width
-			if pair_count > 0:
-				specs.push_back({"x": symmetry_plane_x - x_offset, "z": z})
-				specs.push_back({"x": symmetry_plane_x + x_offset, "z": z})
-		if target_count % 2 != 0:
-			@warning_ignore("integer_division")
-			var z := _get_station_z(station_count / 2, station_count, bounds)
-			specs.push_back({"x": symmetry_plane_x, "z": z})
-	else:
-		for station_index in target_count:
-			var z := _get_station_z(station_index, target_count, bounds)
-			var interval := _get_hull_interval_at_z(hull_points, bounds, z)
-			specs.push_back({"x": (interval.x + interval.y) * 0.5, "z": z})
-	while specs.size() > target_count:
-		specs.remove_at(specs.size() - 1)
-	return specs
-
-
-func _get_symmetric_half_width(interval: Vector2) -> float:
-	return maxf(maxf(absf(interval.x - symmetry_plane_x), absf(interval.y - symmetry_plane_x)), EPSILON)
 
 
 func _build_fx_probe_specs(hull_points: Array, bounds: AABB) -> Array[Dictionary]:
@@ -527,13 +652,13 @@ func _get_source_bounds_in_local_space(mesh_instances: Array[MeshInstance3D]) ->
 	return bounds if has_bounds else AABB()
 
 
-func _get_segments_bounds(segments: Array[Dictionary]) -> AABB:
+func _get_segments_bounds(segments: Array[Dictionary], y : float) -> AABB:
 	var bounds := AABB()
 	var has_bounds := false
 	for segment in segments:
 		var a : Vector2 = segment["a"]
 		var b : Vector2 = segment["b"]
-		for point in [Vector3(a.x, design_waterline_y, a.y), Vector3(b.x, design_waterline_y, b.y)]:
+		for point in [Vector3(a.x, y, a.y), Vector3(b.x, y, b.y)]:
 			if not has_bounds:
 				bounds = AABB(point, Vector3.ZERO)
 				has_bounds = true
@@ -740,11 +865,10 @@ func _rebuild_debug_mesh() -> void:
 	_update_debug_materials()
 	_debug_mesh.clear_surfaces()
 
-	if Engine.is_editor_hint() and DEBUG_SHOW_WATERLINE_INTERSECTION:
+	if Engine.is_editor_hint():
 		_begin_debug_lines()
 		_add_debug_waterline_intersection()
 		_commit_debug_lines(_waterline_material)
-	if Engine.is_editor_hint() and DEBUG_SHOW_WATERLINE_CONVEX_HULL:
 		_begin_debug_lines()
 		_add_debug_waterline_convex_hull()
 		_commit_debug_lines(_waterline_hull_material)
@@ -773,13 +897,9 @@ func _rebuild_debug_mesh() -> void:
 		_begin_debug_lines()
 		_add_debug_center_of_mass()
 		_commit_debug_lines(_center_of_mass_material)
-
-	if _has_debug_body_state():
 		_begin_debug_lines()
 		_add_debug_body_gravity()
 		_commit_debug_lines(_gravity_material)
-
-	if _has_debug_body_state():
 		_begin_debug_lines()
 		_add_debug_body_net_force()
 		_commit_debug_lines(_net_force_material)
@@ -821,25 +941,20 @@ func _add_debug_cross(center: Vector3, radius: float) -> void:
 
 
 func _add_debug_waterline_intersection() -> void:
-	for segment in _build_waterline_segments(_get_source_mesh_instances()):
+	var y := _get_waterline_y()
+	for segment in _build_waterline_segments(_get_source_mesh_instances(), y):
 		var a : Vector2 = segment["a"]
 		var b : Vector2 = segment["b"]
-		_add_debug_vertex(Vector3(a.x, design_waterline_y, a.y))
-		_add_debug_vertex(Vector3(b.x, design_waterline_y, b.y))
+		_add_debug_vertex(Vector3(a.x, y, a.y))
+		_add_debug_vertex(Vector3(b.x, y, b.y))
 
 
 func _add_debug_waterline_convex_hull() -> void:
-	var source_mesh_instances := _get_source_mesh_instances()
-	var segments := _build_waterline_segments(source_mesh_instances)
-	var bounds := _get_segments_bounds(segments)
-	if bounds.size.length_squared() <= EPSILON:
-		bounds = _get_source_bounds_in_local_space(source_mesh_instances)
-	if bounds.size.length_squared() <= EPSILON:
-		bounds = AABB(Vector3(-1.5, design_waterline_y, -3.0), Vector3(3.0, 0.01, 6.0))
-	var hull_points := _build_waterline_hull_points(segments, bounds)
+	var context := _get_generation_context(_get_waterline_y())
+	var hull_points : Array = context["hull_points"]
 	if hull_points.size() < 2:
 		return
-	var hull_y := design_waterline_y + 0.03
+	var hull_y : float = context["y"] + 0.03
 	for i in hull_points.size():
 		var a : Vector2 = hull_points[i]
 		var b : Vector2 = hull_points[(i + 1) % hull_points.size()]
@@ -861,7 +976,7 @@ func _add_debug_force_lines() -> void:
 
 
 func _has_debug_body_state() -> bool:
-	return _debug_body_state is Dictionary and not _debug_body_state.is_empty() and bool(_debug_body_state.get("has_state", false))
+	return not _debug_body_state.is_empty()
 
 
 func _add_debug_center_of_mass() -> void:
@@ -912,3 +1027,205 @@ func _add_arrowhead(end_local: Vector3, start_local: Vector3) -> void:
 	_add_debug_vertex(base + up * width)
 	_add_debug_vertex(end_local)
 	_add_debug_vertex(base - up * width)
+
+
+## How the body floats upright in calm water, for its mass and centre of mass, from
+## the enabled physical probes (in the body's frame). Empty without a RigidBody3D
+## ancestor or probes.
+func _get_hydrostatics() -> Dictionary:
+	var body := _find_rigid_body()
+	var probes : Array[BuoyancyProbeNode] = []
+	for probe in _get_physical_probes():
+		if (probe as BuoyancyProbeNode).enabled:
+			probes.push_back(probe)
+	if body == null or probes.is_empty() or not body.is_inside_tree():
+		return {}
+	var density := DEFAULT_WATER_DENSITY
+	for buoyant_body in body.find_children("*", "BuoyantBody", true, false):
+		density = buoyant_body.get(&"water_density")
+		break
+	var to_body := body.global_transform.affine_inverse()
+	var positions := PackedVector3Array()
+	var bottoms := PackedFloat32Array()
+	var heights := PackedFloat32Array()
+	var profiles : Array[PackedFloat32Array] = []
+	var bottom := INF
+	var top := -INF
+	var capacity := 0.0
+	for probe in probes:
+		var body_position := to_body * probe.global_position
+		positions.push_back(body_position)
+		bottoms.push_back(body_position.y)
+		heights.push_back(probe.height)
+		profiles.push_back(probe.area_profile)
+		bottom = minf(bottom, body_position.y)
+		top = maxf(top, body_position.y + probe.height)
+		capacity += BuoyancyProbeNode.volume_below(probe.area_profile, probe.height, probe.height).x * density
+	var result := {"mass": body.mass, "capacity": capacity, "hull_height": top - bottom}
+	# The waterline where the displaced water weighs the body's mass.
+	var waterline := BuoyancyProbeNode.find_waterline(bottoms, heights, profiles, body.mass / density)
+	if not is_finite(waterline):
+		return result
+	var volume := 0.0
+	var buoyancy_center := Vector3.ZERO
+	var area := 0.0
+	var flotation := Vector2.ZERO
+	for p in probes.size():
+		var submerged := BuoyancyProbeNode.volume_below(probes[p].area_profile, probes[p].height, waterline - positions[p].y)
+		volume += submerged.x
+		buoyancy_center += Vector3(positions[p].x * submerged.x, positions[p].y * submerged.x + submerged.y, positions[p].z * submerged.x)
+		var section := BuoyancyProbeNode.area_at(probes[p].area_profile, probes[p].height, waterline - positions[p].y)
+		area += section
+		flotation += Vector2(positions[p].x, positions[p].z) * section
+	buoyancy_center /= maxf(volume, EPSILON)
+	flotation /= maxf(area, EPSILON)
+	# The waterplane's second moments about its centre (each column a square of its area).
+	var inertia := Vector2.ZERO
+	for p in probes.size():
+		var section := BuoyancyProbeNode.area_at(probes[p].area_profile, probes[p].height, waterline - positions[p].y)
+		var offset := Vector2(positions[p].x, positions[p].z) - flotation
+		inertia += section * (offset * offset + Vector2.ONE * section / 12.0)
+	var center_of_mass := body.center_of_mass if body.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM else Vector3.ZERO
+	# Metacentric heights GM = KB + BM - KG, across (roll) and along (pitch).
+	var metacentric := Vector2.ONE * (buoyancy_center.y - center_of_mass.y) + inertia / maxf(volume, EPSILON)
+	result.merge({
+		"waterline": waterline,
+		"waterline_local": waterline - (to_body * global_position).y,
+		"draft": waterline - bottom,
+		"freeboard": top - waterline,
+		"metacentric_height": metacentric,
+		"buoyancy_center": buoyancy_center,
+		"heel_degrees": rad_to_deg(atan2(center_of_mass.x - buoyancy_center.x, metacentric.x)) if metacentric.x > 0.0 else 0.0,
+		"trim_degrees": rad_to_deg(atan2(center_of_mass.z - buoyancy_center.z, metacentric.y)) if metacentric.y > 0.0 else 0.0,
+	})
+	return result
+
+
+## Local height of the calm-water waterline (_get_hydrostatics()), where the contact
+## probes go; the hull's middle while it does not float.
+func _get_waterline_y() -> float:
+	var h := _get_hydrostatics()
+	if h.has("waterline_local"):
+		return h["waterline_local"]
+	return _get_source_bounds_in_local_space(_get_source_mesh_instances()).get_center().y
+
+
+## One line on how the body floats (_get_hydrostatics()), or "".
+func get_hydrostatics_report() -> String:
+	var h := _get_hydrostatics()
+	if h.is_empty():
+		return ""
+	if not h.has("waterline"):
+		return "Sinks: the hull displaces at most %.0f kg of water, less than the body's %.0f kg." % [h["capacity"], h["mass"]]
+	var gm : Vector2 = h["metacentric_height"]
+	return "Floats with its waterline at local y = %.3f m: draft %.2f m, freeboard %.2f m, reserve buoyancy %.1f x its mass, metacentric height %.2f m across and %.2f m along, heel %.1f, trim %.1f degrees." % [h["waterline_local"], h["draft"], h["freeboard"], h["capacity"] / h["mass"], gm.x, gm.y, h["heel_degrees"], h["trim_degrees"]]
+
+
+func _find_rigid_body() -> RigidBody3D:
+	var node := get_parent()
+	while node != null:
+		if node is RigidBody3D:
+			return node
+		node = node.get_parent()
+	return null
+
+
+## A hull's horizontal slices (in the volume's frame) on a raster: at each level,
+## the cells open water reaches from outside (flooding in from the raster's edge
+## around the slice's outline) are water, the rest hull.
+class _HullSlices:
+	const LEVELS := 48
+	## The plan (x, z) the raster covers: the hull's, a cell wider on every side.
+	var plan := Rect2()
+	## Raster cell size (m).
+	var resolution := 1.0
+	## Height (m) of each level's slab, the lowest one starting at the hull's bottom.
+	var level_height := 1.0
+	## Per level, one byte per raster cell: 2 hull, 1 the outline (half hull), 0 water.
+	var levels : Array[PackedByteArray] = []
+	## Per level, the slice's outline as point pairs.
+	var segments : Array[PackedVector2Array] = []
+	var _bottom := 0.0
+	var _size := Vector2i.ONE
+
+	func _init(triangles : PackedVector3Array, watertight_top : float, hull_plan : Rect2, raster_resolution : float) -> void:
+		resolution = maxf(raster_resolution, 1e-3)
+		plan = hull_plan.grow(resolution)
+		_size = Vector2i((plan.size / resolution).ceil())
+		var low := INF
+		var high := -INF
+		for vertex in triangles:
+			low = minf(low, vertex.y)
+			high = maxf(high, vertex.y)
+		high = minf(high, watertight_top)
+		_bottom = low
+		level_height = maxf(high - low, 1e-3) / LEVELS
+		for level in LEVELS:
+			var outline := HullSlicer.slice(triangles, get_level_height(level))
+			segments.push_back(outline)
+			levels.push_back(_rasterize(outline))
+
+	## Height (m) of level's slice, the middle of its slab.
+	func get_level_height(level : int) -> float:
+		return _bottom + (level + 0.5) * level_height
+
+	## Whether point (x, z) is hull at level.
+	func is_hull(level : int, point : Vector2) -> bool:
+		var cell := Vector2i(((point - plan.position) / resolution).floor())
+		if cell.x < 0 or cell.y < 0 or cell.x >= _size.x or cell.y >= _size.y:
+			return false
+		return levels[level][cell.y * _size.x + cell.x] > 0
+
+	## Hull area (m²) at level inside rect (the raster cells whose centre it holds).
+	func get_area(level : int, rect : Rect2) -> float:
+		var first := Vector2i(((rect.position - plan.position) / resolution - Vector2.ONE * 0.5).ceil()).max(Vector2i.ZERO)
+		var last := Vector2i(((rect.end - plan.position) / resolution - Vector2.ONE * 0.5).ceil()).min(_size)
+		var count := 0
+		var raster := levels[level]
+		for y in range(first.y, last.y):
+			for x in range(first.x, last.x):
+				count += raster[y * _size.x + x]
+		return count * 0.5 * resolution * resolution
+
+	## The hull at one level: the outline's cells (half), and everything open water from
+	## the raster's edge cannot reach past them.
+	func _rasterize(outline : PackedVector2Array) -> PackedByteArray:
+		var raster := PackedByteArray()
+		raster.resize(_size.x * _size.y)
+		const WALL := 2
+		for i in range(0, outline.size(), 2):
+			var a := (outline[i] - plan.position) / resolution
+			var b := (outline[i + 1] - plan.position) / resolution
+			var steps := maxi(ceili(a.distance_to(b) * 2.0), 1)
+			for t in steps + 1:
+				var cell := Vector2i(a.lerp(b, float(t) / steps).floor())
+				if cell.x >= 0 and cell.y >= 0 and cell.x < _size.x and cell.y < _size.y:
+					raster[cell.y * _size.x + cell.x] = WALL
+		# Flood the water in from the edge (marked 3), then everything else is hull.
+		const WATER := 3
+		var queue := PackedInt32Array()
+		for x in _size.x:
+			queue.push_back(x)
+			queue.push_back((_size.y - 1) * _size.x + x)
+		for y in _size.y:
+			queue.push_back(y * _size.x)
+			queue.push_back(y * _size.x + _size.x - 1)
+		var head := 0
+		while head < queue.size():
+			var index := queue[head]
+			head += 1
+			if raster[index] != 0:
+				continue
+			raster[index] = WATER
+			var x := index % _size.x
+			if x > 0:
+				queue.push_back(index - 1)
+			if x < _size.x - 1:
+				queue.push_back(index + 1)
+			if index >= _size.x:
+				queue.push_back(index - _size.x)
+			if index < (_size.y - 1) * _size.x:
+				queue.push_back(index + _size.x)
+		for i in raster.size():
+			raster[i] = [2, 0, 1, 0][raster[i]]
+		return raster

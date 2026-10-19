@@ -2,8 +2,8 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-`boat.tscn` is a boat with all the systems already wired: driving, stability,
-buoyancy and sinking, hit health, hull cutout and wake, bow spray, and camera
+`boat.tscn` is a boat with all the systems already wired: driving, buoyancy and
+sinking, hit health, hull cutout and wake, bow spray, and camera
 anchors. To make a boat, create an **inherited scene** from it.
 
 Requires `core`, `ocean_system`, `sky_system` (the spray is hazed by its
@@ -14,7 +14,7 @@ and `boat_turn_right` (W S A D) to the project, unless they already exist.
 ## How it works
 
 ```
-Boat (RigidBody3D, FloatingBoat)   drive input, stability, model animation
+Boat (RigidBody3D, FloatingBoat)   drive input, model animation
 ├─ CollisionShape3D           placeholder box: replace it
 ├─ BuoyantBody                buoyancy and sinking  ← Hitboxes.group_destroyed
 ├─ BuoyancyProbeVolume
@@ -27,9 +27,10 @@ Boat (RigidBody3D, FloatingBoat)   drive input, stability, model animation
 
 - **`FloatingBoat`** (the root) pushes the boat forward and turns it while
   `player_controlled` is on. Thrust stops above `max_forward_speed` /
-  `max_reverse_speed`, and turning weakens at low speed. Optional per-axis
-  angular damping and a roll-righting spring add stability. Boats that are not
-  player-controlled still float, take damage, sink and make wakes.
+  `max_reverse_speed`, and turning weakens at low speed. Staying upright, the
+  water's grip on the hull and its drag all come from the buoyancy, from the
+  hull's shape and the boat's mass: a hull without a keel skids in turns. Boats
+  that are not player-controlled still float, take damage, sink and make wakes.
 - Buoyancy, health and the wake come from the other addons' nodes (see their
   READMEs). Destroying the `hull` group sinks the boat.
 - **`BowSpray`** reads the water at the stem. While the stem cuts through the
@@ -41,10 +42,11 @@ Boat (RigidBody3D, FloatingBoat)   drive input, stability, model animation
 
 1. **Scene > New Inherited Scene** from `boat.tscn`. Add your model with the
    bow along −Z.
-2. Replace the collision shape, and set `mass` and `center_of_mass`.
-3. On `BuoyancyProbeVolume`: set `source_paths`, `design_waterline_y` and the
-   probe sizes, press **Generate All Probes**, and save (see
-   `buoyancy_system`).
+2. Replace the collision shape, and set the boat's real `mass` and
+   `center_of_mass`.
+3. On `BuoyancyProbeVolume`: set `source_paths` to the hull, press
+   **Generate All Probes**, and save. If its warnings say the boat floats
+   tilted, move `center_of_mass` where they say (see `buoyancy_system`).
 4. On `HullWaterFootprint`: set `bake_source_paths` to the hull only, press
    **Bake Profile**, and save (see `ocean_system`).
 5. Add `ProjectileHitbox` areas under `Hitboxes`, and list their groups in

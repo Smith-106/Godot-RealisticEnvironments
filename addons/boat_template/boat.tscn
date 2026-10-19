@@ -21,7 +21,6 @@ shape = SubResource("BoxShape3D_template")
 
 [node name="BuoyantBody" type="Node" parent="." unique_id=1177248212]
 script = ExtResource("2_buoyant")
-longitudinal_drag_coefficient = 0.04
 sinking_enabled = true
 
 [node name="BuoyancyProbeVolume" type="Node3D" parent="." unique_id=782435554]

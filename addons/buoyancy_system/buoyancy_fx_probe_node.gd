@@ -43,6 +43,12 @@ const DISABLED_FX_PROBE_COLOR := Color(0.25, 0.25, 0.25, 0.12)
 		_emit_probe_changed()
 
 
+# The editor sphere and its settings are set in _ready(), never saved with the scene.
+func _validate_property(property : Dictionary) -> void:
+	if property.name in [&"mesh", &"material_override", &"cast_shadow", &"extra_cull_margin"]:
+		property.usage &= ~PROPERTY_USAGE_STORAGE
+
+
 func _ready() -> void:
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	set_notify_transform(false)

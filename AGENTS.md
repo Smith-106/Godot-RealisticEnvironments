@@ -80,7 +80,12 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   renaming/reordering template nodes breaks them, `sinking_probe_paths` and
   `demo/main.gd`.
 - Buoyancy probes and hull profiles are generated in the editor and saved;
-  runtime generation is refused. The template has neither.
+  runtime generation is refused. The template has neither. Physical probes are
+  hull columns baked from the mesh (`area_profile`, `side_panels`): every force
+  follows from them, the body's mass and centre of mass, so fix floating by
+  mass / `center_of_mass` / the mesh (the volume's warnings say how), never by
+  force multipliers. Changing the probe data or the bake means re-baking every
+  scene (`tools/bake_buoyancy_probes.gd`).
 - A non-uniformly scaled collision shape gives zero inverse inertia; set
   `inertia` explicitly (as `floating_box.tscn` does).
 - No `/** */` doc comments in `.gdshader`/`.gdshaderinc` (editor extracts them

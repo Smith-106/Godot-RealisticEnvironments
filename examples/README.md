@@ -20,19 +20,19 @@ turn on **Editable Children** (right-click), and edit `SkySystem`,
 
 **Floating objects.** `crate.tscn` and `barrel.tscn` are each a `RigidBody3D`
 (mass, mesh, collision shape) with a `BuoyantBody` and a
-`BuoyancyProbeVolume`. The volume's `source_paths` points at the mesh. Each
-probe's volume is the object's volume divided by the probe count, and the
-column height is the object's height. **Generate All Probes** placed the
-probes, and the scene was saved with them. An object floats where the water it
-displaces weighs as much as it does: the 250 kg crate of 1 m³ floats a quarter
-submerged.
+`BuoyancyProbeVolume`. The volume's `source_paths` points at the mesh, and
+**Generate All Probes** baked the probes from it; the scene was saved with them.
+An object floats where the water it displaces weighs as much as it does: the
+250 kg crate of 1 m³ floats a quarter submerged. Such a light cube is not stable
+flat side up, so it rocks onto an edge, as a real one does.
 
 **The boat.** `simple_boat.tscn` is an inherited scene of
 `addons/boat_template/boat.tscn`:
 
 1. `Model` is `assets/simple_hull.obj`, made by `tools/make_example_hull.py`
    (bow along −Z).
-2. The root sets `mass`, `center_of_mass` and the drive and stability settings.
+2. The root sets `mass`, `center_of_mass` (over the hull's centre of buoyancy,
+   which the probe volume's warning gave) and the drive settings.
    `CollisionShape3D` holds a convex shape made from the mesh.
 3. `BuoyancyProbeVolume`: `source_paths` → `Model`, then
    **Generate All Probes**.
