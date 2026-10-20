@@ -54,10 +54,14 @@ float atmosphere_view_x(vec3 direction, vec3 light_direction) {
 	return acos(clamp(cos_phi, -1.0, 1.0)) / ATMOSPHERE_PI;
 }
 
-/* View-volume coordinates; distance < 0 is the ray's end (the sky). */
+/*
+ * View-volume coordinates; distance < 0 is the ray's end (the sky). The view angle stays
+ * on its own side of the horizon (atmosphere_view_v() in atmosphere_common.glslinc).
+ */
 vec3 atmosphere_view_uvw(vec3 direction, float distance, vec3 size) {
 	float x = atmosphere_unit_to_uv(atmosphere_view_x(direction, atmosphere_light.xyz), size.x);
-	float y = clamp(atmosphere_view_y(atmosphere_observer.w, direction.y), 0.5 / size.y, 1.0 - 0.5 / size.y);
+	float y = atmosphere_view_y(atmosphere_observer.w, direction.y);
+	y = y < 0.5 ? clamp(y, 0.5 / size.y, 0.5 - 0.5 / size.y) : clamp(y, 0.5 + 0.5 / size.y, 1.0 - 0.5 / size.y);
 	float slice = distance < 0.0 ? size.z - 1.0 : sqrt(clamp(distance / atmosphere_max_distance, 0.0, 1.0)) * (size.z - 2.0);
 	return vec3(x, y, (slice + 0.5) / size.z);
 }

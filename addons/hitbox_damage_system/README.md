@@ -1,10 +1,29 @@
 # Hitbox Damage System
 
-`Area3D` hitboxes that detect projectiles, a manager that turns hits into
-grouped health (e.g. `hull`, `mast`), a smoke hit effect and an optional debug
-health panel. No dependencies.
+**English** · [简体中文](README.zh-CN.md)
 
-## Setup
+Hitboxes that detect projectiles, and health kept per group (e.g. `hull`,
+`mast`). It also has a smoke hit effect and an optional health panel. It
+depends on nothing.
+
+## How it works
+
+- A `ProjectileHitbox` is an `Area3D`. When a projectile body enters it, the
+  hitbox builds a hit record (position, velocity, mass, momentum) and reports
+  it to its manager. A projectile is any body in group `projectile` or with a
+  `launch()` method.
+- A `HitboxHealthManager` turns each hit into damage for the hitbox's group:
+  - the hit's own `damage` value if it has one, used as is;
+  - otherwise projectile momentum × `damage_per_momentum` × the group's
+    multiplier (`group_damage_multipliers`) × the hitbox's
+    `damage_multiplier`, but at least `minimum_hit_damage`.
+
+  It then emits signals, spawns the hit effect and frees the projectile.
+  Projectiles fired by the manager's own body are ignored.
+- When a group's health reaches 0, the manager emits `group_destroyed` once.
+  Anything can react to it, e.g. `BuoyantBody` sinking the ship.
+
+## How to use
 
 ```
 Ship (RigidBody3D)
@@ -13,20 +32,26 @@ Ship (RigidBody3D)
    └─ MastHitbox  (ProjectileHitbox, hitbox_group = "mast") + CollisionShape3D
 ```
 
-- Hitboxes sit on physics layer 3 with mask 2 (projectiles).
-- A projectile is anything in group `projectile` or with a `launch()` method.
-  Hits from the ship's own projectiles are ignored (`ignore_own_projectiles`).
-- Set health per group in `group_max_health` and multipliers in
-  `group_damage_multipliers`; other groups use `default_group_max_health`.
-- Damage is `hit_data.damage` if given, else projectile momentum ×
-  `damage_per_momentum` × multipliers (at least `minimum_hit_damage`).
-- Connect `group_destroyed` to whatever reacts, e.g.
-  `BuoyantBody._on_hitbox_group_destroyed`.
+1. Add a `HitboxHealthManager`, and set each group's health in
+   `group_max_health`, e.g. `{"hull": 300.0, "mast": 60.0}`. Other groups use
+   `default_group_max_health`.
+2. Add `ProjectileHitbox` areas below it, with collision shapes and a
+   `hitbox_group`. Set each area's `collision_mask` to include the
+   projectiles' physics layer (the demo uses layer 3 "Hitbox" for hitboxes and
+   layer 2 "Projectile" for projectiles).
+3. Connect `group_destroyed` to whatever should react. For sinking, connect
+   it to `BuoyantBody._on_hitbox_group_destroyed`.
 
-Signals: `projectile_hit`, `hitbox_hit`, `group_health_changed`,
-`group_destroyed`. Methods: `get_group_health()`, `get_group_max_health()`,
-`set_group_health()`, `is_group_destroyed()`, `reset_health()`,
-`refresh_hitboxes()`.
+A hitbox reports to the nearest manager above it, or to its `manager_path`. In
+the editor it warns when it has none.
 
-`hit_effect_scene` (default: smoke puff) spawns at each impact.
-`debug_ui_enabled` shows a health bar per group.
+- Signals: `projectile_hit` (hitbox); `hitbox_hit`, `group_health_changed`,
+  `group_destroyed` (manager).
+- Methods: `handle_projectile_hit(hitbox, projectile, hit_data)`,
+  `get_group_health()`, `get_group_max_health()`, `set_group_health()`,
+  `is_group_destroyed()`, `reset_health()`.
+- To deal damage from your own code (collisions, scripts), call
+  `handle_projectile_hit(null, null, {"hitbox_group": &"hull", "damage": 25.0, "position": point})`
+  (`position` places the hit effect).
+- `hit_effect_scene` (default: a smoke puff) spawns at each hit;
+  `debug_ui_enabled` shows a health bar per group.

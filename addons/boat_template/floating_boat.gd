@@ -1,9 +1,10 @@
 @tool
 class_name FloatingBoat
 extends RigidBody3D
-## Root of a floating boat: player drive input, stability torques, model
-## animation autoplay and a debug position trail. Buoyancy, damage, weapons and
-## the hull footprint are child nodes (see the template scene).
+## Root of a floating boat: player drive input, model animation autoplay and a
+## debug position trail. Buoyancy (which also keeps it upright and resists its
+## motion through the water), damage, weapons and the hull footprint are child
+## nodes (see the template scene).
 
 const DEBUG_HISTORY_MAX_POINTS := 240
 const DEBUG_HISTORY_MIN_DISTANCE := 0.2
@@ -38,19 +39,6 @@ const DEBUG_HISTORY_COLOR := Color(0.2, 1.0, 0.45, 1.0)
 @export_range(0.0, 40.0, 0.01, "or_greater") var turn_torque_per_kg := 12.0
 ## Fraction of turn torque retained at very low speed.
 @export_range(0.0, 1.0, 0.01) var low_speed_turn_factor := 0.55
-## Extra side-slip damping force per kg applied along the boat's right axis.
-@export_range(0.0, 20.0, 0.01, "or_greater") var extra_lateral_damping := 0.9
-
-@export_group("Stability")
-## Per-mass torque damping in local axes: X = pitch, Y = yaw, Z = roll. Zero disables it.
-@export var local_angular_damping := Vector3.ZERO
-## Per-mass torque spring that rotates the body's up axis back toward world up
-## around its roll axis. Zero disables it.
-@export_range(0.0, 1000.0, 0.01, "or_greater") var roll_righting_torque_per_kg := 0.0
-## Cap for the total roll righting torque. Set 0 for uncapped.
-@export_range(0.0, 10000000.0, 1.0, "or_greater") var max_roll_righting_torque := 0.0
-## Roll error below this angle is ignored to avoid small corrective jitter.
-@export_range(0.0, 30.0, 0.1, "degrees") var roll_righting_dead_zone_degrees := 0.0
 
 @export_group("Model Animation")
 ## AnimationPlayer of the imported model. Only used when autoplay_animation is set.
@@ -88,8 +76,6 @@ func _ready() -> void:
 func _physics_process(_delta: float) -> void:
 	if player_controlled and _drive_enabled:
 		_apply_drive()
-	_apply_roll_righting_torque()
-	_apply_local_angular_damping()
 	if player_controlled and debug_enabled:
 		_record_history_point()
 
@@ -124,10 +110,6 @@ func _apply_drive() -> void:
 	var forward := -global_transform.basis.z
 	forward.y = 0.0
 	forward = forward.normalized() if forward.length_squared() > 0.0001 else Vector3.FORWARD
-	var right := global_transform.basis.x
-	right.y = 0.0
-	right = right.normalized() if right.length_squared() > 0.0001 else Vector3.RIGHT
-
 	var horizontal_velocity := Vector3(linear_velocity.x, 0.0, linear_velocity.z)
 	var forward_speed := horizontal_velocity.dot(forward)
 	if absf(throttle) > 0.001:
@@ -138,37 +120,6 @@ func _apply_drive() -> void:
 	if absf(turn_input) > 0.001:
 		var speed_factor := lerpf(low_speed_turn_factor, 1.0, clampf(absf(forward_speed) / maxf(max_forward_speed, 0.001), 0.0, 1.0))
 		apply_torque(Vector3.UP * turn_input * turn_torque_per_kg * mass * speed_factor)
-	var side_speed := horizontal_velocity.dot(right)
-	if extra_lateral_damping > 0.0 and absf(side_speed) > 0.001:
-		apply_central_force(-right * side_speed * extra_lateral_damping * mass)
-
-
-func _apply_local_angular_damping() -> void:
-	if local_angular_damping == Vector3.ZERO or angular_velocity.length_squared() <= 0.0:
-		return
-	var body_basis := global_transform.basis.orthonormalized()
-	var local_angular_velocity := body_basis.inverse() * angular_velocity
-	apply_torque(body_basis * (-local_angular_velocity * local_angular_damping * mass))
-
-
-func _apply_roll_righting_torque() -> void:
-	if roll_righting_torque_per_kg <= 0.0:
-		return
-	var body_basis := global_transform.basis.orthonormalized()
-	var roll_axis := body_basis.z
-	var target_up := Vector3.UP - roll_axis * Vector3.UP.dot(roll_axis)
-	# Bow pointing straight up or down: roll is undefined.
-	if target_up.length_squared() <= 0.0001:
-		return
-	var roll_error := body_basis.y.signed_angle_to(target_up.normalized(), roll_axis)
-	var dead_zone := deg_to_rad(roll_righting_dead_zone_degrees)
-	if absf(roll_error) <= dead_zone:
-		return
-	roll_error -= signf(roll_error) * dead_zone
-	var torque := roll_axis * roll_error * roll_righting_torque_per_kg * mass
-	if max_roll_righting_torque > 0.0 and torque.length_squared() > max_roll_righting_torque * max_roll_righting_torque:
-		torque = torque.normalized() * max_roll_righting_torque
-	apply_torque(torque)
 
 
 func _play_model_animation() -> void:

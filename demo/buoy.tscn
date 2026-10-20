@@ -4,6 +4,7 @@
 [ext_resource type="Script" uid="uid://cv6g660t6s5av" path="res://addons/buoyancy_system/buoyant_body.gd" id="2_7hk8w"]
 [ext_resource type="Script" uid="uid://ianh08wohto0" path="res://addons/buoyancy_system/buoyancy_probe_volume.gd" id="3_ow6qj"]
 [ext_resource type="Script" uid="uid://obesevate4xe" path="res://addons/buoyancy_system/buoyancy_probe_node.gd" id="4_54211"]
+[ext_resource type="Script" uid="uid://cpknlpia25jwi" path="res://addons/buoyancy_system/buoyancy_fx_probe_node.gd" id="4_t66q4"]
 [ext_resource type="Script" uid="uid://c8hdl5abw2t2d" path="res://demo/buoy_distance_label.gd" id="5_distance"]
 [ext_resource type="Script" uid="uid://dorhxd7wuq5cu" path="res://addons/ocean_system/hull_water_footprint.gd" id="6_footprint"]
 [ext_resource type="Resource" uid="uid://by5205rl2tbvi" path="res://demo/buoy_hull_profile.tres" id="7_571ab"]
@@ -12,100 +13,12 @@
 radius = 0.9291992
 height = 5.154297
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_571ab"]
-transparency = 1
-cull_mode = 2
-no_depth_test = true
-shading_mode = 0
-albedo_color = Color(0.1, 0.8, 1, 0.32)
-
-[sub_resource type="SphereMesh" id="SphereMesh_3aspy"]
-radius = 0.16
-height = 0.32
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_t66q4"]
-transparency = 1
-cull_mode = 2
-no_depth_test = true
-shading_mode = 0
-albedo_color = Color(0.1, 0.8, 1, 0.32)
-
-[sub_resource type="SphereMesh" id="SphereMesh_y2khd"]
-radius = 0.16
-height = 0.32
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_3aspy"]
-transparency = 1
-cull_mode = 2
-no_depth_test = true
-shading_mode = 0
-albedo_color = Color(0.1, 0.8, 1, 0.32)
-
-[sub_resource type="SphereMesh" id="SphereMesh_yspub"]
-radius = 0.16
-height = 0.32
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_xapa5"]
-transparency = 1
-cull_mode = 2
-no_depth_test = true
-shading_mode = 0
-albedo_color = Color(0.1, 0.8, 1, 0.32)
-
-[sub_resource type="SphereMesh" id="SphereMesh_nrol3"]
-radius = 0.16
-height = 0.32
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_y2khd"]
-transparency = 1
-cull_mode = 2
-no_depth_test = true
-shading_mode = 0
-albedo_color = Color(0.1, 0.8, 1, 0.32)
-
-[sub_resource type="SphereMesh" id="SphereMesh_wjqy0"]
-radius = 0.16
-height = 0.32
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1kh0k"]
-transparency = 1
-cull_mode = 2
-no_depth_test = true
-shading_mode = 0
-albedo_color = Color(0.1, 0.8, 1, 0.32)
-
-[sub_resource type="SphereMesh" id="SphereMesh_d63e2"]
-radius = 0.16
-height = 0.32
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_yspub"]
-transparency = 1
-cull_mode = 2
-no_depth_test = true
-shading_mode = 0
-albedo_color = Color(0.1, 0.8, 1, 0.32)
-
-[sub_resource type="SphereMesh" id="SphereMesh_gpwpt"]
-radius = 0.16
-height = 0.32
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_i3j5b"]
-transparency = 1
-cull_mode = 2
-no_depth_test = true
-shading_mode = 0
-albedo_color = Color(0.1, 0.8, 1, 0.32)
-
-[sub_resource type="SphereMesh" id="SphereMesh_67ip0"]
-radius = 0.16
-height = 0.32
-
 [node name="Buoy" type="Node3D" unique_id=2077650632]
 
 [node name="RigidBody3D" type="RigidBody3D" parent="." unique_id=597638399]
 axis_lock_linear_x = true
 axis_lock_linear_z = true
-mass = 4611.681
+mass = 3300.0
 center_of_mass_mode = 1
 center_of_mass = Vector3(-2.6469808e-08, -4.0125146, 5.2939615e-08)
 
@@ -119,89 +32,264 @@ script = ExtResource("2_7hk8w")
 [node name="Node3D" type="Node3D" parent="RigidBody3D" unique_id=1006859282]
 script = ExtResource("3_ow6qj")
 source_paths = Array[NodePath]([NodePath("../Sketchfab_Scene")])
-debug_enabled = false
 
 [node name="GeneratedProbes" type="Node3D" parent="RigidBody3D/Node3D" unique_id=1323104959]
 
-[node name="Probe_000" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=958575109]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.44630045, -0.8164333, -0.44630045)
-material_override = SubResource("StandardMaterial3D_571ab")
-cast_shadow = 0
-extra_cull_margin = 10000.0
-mesh = SubResource("SphereMesh_3aspy")
+[node name="Probe_000" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=2052779223]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6311642, -0.71594346, -0.84155226)
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
-buoyancy_height = 1.6078372
+height = 1.3063677574197452
+area_profile = PackedFloat32Array(0.009221487, 0.010356439, 0.01021457, 0.010498309, 0.010356439, 0.010072702, 0.010640178, 0.004681678)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -0.055829607, -0.08355492, 0, 0, 0, 0)
 
-[node name="Probe_001" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=282954885]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4463004, -0.8164333, -0.44630045)
-material_override = SubResource("StandardMaterial3D_t66q4")
-cast_shadow = 0
-extra_cull_margin = 10000.0
-mesh = SubResource("SphereMesh_y2khd")
+[node name="Probe_001" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1302627091]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.21038806, -0.9169231, -0.84155226)
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
-buoyancy_height = 1.6078372
+height = 1.6078372399012248
+area_profile = PackedFloat32Array(0.020287272, 0.080226935, 0.07930479, 0.07930479, 0.07930479, 0.07930479, 0.080226935, 0.030430907)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -0.055871166, -0.083617106, -0.05861391, -0.29467186, 0, 0)
 
-[node name="Probe_002" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=606315226]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.44630045, 0.7914039, -0.44630045)
-material_override = SubResource("StandardMaterial3D_3aspy")
-cast_shadow = 0
-extra_cull_margin = 10000.0
-mesh = SubResource("SphereMesh_yspub")
+[node name="Probe_002" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1206305155]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.21038806, -0.9169231, -0.84155226)
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
-buoyancy_height = 1.6078372
+height = 1.6078372399012248
+area_profile = PackedFloat32Array(0.020287272, 0.080226935, 0.07930479, 0.07930479, 0.07930479, 0.07930479, 0.080226935, 0.030430907)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.05861391, -0.29467186, 0.055871166, -0.083617106)
 
-[node name="Probe_003" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=2073005665]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4463004, 0.7914039, -0.44630045)
-material_override = SubResource("StandardMaterial3D_xapa5")
-cast_shadow = 0
-extra_cull_margin = 10000.0
-mesh = SubResource("SphereMesh_nrol3")
+[node name="Probe_003" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1535025158]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6311642, -0.71594346, -0.84155226)
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
-buoyancy_height = 1.6078372
+height = 1.3063677574197452
+area_profile = PackedFloat32Array(0.009221487, 0.010356439, 0.01021457, 0.010498309, 0.010356439, 0.010072702, 0.010640178, 0.004681678)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.055829607, -0.08355492)
 
-[node name="Probe_004" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=826536182]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.44630045, -0.8164333, 0.44630057)
-material_override = SubResource("StandardMaterial3D_y2khd")
-cast_shadow = 0
-extra_cull_margin = 10000.0
-mesh = SubResource("SphereMesh_wjqy0")
+[node name="Probe_004" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1642177514]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6311642, -0.9169231, -0.42077607)
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
-buoyancy_height = 1.6078372
+height = 1.7083270673950515
+area_profile = PackedFloat32Array(0.059776936, 0.13181302, 0.13094512, 0.13137907, 0.13192151, 0.13213849, 0.117384106, 0.028206902)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, -0.057732545, -0.011483721, -0.311621, -0.24981672, 0, 0, 0, 0)
 
-[node name="Probe_005" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=601307136]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4463004, -0.8164333, 0.44630057)
-material_override = SubResource("StandardMaterial3D_1kh0k")
-cast_shadow = 0
-extra_cull_margin = 10000.0
-mesh = SubResource("SphereMesh_d63e2")
+[node name="Probe_005" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=539070008]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.21038806, -1.6203519, -0.42077607)
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
-buoyancy_height = 1.6078372
+height = 4.421552409728369
+area_profile = PackedFloat32Array(0.042586505, 0.12708886, 0.18074115, 0.18074115, 0.050634347, 0.006706536, 0.011401111, 0.013748399)
+side_panels = PackedVector2Array(0.0054981583, -1.067465e-06, 0.0009119236, 0.0006093281, -8.6359e-07, 0.008129071, -0.00059218303, 0.0010274859, -0.0131988935, -0.00012745165, -0.037911966, -0.04698802, -0.0081128655, -0.047874343, 0, 0)
 
-[node name="Probe_006" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1325008678]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.44630045, 0.7914039, 0.44630057)
-material_override = SubResource("StandardMaterial3D_yspub")
-cast_shadow = 0
-extra_cull_margin = 10000.0
-mesh = SubResource("SphereMesh_gpwpt")
+[node name="Probe_006" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=167119545]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.21038806, -1.6203519, -0.42077607)
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
-buoyancy_height = 1.6078372
+height = 4.421552409728369
+area_profile = PackedFloat32Array(0.042586505, 0.12708886, 0.18074115, 0.18074115, 0.050634347, 0.006706536, 0.011401111, 0.013748399)
+side_panels = PackedVector2Array(0.0131988935, -0.00012745165, 0.00059218303, 0.0010274859, 8.6359e-07, 0.008129071, -0.0009119236, 0.0006093281, -0.0054981583, -1.067465e-06, 0, 0, 0.0081128655, -0.047874343, 0.037911966, -0.04698802)
 
-[node name="Probe_007" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=701507295]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4463004, 0.7914039, 0.44630057)
-material_override = SubResource("StandardMaterial3D_i3j5b")
-cast_shadow = 0
-extra_cull_margin = 10000.0
-mesh = SubResource("SphereMesh_67ip0")
+[node name="Probe_007" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1401662904]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6311642, -0.9169231, -0.42077607)
 script = ExtResource("4_54211")
-max_submerged_volume_cubic_meters = 1.2809
-buoyancy_height = 1.6078372
+height = 1.7083270673950515
+area_profile = PackedFloat32Array(0.059776936, 0.13181302, 0.13094512, 0.13137907, 0.13192151, 0.13213849, 0.117384106, 0.028206902)
+side_panels = PackedVector2Array(0.057732545, -0.011483721, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.311621, -0.24981672)
+
+[node name="Probe_008" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=466812396]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.0519403, -0.71594346, 5.9604645e-08)
+script = ExtResource("4_54211")
+height = 1.2058779299259186
+area_profile = PackedFloat32Array(0.009221487, 0.009221487, 0.009221487, 0.009221487, 0.009221487, 0.009221487, 0.007991956, 0.009221487)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+[node name="Probe_009" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=523576819]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6311642, -1.6203519, 5.9604645e-08)
+script = ExtResource("4_54211")
+height = 4.019593099753062
+area_profile = PackedFloat32Array(0.006639471, 0.08520654, 0.17373282, 0.17447053, 0.09885434, 0, 0, 0.0018442974)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0.0063953088, -0.00049572403, 0.00033123197, -0.21990895, -0.0011386557, 0, 0, 0, -0.0035020052, 0, 0)
+
+[node name="Probe_010" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1160521694]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.21038806, -1.6203519, 5.9604645e-08)
+script = ExtResource("4_54211")
+height = 4.823511719703674
+area_profile = PackedFloat32Array(0.13002297, 0.15891697, 0.18074115, 0.17858946, 6.180722e-17, 0.034426887, 0.059632283, 0.040574543)
+side_panels = PackedVector2Array(0, 0, 0.0009630857, 0.0013836023, -0.0027693622, 0.042385355, -0.0312792, 0.026922716, -0.12226908, 3.1213858e-09, -0.030868314, -0.026934711, -0.0028141837, -0.043338966, 0.0004386964, -0.00061376643)
+
+[node name="Probe_011" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=394203585]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.21038806, -1.6203519, 5.9604645e-08)
+script = ExtResource("4_54211")
+height = 4.823511719703674
+area_profile = PackedFloat32Array(0.13002297, 0.15891697, 0.18074115, 0.17858946, 6.180722e-17, 0.034426887, 0.059632283, 0.040574543)
+side_panels = PackedVector2Array(0.12226908, 3.1213858e-09, 0.0312792, 0.026922716, 0.0027693622, 0.042385355, -0.0009630857, 0.0013836023, 0, 0, -0.0004386964, -0.00061376643, 0.0028141837, -0.043338966, 0.030868314, -0.026934711)
+
+[node name="Probe_012" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1589247897]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6311642, -1.6203519, 5.9604645e-08)
+script = ExtResource("4_54211")
+height = 4.019593099753062
+area_profile = PackedFloat32Array(0.006639471, 0.08520654, 0.17373282, 0.17447053, 0.09885434, 0, 0, 0.0018442974)
+side_panels = PackedVector2Array(0.21990895, -0.0011386557, 0.00049572403, 0.00033123197, 0, 0.0063953088, 0, 0, 0, 0, 0, 0, 0, -0.0035020052, 0, 0)
+
+[node name="Probe_013" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=192734774]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0519403, -0.71594346, 5.9604645e-08)
+script = ExtResource("4_54211")
+height = 1.2058779299259186
+area_profile = PackedFloat32Array(0.009221487, 0.009221487, 0.009221487, 0.009221487, 0.009221487, 0.009221487, 0.007991956, 0.009221487)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+[node name="Probe_014" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=980562906]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6311642, -0.9169231, 0.4207762)
+script = ExtResource("4_54211")
+height = 1.7083270673950515
+area_profile = PackedFloat32Array(0.06270611, 0.13734591, 0.1356101, 0.13604406, 0.13636951, 0.13615254, 0.12204909, 0.031136079)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, -0.31426993, 0.255252, -0.064342305, 0.012798484, 0, 0, 0, 0, 0, 0)
+
+[node name="Probe_015" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=333135027]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.21038806, -1.6203519, 0.4207762)
+script = ExtResource("4_54211")
+height = 4.421552409728369
+area_profile = PackedFloat32Array(0.050299022, 0.12910081, 0.18074115, 0.18074115, 0.051640328, 0.0063712094, 0.012910081, 0.01726933)
+side_panels = PackedVector2Array(0.0054981606, -4.8157847e-07, 0, 0, -0.007401396, 0.045798287, -0.03551555, 0.043958314, -0.0117491465, 0.0001274476, 0, 0, 7.044186e-08, -0.0054981587, 0.00076910754, -0.0005139011)
+
+[node name="Probe_016" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=8043713]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.21038806, -1.6203519, 0.4207762)
+script = ExtResource("4_54211")
+height = 4.421552409728369
+area_profile = PackedFloat32Array(0.050299022, 0.12910081, 0.18074115, 0.18074115, 0.051640328, 0.0063712094, 0.012910081, 0.01726933)
+side_panels = PackedVector2Array(0.0117491465, 0.0001274476, 0.03551555, 0.043958314, 0.007401396, 0.045798287, 0, 0, -0.0054981606, -4.8157847e-07, -0.00076910754, -0.0005139011, -7.044186e-08, -0.0054981587, 0, 0)
+
+[node name="Probe_017" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=738680052]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6311642, -0.9169231, 0.4207762)
+script = ExtResource("4_54211")
+height = 1.7083270673950515
+area_profile = PackedFloat32Array(0.06270611, 0.13734591, 0.1356101, 0.13604406, 0.13636951, 0.13615254, 0.12204909, 0.031136079)
+side_panels = PackedVector2Array(0.064342305, 0.012798484, 0.31426993, 0.255252, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+[node name="Probe_018" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1315875399]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6311642, -0.8164333, 0.8415523)
+script = ExtResource("4_54211")
+height = 1.4068575849135718
+area_profile = PackedFloat32Array(0.0065867766, 0.013963966, 0.012910082, 0.012910082, 0.01501785, 0.014490908, 0.0137004955, 0.008431074)
+side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, -0.051613864, 0.07724559, 0, 0, 0, 0, 0, 0, 0, 0)
+
+[node name="Probe_019" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=167918134]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.21038806, -0.9169231, 0.8415523)
+script = ExtResource("4_54211")
+height = 1.6078372399012248
+area_profile = PackedFloat32Array(0.025820164, 0.09221487, 0.09221487, 0.09405917, 0.09313702, 0.091292724, 0.09221487, 0.036885947)
+side_panels = PackedVector2Array(0, 0, 0, 0, -0.058613915, 0.2946719, -0.05676555, 0.08495563, 0, 0, 0, 0, 0, 0, 0, 0)
+
+[node name="Probe_020" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=430256251]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.21038806, -0.9169231, 0.8415523)
+script = ExtResource("4_54211")
+height = 1.6078372399012248
+area_profile = PackedFloat32Array(0.025820164, 0.09221487, 0.09221487, 0.09405917, 0.09313702, 0.091292724, 0.09221487, 0.036885947)
+side_panels = PackedVector2Array(0, 0, 0.05676555, 0.08495563, 0.058613915, 0.2946719, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+[node name="Probe_021" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1090277233]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6311642, -0.8164333, 0.8415523)
+script = ExtResource("4_54211")
+height = 1.4068575849135718
+area_profile = PackedFloat32Array(0.0065867766, 0.013963966, 0.012910082, 0.012910082, 0.01501785, 0.014490908, 0.0137004955, 0.008431074)
+side_panels = PackedVector2Array(0, 0, 0.051613864, 0.07724559, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+[node name="FxProbe_000_Bow" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1216184478]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.54714686, 0.38537315, -0.68730277)
+script = ExtResource("4_t66q4")
+tag = "bow"
+
+[node name="FxProbe_001_Bow" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1999395386]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.54714686, 0.38537315, -0.68730277)
+script = ExtResource("4_t66q4")
+tag = "bow"
+
+[node name="FxProbe_002_Bow" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=87815469]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6771519, 0.38537315, -0.56233865)
+script = ExtResource("4_t66q4")
+tag = "bow"
+
+[node name="FxProbe_003_Bow" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1795854404]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6771519, 0.38537315, -0.56233865)
+script = ExtResource("4_t66q4")
+tag = "bow"
+
+[node name="FxProbe_004_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1160178993]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7606503, 0.38537315, -0.4373745)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_005_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=704120558]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.7606503, 0.38537315, -0.4373745)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_006_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1761933953]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.8304586, 0.38537315, -0.31241038)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_007_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1121207023]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.8304586, 0.38537315, -0.31241038)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_008_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=243523374]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.8553155, 0.38537315, -0.18744625)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_009_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=878226488]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.8553155, 0.38537315, -0.18744625)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_010_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=9815669]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.88017243, 0.38537315, -0.062482122)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_011_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=211029796]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.88017243, 0.38537315, -0.062482122)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_012_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1216873617]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.88017243, 0.38537315, 0.062482003)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_013_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=555588686]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.88017243, 0.38537315, 0.062482003)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_014_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=2123723328]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.8553155, 0.38537315, 0.18744613)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_015_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=401238089]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.8553155, 0.38537315, 0.18744613)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_016_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1311654347]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.8304586, 0.38537315, 0.31241027)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_017_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=660697703]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.8304586, 0.38537315, 0.31241027)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_018_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1938635072]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7606503, 0.38537315, 0.43737438)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_019_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1028016556]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.7606503, 0.38537315, 0.43737438)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_020_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=516012404]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6771519, 0.38537315, 0.56233853)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_021_Side" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=2012182682]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6771519, 0.38537315, 0.56233853)
+script = ExtResource("4_t66q4")
+
+[node name="FxProbe_022_Stern" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=1348115946]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.54714686, 0.38537315, 0.68730265)
+script = ExtResource("4_t66q4")
+tag = "stern"
+
+[node name="FxProbe_023_Stern" type="MeshInstance3D" parent="RigidBody3D/Node3D/GeneratedProbes" unique_id=700800358]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.54714686, 0.38537315, 0.68730265)
+script = ExtResource("4_t66q4")
+tag = "stern"
 
 [node name="Sketchfab_Scene" parent="RigidBody3D" unique_id=660243005 instance=ExtResource("1_lq5a0")]
 transform = Transform3D(0.3, 0, 0, 0, 0.3, 0, 0, 0, 0.3, 0, 0, 0)

@@ -7,7 +7,9 @@
  *   r  coverage  0 = clear, 1 = fully covered
  *   g  type      0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
  *   b  density   extinction multiplier
- *   a  unused (reserved for precipitation)
+ *   a  warp      about -1 to 1: shifts the shape noise (cloud_common.glslinc), so its
+ *                tiles do not repeat in rows (seen from above, they line up toward
+ *                the horizon)
  *
  * This pass is the only producer of the map, and the raymarcher only reads it,
  * so a future cloud simulation (advection, growth, dissipation) can replace
@@ -49,9 +51,10 @@ void main() {
 	float coverage_noise = cloud_gradient_fbm(vec3(p, t), 0.0, 4) * 1.6;
 	float type_noise = cloud_gradient_fbm(vec3(p * 0.7 + 17.3, t * 0.7 + 5.1), 0.0, 3) * 1.6;
 	float density_noise = cloud_gradient_fbm(vec3(p * 1.3 - 9.1, t + 11.7), 0.0, 3) * 1.6;
+	float warp_noise = cloud_gradient_fbm(vec3(p * 2.3 + 31.7, t * 0.5 + 3.3), 0.0, 3) * 1.6;
 
 	float coverage = clamp(pc.coverage + coverage_noise * pc.coverage_variation, 0.0, 1.0);
 	float cloud_type = clamp(pc.cloud_type + type_noise * pc.type_variation, 0.0, 1.0);
 	float density = max(1.0 + density_noise * pc.density_variation, 0.0);
-	imageStore(weather_image, id, vec4(coverage, cloud_type, density, 0.0));
+	imageStore(weather_image, id, vec4(coverage, cloud_type, density, clamp(warp_noise, -1.0, 1.0)));
 }

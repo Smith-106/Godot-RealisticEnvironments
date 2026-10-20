@@ -8,23 +8,31 @@
  *       volume at the cloud layer;
  *   irradiance: the sky's light on a level surface facing up (cosine-weighted upper
  *       hemisphere), the sky's share of the scene's light meter (SkySystem
- *       get_scene_illuminance(), from the camera's volume).
+ *       get_scene_illuminance(), from the camera's volume);
+ *   cloud_light: the share of the key light (x) and of the secondary light (y) the
+ *       clouds seen from the observer let through, and (z, w) the same for the clouds
+ *       seen from the sea below it (sea_cloud_cubemap): what dims the scene's lights
+ *       and the sun on the water. 1 without clouds.
  *
  * The haze's lobe is narrower than a texel: its whole in-scatter (lobe per unit phase
  * toward the light, times the phase's integral, 1) goes to the hemisphere holding the
  * light.
  *
- * With use_clouds, the clouds cover the sky: each direction shows its ray's end through
- * the clouds' gaps plus the clouds' own light (the air in front of them is not split
- * off: close enough for a meter). The volume at the cloud layer must not use them.
+ * With use_clouds, the clouds seen from the observer (CloudRenderer.camera_cubemap, above
+ * or below it) cover the sky: each direction shows its ray's end through the clouds'
+ * gaps plus the clouds' own light (the air in front of them is not split off: close
+ * enough for a meter). The volume at the cloud layer must not use them.
  */
 
 #include "atmosphere_common.glslinc"
 
 #define THREADS 256
 // Cloud cubemap level read per texel: about the volume's azimuth texel (pi / 32 rad)
-// for 1024 faces.
-#define CLOUD_LOD 5.0
+// for the camera cubemap's 256 faces (CloudRenderer.CAMERA_CUBEMAP_SIZE).
+#define CLOUD_LOD 3.0
+// Angle (rad) over which the clouds toward a light are averaged for cloud_light: about
+// the sun's disk, so a cloud edge crossing it dims the light over a moment.
+#define CLOUD_LIGHT_ANGLE 0.01
 
 layout(local_size_x = THREADS, local_size_y = 1, local_size_z = 1) in;
 
@@ -34,9 +42,12 @@ layout(set = 0, binding = 2, std430) restrict writeonly buffer SkyAmbient {
 	vec4 above;      // rgb mean radiance of the upper hemisphere
 	vec4 below;      // rgb mean radiance of the lower hemisphere
 	vec4 irradiance; // rgb irradiance on a level surface facing up
+	vec4 cloud_light; // the clouds' transmission toward the key and secondary lights: xy from the observer, zw from the sea
 } sky_ambient;
 // The cloud cubemap (a = opacity), or a transparent placeholder.
 layout(set = 0, binding = 3) uniform samplerCube cloud_cubemap;
+// The clouds seen from the sea below the observer (a = opacity), or a transparent placeholder.
+layout(set = 0, binding = 4) uniform samplerCube sea_cloud_cubemap;
 
 layout(push_constant, std430) restrict readonly uniform PushConstants {
 	float observer_altitude; // m, the volume's
@@ -45,7 +56,15 @@ layout(push_constant, std430) restrict readonly uniform PushConstants {
 	float pad_1;
 	vec3 light_direction;    // world, toward the key light
 	float pad_2;
+	vec3 secondary_direction; // world, toward the other body
+	float pad_3;
 } pc;
+
+/* Share of the light from direction that the clouds of cubemap let through (1 below the horizon of a face set that lacks it). */
+float cloud_light_through(samplerCube cubemap, vec3 direction) {
+	float lod = log2(max(CLOUD_LIGHT_ANGLE * float(textureSize(cubemap, 0).x) * 0.5, 1.0));
+	return 1.0 - clamp(textureLod(cubemap, direction, lod).a, 0.0, 1.0);
+}
 
 shared vec3 shared_above[THREADS];
 shared vec3 shared_below[THREADS];
@@ -86,7 +105,7 @@ void main() {
 		float mu_bottom = atmosphere_view_mu(h, float(y + 1) / float(size.y));
 		float mu = atmosphere_view_mu(h, (float(y) + 0.5) / float(size.y));
 		vec3 radiance = texelFetch(inscatter_volume, ivec3(x, y, slice), 0).rgb;
-		if (pc.use_clouds > 0.5 && mu > 0.0) {
+		if (pc.use_clouds > 0.5) {
 			vec4 cloud = clouds_toward(float(x) * azimuth_step, mu);
 			radiance = radiance * (1.0 - cloud.a) + cloud.rgb;
 		}
@@ -116,9 +135,9 @@ void main() {
 		float light_y = pc.light_direction.y;
 		vec3 size_f = vec3(size);
 		vec3 uvw = vec3(atmosphere_unit_to_uv(0.0, size_f.x),
-				clamp(atmosphere_view_y(h, light_y), 0.5 / size_f.y, 1.0 - 0.5 / size_f.y), (float(slice) + 0.5) / size_f.z);
+				atmosphere_view_v(atmosphere_view_y(h, light_y), size_f.y), (float(slice) + 0.5) / size_f.z);
 		vec3 lobe = textureLod(inscatter_lobe_volume, uvw, 0.0).rgb;
-		if (pc.use_clouds > 0.5 && light_y > 0.0) {
+		if (pc.use_clouds > 0.5) {
 			lobe *= 1.0 - textureLod(cloud_cubemap, pc.light_direction, CLOUD_LOD).a;
 		}
 		vec3 total_above = shared_above[0] + (light_y >= 0.0 ? lobe : vec3(0.0));
@@ -126,5 +145,9 @@ void main() {
 		sky_ambient.above = vec4(total_above / (2.0 * ATMOSPHERE_PI), 1.0);
 		sky_ambient.below = vec4(total_below / (2.0 * ATMOSPHERE_PI), 1.0);
 		sky_ambient.irradiance = vec4(shared_irradiance[0] + lobe * max(light_y, 0.0), 1.0);
+		sky_ambient.cloud_light = pc.use_clouds > 0.5
+				? vec4(cloud_light_through(cloud_cubemap, pc.light_direction), cloud_light_through(cloud_cubemap, pc.secondary_direction),
+					cloud_light_through(sea_cloud_cubemap, pc.light_direction), cloud_light_through(sea_cloud_cubemap, pc.secondary_direction))
+				: vec4(1.0);
 	}
 }

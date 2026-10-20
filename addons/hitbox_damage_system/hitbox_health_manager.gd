@@ -1,8 +1,11 @@
 class_name HitboxHealthManager
 extends Node3D
-## Hitbox container and damage router: ProjectileHitbox descendants report
-## projectile impacts here, which become per-group health, signals and hit
-## effects. Optionally shows a health-bar debug panel.
+## Grouped health of one body (e.g. a ship's hull and mast): the ProjectileHitbox
+## areas under it report hits here, which become damage to their group's health,
+## signals and hit effects. Optionally shows a health-bar debug panel.
+##
+## Other damage (a collision, a script) goes through handle_projectile_hit() too, with
+## the group and the damage in hit_data.
 
 const DEBUG_SCREEN_POSITION := Vector2(24.0, 88.0)
 const DEBUG_PANEL_WIDTH := 260.0
@@ -30,12 +33,11 @@ signal group_destroyed(hitbox_group: StringName, hit_data: Dictionary)
 @export_range(0.0, 1000.0, 0.001, "or_greater") var damage_per_momentum := 0.03
 ## Minimum damage applied by momentum-based hits.
 @export_range(0.0, 1000.0, 0.001, "or_greater") var minimum_hit_damage := 1.0
-## Max health used for hitbox groups not listed in group_max_health.
+## Max health of the groups not listed in group_max_health.
 @export_range(0.0, 1000000.0, 0.1, "or_greater") var default_group_max_health := 100.0
-## Per-hitbox-group max health map, for example {"hull": 300.0, "mast": 60.0}.
-@export var group_max_health := {
-	"default": 100.0,
-}
+## Max health per hitbox group, e.g. {"hull": 300.0, "mast": 60.0}. The debug panel
+## shows these groups.
+@export var group_max_health := {}
 ## Per-hitbox-group damage multiplier map applied before hitbox damage_multiplier.
 @export var group_damage_multipliers := {}
 ## Frees the projectile after a registered hit.
@@ -57,7 +59,6 @@ signal group_destroyed(hitbox_group: StringName, hit_data: Dictionary)
 		if _debug_layer != null:
 			_debug_layer.visible = debug_ui_enabled
 
-var _hitboxes: Array[Node] = []
 var _group_health := {}
 var _destroyed_groups := {}
 var _owner_rigid_body: RigidBody3D
@@ -76,23 +77,19 @@ func _exit_tree() -> void:
 
 func _ready() -> void:
 	_initialize_group_health()
-	refresh_hitboxes()
 	_build_debug_ui()
 	group_health_changed.connect(_on_debug_health_changed)
 
 
-## Re-registers every ProjectileHitbox below this node.
-func refresh_hitboxes() -> void:
-	_hitboxes.clear()
-	_collect_hitboxes(self)
-
-
-## Turns a hit reported by hitbox into damage, signals and a hit effect, and frees the
-## projectile when destroy_projectile_on_hit is on. ProjectileHitbox calls it.
+## Turns a hit into damage, signals and a hit effect, and frees the projectile when
+## destroy_projectile_on_hit is on. ProjectileHitbox calls it. hitbox (may be null)
+## gives the group (its hitbox_group) and its damage_multiplier, else hit_data's
+## "hitbox_group" and "damage_multiplier"; hit_data's "damage" overrides the damage
+## from "momentum_magnitude", "position" and "velocity" place the hit effect.
 func handle_projectile_hit(hitbox: Node, projectile: Node, hit_data: Dictionary = {}) -> void:
 	if not enabled:
 		return
-	if should_ignore_projectile(projectile, hitbox):
+	if should_ignore_projectile(projectile):
 		return
 	var hitbox_group := _get_hitbox_group(hitbox, hit_data)
 	var damage := _calculate_damage(hitbox_group, hitbox, hit_data)
@@ -110,9 +107,9 @@ func handle_projectile_hit(hitbox: Node, projectile: Node, hit_data: Dictionary 
 		projectile.queue_free()
 
 
-## Whether a hit by projectile is dropped: one fired from this manager's own body while
-## ignore_own_projectiles is on.
-func should_ignore_projectile(projectile: Node, _hitbox: Node = null) -> bool:
+## Whether a hit by projectile is dropped: one fired from this manager's own body
+## (its source_rigid_body_instance_id metadata) while ignore_own_projectiles is on.
+func should_ignore_projectile(projectile: Node) -> bool:
 	if not ignore_own_projectiles or projectile == null:
 		return false
 	var owner_body := _get_owner_rigid_body()
@@ -267,17 +264,6 @@ func _get_owner_rigid_body() -> RigidBody3D:
 			return _owner_rigid_body
 		node = node.get_parent()
 	return null
-
-
-func _collect_hitboxes(root: Node) -> void:
-	if root is ProjectileHitbox:
-		if not _hitboxes.has(root):
-			_hitboxes.push_back(root)
-			root.call(&"set_manager", self)
-	for child in root.get_children():
-		var child_node := child as Node
-		if child_node != null:
-			_collect_hitboxes(child_node)
 
 
 func _build_debug_ui() -> void:

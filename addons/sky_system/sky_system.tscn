@@ -2,9 +2,9 @@
 
 [ext_resource type="Script" uid="uid://dp6mb8myrguk3" path="res://addons/sky_system/sky_system.gd" id="1_sky_system"]
 [ext_resource type="Material" uid="uid://dn2e5gtbc2jx4" path="res://addons/sky_system/materials/sky.tres" id="2_sky"]
-[ext_resource type="Shader" uid="uid://c06rajf110qna" path="res://addons/sky_system/shaders/celestial_disk.gdshader" id="3_disk_shader"]
 [ext_resource type="Resource" uid="uid://cslcbjx6mnkne" path="res://addons/sky_system/cloud_presets/fair.tres" id="5_cloud_preset"]
 [ext_resource type="Script" uid="uid://fi3uxaroikar" path="res://addons/sky_system/aerial_perspective_effect.gd" id="6_aerial_perspective"]
+[ext_resource type="Script" uid="uid://dmxfobajw4b6e" path="res://addons/sky_system/volumetric_cloud_effect.gd" id="7_volumetric_clouds"]
 
 [sub_resource type="Sky" id="Sky_dynamic"]
 sky_material = ExtResource("2_sky")
@@ -32,28 +32,17 @@ needs_motion_vectors = false
 needs_normal_roughness = false
 script = ExtResource("6_aerial_perspective")
 
+[sub_resource type="CompositorEffect" id="CompositorEffect_volumetric_clouds"]
+resource_local_to_scene = false
+resource_name = ""
+enabled = true
+effect_callback_type = 4
+needs_motion_vectors = false
+needs_normal_roughness = false
+script = ExtResource("7_volumetric_clouds")
+
 [sub_resource type="Compositor" id="Compositor_atmosphere"]
-compositor_effects = Array[CompositorEffect]([SubResource("CompositorEffect_aerial_perspective")])
-
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_sun_disk"]
-render_priority = -5
-shader = ExtResource("3_disk_shader")
-shader_parameter/body_color = Color(1, 0.92, 0.72, 1)
-shader_parameter/visibility = 1.0
-shader_parameter/halo_strength = 1.25
-
-[sub_resource type="QuadMesh" id="QuadMesh_sun"]
-size = Vector2(9.3, 9.3)
-
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_moon_disk"]
-render_priority = -5
-shader = ExtResource("3_disk_shader")
-shader_parameter/body_color = Color(0.72, 0.78, 1, 1)
-shader_parameter/visibility = 1.0
-shader_parameter/halo_strength = 0.35
-
-[sub_resource type="QuadMesh" id="QuadMesh_moon"]
-size = Vector2(9.3, 9.3)
+compositor_effects = Array[CompositorEffect]([SubResource("CompositorEffect_aerial_perspective"), SubResource("CompositorEffect_volumetric_clouds")])
 
 [node name="SkySystem" type="Node3D" unique_id=356109582]
 script = ExtResource("1_sky_system")
@@ -78,15 +67,3 @@ transform = Transform3D(-0.37372905, -0.46388495, -0.8032043, 0, 0.8659532, -0.5
 visible = false
 light_color = Color(0.02, 0.025, 0.04, 1)
 light_energy = 0.0
-
-[node name="SunVisual" type="MeshInstance3D" parent="." unique_id=1562036981]
-visible = false
-material_override = SubResource("ShaderMaterial_sun_disk")
-cast_shadow = 0
-mesh = SubResource("QuadMesh_sun")
-
-[node name="MoonVisual" type="MeshInstance3D" parent="." unique_id=2073974674]
-visible = false
-material_override = SubResource("ShaderMaterial_moon_disk")
-cast_shadow = 0
-mesh = SubResource("QuadMesh_moon")

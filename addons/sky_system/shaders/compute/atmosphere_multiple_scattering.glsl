@@ -32,6 +32,7 @@ layout(push_constant, std430) restrict readonly uniform PushConstants {
 	float haze_scale_height; // m
 	float top_altitude;      // m
 	float haze_anisotropy;   // the lobe's g
+	float haze_wavelength_exponent; // atmosphere_haze_optics()
 } pc;
 
 shared vec3 shared_second_order[MS_DIRECTIONS];
@@ -56,7 +57,10 @@ void main() {
 	float cos_light = dot(direction, light);
 
 	float r0 = ATMOSPHERE_EARTH_RADIUS + h;
-	float haze_density = pc.haze_density * atmosphere_haze_transport_share(pc.haze_anisotropy);
+	float transport = atmosphere_haze_transport_share(pc.haze_anisotropy);
+	vec4 haze_optics = atmosphere_haze_optics(pc.haze_wavelength_exponent);
+	float haze_spectrum[ATMOSPHERE_SPECTRAL_SAMPLES];
+	atmosphere_haze_spectrum(pc.haze_wavelength_exponent, haze_spectrum);
 	float t_sea = atmosphere_distance_to_sea(h, mu);
 	float t_end = t_sea >= 0.0 ? t_sea : atmosphere_distance_to_top(h, mu, pc.top_altitude);
 	vec3 transmittance = vec3(1.0);
@@ -69,16 +73,16 @@ void main() {
 		float t = t_end * s * s;
 		float step_h = atmosphere_altitude_along(h, mu, t);
 		vec3 rayleigh;
-		float haze;
+		vec3 haze;
 		vec3 extinction;
-		atmosphere_segment_media(previous_h, step_h, haze_density, pc.haze_scale_height, rayleigh, haze, extinction);
+		atmosphere_segment_media(previous_h, step_h, pc.haze_density, pc.haze_scale_height, haze_optics, transport, rayleigh, haze, extinction);
 		vec3 segment_transmittance = exp(-extinction * (t - previous_t));
 		// Integral of transmittance * scattering over the segment.
 		vec3 scattered = transmittance * (1.0 - segment_transmittance) / max(extinction, vec3(1e-12)) * (rayleigh + haze);
 		float t_mid = 0.5 * (previous_t + t);
 		float h_mid = min(atmosphere_altitude_along(h, mu, t_mid), pc.top_altitude);
 		float mu_light_mid = (r0 * mu_light + t_mid * cos_light) / (ATMOSPHERE_EARTH_RADIUS + h_mid);
-		vec3 light_transmittance = atmosphere_light_transmittance(transmittance_lut, h_mid, clamp(mu_light_mid, -1.0, 1.0), pc.top_altitude);
+		vec3 light_transmittance = atmosphere_light_transmittance(transmittance_lut, h_mid, clamp(mu_light_mid, -1.0, 1.0), pc.top_altitude, haze_spectrum);
 		second_order += scattered * light_transmittance / (4.0 * ATMOSPHERE_PI);
 		transfer += scattered;
 		transmittance *= segment_transmittance;
@@ -87,7 +91,7 @@ void main() {
 	}
 	if (t_sea >= 0.0) {
 		float mu_light_sea = clamp((r0 * mu_light + t_end * cos_light) / ATMOSPHERE_EARTH_RADIUS, -1.0, 1.0);
-		vec3 light_transmittance = atmosphere_light_transmittance(transmittance_lut, 0.0, mu_light_sea, pc.top_altitude);
+		vec3 light_transmittance = atmosphere_light_transmittance(transmittance_lut, 0.0, mu_light_sea, pc.top_altitude, haze_spectrum);
 		second_order += transmittance * light_transmittance * max(mu_light_sea, 0.0) * (ATMOSPHERE_SEA_ALBEDO / ATMOSPHERE_PI);
 	}
 	shared_second_order[index] = second_order;

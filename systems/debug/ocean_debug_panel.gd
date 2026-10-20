@@ -31,7 +31,7 @@ func setup(
 	active_player_body : FloatingBoat = null
 ) -> void:
 	water = ocean_system
-	wind_source = active_wind_source if active_wind_source != null else water.get_wind_source()
+	wind_source = active_wind_source
 	sky_system = active_sky_system
 	buoyant_body = active_buoyant_body
 	player_body = active_player_body
@@ -242,32 +242,18 @@ func _add_sky_reflection_controls(parent : VBoxContainer) -> void:
 	title.add_theme_font_size_override("font_size", 15)
 	parent.add_child(title)
 
-	var sky_enabled := _add_check_row(parent, "Sky Reflection", "Adds procedural sky and horizon reflection for open ocean.")
-	sky_enabled.name = "SkyReflectionEnabled"
-	sky_enabled.toggled.connect(func(is_pressed : bool) -> void:
-		if not _is_syncing and water:
-			water.sky_reflection_enabled = is_pressed
-	)
-
-	var sky_strength := _add_float_row(parent, "Sky Strength", "Overall procedural sky reflection contribution.", 0.0, 2.0, 0.01, false)
+	var sky_strength := _add_float_row(parent, "Reflection Strength", "Overall strength of the sky and planar reflections (1 = physical).", 0.0, 2.0, 0.01, false)
 	sky_strength.name = "SkyReflectionStrength"
 	sky_strength.value_changed.connect(func(value : float) -> void:
 		if not _is_syncing and water:
 			water.sky_reflection_strength = value
 	)
 
-	var sun_specular := _add_float_row(parent, "Sun Specular", "Multiplier on the sun's glints and sun path (1 = physical).", 0.0, 4.0, 0.01, false)
+	var sun_specular := _add_float_row(parent, "Sun Specular", "Multiplier on the sun's highlight (1 = physical).", 0.0, 4.0, 0.01, false)
 	sun_specular.name = "SunSpecularStrength"
 	sun_specular.value_changed.connect(func(value : float) -> void:
 		if not _is_syncing and water:
 			water.sun_specular_strength = value
-	)
-
-	var glitter := _add_float_row(parent, "Sun Glitter", "Facets per square meter of sun glitter (0 = smooth highlight, fewer = sparser glints).", 0.0, 10000000.0, 1000.0, true)
-	glitter.name = "SunGlitterDensity"
-	glitter.value_changed.connect(func(value : float) -> void:
-		if not _is_syncing and water:
-			water.sun_glitter_density = value
 	)
 
 
@@ -286,14 +272,8 @@ func _add_buoyancy_controls(parent : VBoxContainer) -> void:
 				player_body.debug_enabled = enabled
 		)
 
-	_add_bound_param(parent, "Buoyancy Strength", "Global multiplier for all buoyancy volume forces.", buoyant_body.buoyancy_strength, 0.0, 10.0, 0.01, func(value : float) -> void: buoyant_body.buoyancy_strength = value, true)
 	_add_bound_param(parent, "Water Density", "Seawater is usually around 1025 kg/m^3; freshwater is around 1000 kg/m^3.", buoyant_body.water_density, 1.0, 2000.0, 1.0, func(value : float) -> void: buoyant_body.water_density = value, true)
-	_add_bound_param(parent, "Vertical Drag Cd", "Drag coefficient along the body's up axis, against each column's cross-section.", buoyant_body.vertical_drag_coefficient, 0.0, 10.0, 0.01, func(value : float) -> void: buoyant_body.vertical_drag_coefficient = value, true)
-	_add_bound_param(parent, "Longitudinal Drag Cd", "Drag coefficient along the body's forward axis, against each column's wetted side.", buoyant_body.longitudinal_drag_coefficient, 0.0, 10.0, 0.001, func(value : float) -> void: buoyant_body.longitudinal_drag_coefficient = value, true)
-	_add_bound_param(parent, "Lateral Drag Cd", "Drag coefficient along the body's right axis, against each column's wetted side.", buoyant_body.lateral_drag_coefficient, 0.0, 10.0, 0.001, func(value : float) -> void: buoyant_body.lateral_drag_coefficient = value, true)
-	_add_bound_param(parent, "Heave Damping Ratio", "Wave-making damping of each probe's bobbing, as a fraction of critical damping: damps heave, pitch and roll.", buoyant_body.heave_damping_ratio, 0.0, 2.0, 0.01, func(value : float) -> void: buoyant_body.heave_damping_ratio = value, true)
-	_add_bound_param(parent, "Added Mass", "Water moving with the body in heave, as a multiple of the submerged water mass.", buoyant_body.added_mass_coefficient, 0.0, 5.0, 0.01, func(value : float) -> void: buoyant_body.added_mass_coefficient = value, true)
-	_add_bound_param(parent, "Max Probe Accel", "Caps the acceleration each probe's buoyancy, and separately its drag, can contribute.", buoyant_body.max_probe_acceleration, 0.0, 100.0, 0.1, func(value : float) -> void: buoyant_body.max_probe_acceleration = value, true)
+	_add_bound_param(parent, "Wave Damping Ratio", "Damping of each column's bobbing while it crosses the surface, as a fraction of critical damping: the energy radiated as waves.", buoyant_body.wave_damping_ratio, 0.0, 2.0, 0.01, func(value : float) -> void: buoyant_body.wave_damping_ratio = value, true)
 
 
 func _add_mesh_controls(parent : VBoxContainer) -> void:
@@ -316,12 +296,12 @@ func _add_wind_controls(parent : VBoxContainer) -> void:
 	title.add_theme_font_size_override("font_size", 15)
 	parent.add_child(title)
 
-	var use_external := _add_check_row(parent, "Use External Wind", "When enabled, ocean cascades derive wind speed and direction from the assigned wind source.")
+	var use_external := _add_check_row(parent, "Use External Wind", "When enabled, the waves follow this wind source (the ocean's wind_source_path); otherwise the spectrum's own wind.")
 	use_external.name = "UseExternalWind"
 	use_external.toggled.connect(func(is_pressed : bool) -> void:
 		if _is_syncing or not water:
 			return
-		water.use_external_wind = is_pressed
+		water.wind_source_path = water.get_path_to(wind_source) if is_pressed else NodePath()
 		_rebuild()
 	)
 
@@ -456,42 +436,40 @@ func _add_cascade_tabs(parent : VBoxContainer) -> void:
 	if not water:
 		return
 
-	for i in water.parameters.size():
-		var params := water.parameters[i]
-		var tab_scroll := ScrollContainer.new()
-		tab_scroll.name = "Cascade %d" % (i + 1)
-		tab_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		tabs.add_child(tab_scroll)
+	var spectrum := water.spectrum
+	var spectrum_tab := _add_scroll_tab(tabs, "Spectrum")
+	if water.wind_source_path.is_empty():
+		_add_bound_param(spectrum_tab, "Wind Speed", "Denotes the average wind speed above the water (in meters per second).\nIncreasing makes waves steeper and more 'chaotic'.", spectrum.wind_speed, 0.0001, 1000.0, 0.1, func(value : float) -> void: spectrum.wind_speed = value, true)
+		_add_bound_param(spectrum_tab, "Wind Direction", "Direction the wind blows toward (degrees, 0 = +Z, 90 = +X).", spectrum.wind_direction, -360.0, 360.0, 1.0, func(value : float) -> void: spectrum.wind_direction = value)
+	_add_bound_param(spectrum_tab, "Fetch Length", "Denotes the distance from shoreline (in kilometers).\nIncreasing makes waves steeper, but reduces their 'choppiness'.", spectrum.fetch_length, 0.0001, 10000.0, 1.0, func(value : float) -> void: spectrum.fetch_length = value, true)
+	_add_bound_param(spectrum_tab, "Swell", "Modifies waves to clump in a more elongated, parallel manner.", spectrum.swell, 0.0, 2.0, 0.01, func(value : float) -> void: spectrum.swell = value)
+	_add_bound_param(spectrum_tab, "Spread", "Modifies how much wind and swell affect the direction of the waves.", spectrum.spread, 0.0, 1.0, 0.01, func(value : float) -> void: spectrum.spread = value)
+	_add_bound_param(spectrum_tab, "Detail", "Modifies the attenuation of high frequency waves.", spectrum.detail, 0.0, 1.0, 0.01, func(value : float) -> void: spectrum.detail = value)
+	_add_bound_param(spectrum_tab, "Displacement Scale", "Multiplies the waves' height and chop (1 = the spectrum's). Retune the cascades' whitecap with it.", spectrum.displacement_scale, 0.0, 4.0, 0.01, func(value : float) -> void: spectrum.displacement_scale = value, true)
+	_add_bound_param(spectrum_tab, "Normal Scale", "Multiplies the shaded wave slopes (1 = physical).", water.normal_scale, 0.0, 2.0, 0.01, func(value : float) -> void: water.normal_scale = value)
 
-		var tab := VBoxContainer.new()
-		tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tab.add_theme_constant_override("separation", 6)
-		tab_scroll.add_child(tab)
+	for i in water.cascades.size():
+		var params := water.cascades[i]
+		var tab := _add_scroll_tab(tabs, "Cascade %d" % (i + 1))
 
-		_add_vector2_row(
-			tab,
-			"Tile Length",
-			"Denotes the distance the cascade's tile should cover (in meters).",
-			params.tile_length,
-			func(value : Vector2) -> void: params.tile_length = value,
-		)
-		_add_bound_param(tab, "Displacement Scale", "", params.displacement_scale, 0.0, 2.0, 0.01, func(value : float) -> void: params.displacement_scale = value)
-		_add_bound_param(tab, "Normal Scale", "", params.normal_scale, 0.0, 2.0, 0.01, func(value : float) -> void: params.normal_scale = value)
-		tab.add_child(HSeparator.new())
-		if water.should_use_external_wind():
-			_add_bound_param(tab, "Wind Speed Multiplier", "Scales the external wind source speed for this cascade.", params.wind_speed_multiplier, 0.0, 10.0, 0.01, func(value : float) -> void: params.wind_speed_multiplier = value, true)
-			_add_bound_param(tab, "Wind Direction Offset", "Adds a per-cascade direction offset to the external wind source direction.", params.wind_direction_offset, -360.0, 360.0, 1.0, func(value : float) -> void: params.wind_direction_offset = value)
-		else:
-			_add_bound_param(tab, "Wind Speed", "Denotes the average wind speed above the water (in meters per second).\nIncreasing makes waves steeper and more 'chaotic'.", params.wind_speed, 0.0001, 1000.0, 0.1, func(value : float) -> void: params.wind_speed = value, true)
-			_add_bound_param(tab, "Wind Direction", "", params.wind_direction, -360.0, 360.0, 1.0, func(value : float) -> void: params.wind_direction = value)
-		_add_bound_param(tab, "Fetch Length", "Denotes the distance from shoreline (in kilometers).\nIncreasing makes waves steeper, but reduces their 'choppiness'.", params.fetch_length, 0.0001, 10000.0, 1.0, func(value : float) -> void: params.fetch_length = value, true)
-		_add_bound_param(tab, "Swell", "Modifies waves to clump in a more elongated, parallel manner.", params.swell, 0.0, 2.0, 0.01, func(value : float) -> void: params.swell = value)
-		_add_bound_param(tab, "Spread", "Modifies how much wind and swell affect the direction of the waves.", params.spread, 0.0, 1.0, 0.01, func(value : float) -> void: params.spread = value)
-		_add_bound_param(tab, "Detail", "Modifies the attenuation of high frequency waves.", params.detail, 0.0, 1.0, 0.01, func(value : float) -> void: params.detail = value)
+		_add_bound_param(tab, "Tile Length", "Size (m) of the repeating tile; the cascade draws waves up to a sixth of it.", params.tile_length, 1.0, 10000.0, 1.0, func(value : float) -> void: params.tile_length = value, true)
 		tab.add_child(HSeparator.new())
 		_add_bound_param(tab, "Whitecap", "Foam forms where the rendered surface's Jacobian is below this (1 flat, 0 folding). Higher puts foam on gentler crests.", params.whitecap, -1.0, 1.5, 0.01, func(value : float) -> void: params.whitecap = value)
 		_add_bound_param(tab, "Foam Generation", "Coverage added per second per unit of Jacobian below whitecap.", params.foam_generation, 0.0, 100.0, 0.1, func(value : float) -> void: params.foam_generation = value, true)
 		_add_bound_param(tab, "Foam Lifetime", "Seconds for foam to fade to 1/e after its crest passes.", params.foam_lifetime, 0.05, 30.0, 0.05, func(value : float) -> void: params.foam_lifetime = value, true)
+
+
+## A scrolling tab named name in tabs; returns its content column.
+func _add_scroll_tab(tabs : TabContainer, tab_name : String) -> VBoxContainer:
+	var tab_scroll := ScrollContainer.new()
+	tab_scroll.name = tab_name
+	tab_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	tabs.add_child(tab_scroll)
+	var tab := VBoxContainer.new()
+	tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tab.add_theme_constant_override("separation", 6)
+	tab_scroll.add_child(tab)
+	return tab
 
 
 func _populate_values() -> void:
@@ -516,12 +494,10 @@ func _populate_values() -> void:
 	_set_named_spin("WaterClearRoughness", water.clear_roughness)
 	_set_named_spin("WaterFoamRoughness", water.foam_roughness)
 	_set_named_spin("FoamIntensity", water.foam_intensity)
-	_set_named_check("SkyReflectionEnabled", water.sky_reflection_enabled)
 	_set_named_spin("SkyReflectionStrength", water.sky_reflection_strength)
 	_set_named_spin("SunSpecularStrength", water.sun_specular_strength)
-	_set_named_spin("SunGlitterDensity", water.sun_glitter_density)
 	_set_named_spin("MeshBaseCellSize", water.mesh_base_cell_size)
-	_set_named_check("UseExternalWind", water.use_external_wind)
+	_set_named_check("UseExternalWind", not water.wind_source_path.is_empty())
 	if wind_source:
 		_set_named_spin("ExternalWindSpeed", _get_wind_source_speed())
 		_set_named_spin("ExternalWindDirection", _get_wind_source_direction())
@@ -593,42 +569,6 @@ func _add_float_row(
 	spin.tooltip_text = tooltip
 	row.add_child(spin)
 	return spin
-
-
-func _add_vector2_row(parent : VBoxContainer, label : String, tooltip : String, value : Vector2, callback : Callable) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	parent.add_child(row)
-
-	var text := Label.new()
-	text.text = label
-	text.tooltip_text = tooltip
-	text.custom_minimum_size = Vector2(160, 0)
-	row.add_child(text)
-
-	var x_spin := SpinBox.new()
-	x_spin.min_value = 0.0001
-	x_spin.max_value = 10000.0
-	x_spin.step = 1.0
-	x_spin.allow_greater = true
-	x_spin.value = value.x
-	x_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(x_spin)
-
-	var y_spin := SpinBox.new()
-	y_spin.min_value = 0.0001
-	y_spin.max_value = 10000.0
-	y_spin.step = 1.0
-	y_spin.allow_greater = true
-	y_spin.value = value.y
-	y_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(y_spin)
-
-	var emit_value := func(_new_value : float) -> void:
-		if not _is_syncing:
-			callback.call(Vector2(x_spin.value, y_spin.value))
-	x_spin.value_changed.connect(emit_value)
-	y_spin.value_changed.connect(emit_value)
 
 
 func _add_color_row(parent : VBoxContainer, label : String, tooltip : String) -> ColorPickerButton:
@@ -713,21 +653,11 @@ func _set_named_option(node_name : StringName, value : int) -> void:
 
 
 func _get_wind_source_speed() -> float:
-	if wind_source == null:
-		return 0.0
-	if wind_source.has_method(&'get_wind_speed'):
-		return float(wind_source.call(&'get_wind_speed'))
-	var value = wind_source.get(&'wind_speed')
-	return 0.0 if value == null else float(value)
+	return WindSource.get_speed(wind_source) if WindSource.is_valid(wind_source) else 0.0
 
 
 func _get_wind_source_direction() -> float:
-	if wind_source == null:
-		return 0.0
-	if wind_source.has_method(&'get_wind_direction_degrees'):
-		return float(wind_source.call(&'get_wind_direction_degrees'))
-	var value = wind_source.get(&'wind_direction')
-	return 0.0 if value == null else float(value)
+	return WindSource.get_direction(wind_source) if WindSource.is_valid(wind_source) else 0.0
 
 
 func _set_wind_source_speed(value : float) -> void:

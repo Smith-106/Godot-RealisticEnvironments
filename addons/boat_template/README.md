@@ -1,53 +1,63 @@
 # Boat Template
 
-`boat.tscn` is a ready-wired boat: driving, stability, buoyancy and sinking,
-hitbox health, hull cutout and wake, bow spray and camera anchors. Make a boat
-by creating an **inherited scene** from it.
+**English** · [简体中文](README.zh-CN.md)
 
-Depends on `core`, `buoyancy_system`, `hitbox_damage_system`, `ocean_system`
-and `sky_system` (the spray is hazed by its atmosphere). Enable **Boat
-Template** in Project Settings > Plugins to add the drive actions
-`boat_forward`, `boat_back`, `boat_turn_left`, `boat_turn_right` (W S A D).
+`boat.tscn` is a boat with all the systems already wired: driving, buoyancy and
+sinking, hit health, hull cutout and wake, bow spray, and camera
+anchors. To make a boat, create an **inherited scene** from it.
 
-## Template tree
+Requires `core`, `ocean_system`, `sky_system` (the spray is hazed by its
+atmosphere), `buoyancy_system` and `hitbox_damage_system`. When enabled, the
+plugin adds the drive actions `boat_forward`, `boat_back`, `boat_turn_left`
+and `boat_turn_right` (W S A D) to the project, unless they already exist.
+
+## How it works
 
 ```
-Boat (RigidBody3D, FloatingBoat)   drive input, stability, model animation
-├─ CollisionShape3D           placeholder box — replace
-├─ BuoyantBody                buoyancy + sinking  ← Hitboxes.group_destroyed
+Boat (RigidBody3D, FloatingBoat)   drive input, model animation
+├─ CollisionShape3D           placeholder box: replace it
+├─ BuoyantBody                buoyancy and sinking  ← Hitboxes.group_destroyed
 ├─ BuoyancyProbeVolume
-│  └─ GeneratedProbes         empty — generate per boat
-├─ Hitboxes                   HitboxHealthManager (one `hull` group, 100 HP)
-├─ HullWaterFootprint         cutout and wake — bake per boat
+│  └─ GeneratedProbes         empty: generate probes for each boat
+├─ Hitboxes                   HitboxHealthManager (one "hull" group, 100 HP)
+├─ HullWaterFootprint         cutout and wake: bake a profile for each boat
 ├─ CameraTargets/ThirdPersonFocus, FirstPersonSeat
 └─ BowSpray                   stem spray and slam splashes
 ```
 
-## Making a new boat
+- **`FloatingBoat`** (the root) pushes the boat forward and turns it while
+  `player_controlled` is on. Thrust stops above `max_forward_speed` /
+  `max_reverse_speed`, and turning weakens at low speed. Staying upright, the
+  water's grip on the hull and its drag all come from the buoyancy, from the
+  hull's shape and the boat's mass: a hull without a keel skids in turns. Boats
+  that are not player-controlled still float, take damage, sink and make wakes.
+- Buoyancy, health and the wake come from the other addons' nodes (see their
+  READMEs). Destroying the `hull` group sinks the boat.
+- **`BowSpray`** reads the water at the stem. While the stem cuts through the
+  water it throws sheets of droplets. When the bow slams down into a wave it
+  shoots jets of spray, adds a splash ring to the water and emits
+  `slammed(impact_speed, position)`.
 
-1. New Inherited Scene from `boat.tscn`; add your model (bow along −Z).
-2. Replace the collision shape; set `mass` and `center_of_mass`.
-3. On `BuoyancyProbeVolume`: set `source_paths`, `design_waterline_y` and the
-   probe sizes, press **Generate All Probes**, save (see the buoyancy README).
-4. Add `ProjectileHitbox` areas under `Hitboxes`; list their groups in
-   `group_max_health`, and in `BuoyantBody.sink_on_destroyed_groups` if losing
-   them should sink the boat.
-5. Move `CameraTargets/*` to the deck and `BowSpray` to the stem, just below
-   the waterline. Set its `emission_half_width` to about half the bow's width.
-6. On `HullWaterFootprint`: set `bake_source_paths` to the hull only, press
-   **Bake Profile**, save (see the ocean README).
+## How to use
+
+1. **Scene > New Inherited Scene** from `boat.tscn`. Add your model with the
+   bow along −Z.
+2. Replace the collision shape, and set the boat's real `mass` and
+   `center_of_mass`.
+3. On `BuoyancyProbeVolume`: set `source_paths` to the hull, press
+   **Generate All Probes**, and save. If its warnings say the boat floats
+   tilted, move `center_of_mass` where they say (see `buoyancy_system`).
+4. On `HullWaterFootprint`: set `bake_source_paths` to the hull only, press
+   **Bake Profile**, and save (see `ocean_system`).
+5. Add `ProjectileHitbox` areas under `Hitboxes`, and list their groups in
+   `group_max_health`. Add a group to `BuoyantBody.sink_on_destroyed_groups`
+   if losing it should sink the boat.
+6. Move `CameraTargets/*` onto the deck, and `BowSpray` to the stem just below
+   the waterline. Set `emission_half_width` to about half the bow's width, and
+   raise `particle_size` for large ships.
 7. Optional: `animation_player_path` and `autoplay_animation` loop a model
-   animation (e.g. a sail).
-8. Set `player_controlled` on the boat the player drives.
+   animation (e.g. sails).
+8. Turn on `player_controlled` on the boat the player drives.
 
-## Nodes
-
-- **`FloatingBoat`** (root): throttle and turning forces (`max_forward_speed`,
-  `max_reverse_speed`, `low_speed_turn_factor`), per-axis angular damping and a
-  roll-righting spring. Only reads input while `player_controlled` is set; every
-  boat still floats, takes damage, sinks and makes wakes.
-- **`BowSpray`**: droplet sheets while the stem cuts the water (`spray_rate`,
-  `spray_speed_min` / `spray_speed_full`), and on hard bow re-entries
-  (`slam_speed_threshold`) jets of spray plus a splash ring in the water.
-  Emits `slammed(impact_speed, position)`. Raise `particle_size` for large
-  ships.
+Keep the template's node names and order. Scenes inherited from it override
+nodes by path.

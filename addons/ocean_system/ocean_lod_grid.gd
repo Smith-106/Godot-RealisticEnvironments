@@ -99,10 +99,11 @@ func set_cell_size(cell_size : float, force := false) -> void:
 	_set_parameter.call(&'lod_top_level', _top_level)
 
 
-## Selects the nodes around camera over water at water_position (the ocean's origin)
-## and uploads them as multimesh instances (custom data: node origin x, z, vertex
-## spacing, level). owner_path names the ocean in errors.
-func update(camera : Camera3D, water_position : Vector3, cell_size : float, owner_path : NodePath) -> void:
+## Selects the nodes around camera over the water at water_level and uploads them as
+## multimesh instances (custom data: node origin x, z, vertex spacing, level).
+## ocean_origin is the ocean node's global position (its bounds are local to it);
+## owner_path names the ocean in errors.
+func update(camera : Camera3D, ocean_origin : Vector3, water_level : float, cell_size : float, owner_path : NodePath) -> void:
 	# No active camera yet (e.g. while a scene is loading): draw nothing.
 	if camera == null:
 		RenderingServer.multimesh_set_visible_instances(_multimesh, 0)
@@ -113,13 +114,13 @@ func update(camera : Camera3D, water_position : Vector3, cell_size : float, owne
 	var frustum := camera.get_frustum()
 	var camera_position := camera.global_position
 	# Same view and water as last frame: the selection would be the same.
-	var selection_key := [frustum, camera_position, water_position.y, cell_size]
+	var selection_key := [frustum, camera_position, ocean_origin, water_level, cell_size]
 	if selection_key == _selection_key:
 		return
 	_selection_key = selection_key
 	_camera_x = camera_position.x
 	_camera_z = camera_position.z
-	_water_y = water_position.y
+	_water_y = water_level
 	_height_squared = (camera_position.y - _water_y) * (camera_position.y - _water_y)
 	frustum = frustum.duplicate()
 	frustum.remove_at(1)
@@ -153,9 +154,9 @@ func update(camera : Camera3D, water_position : Vector3, cell_size : float, owne
 	RenderingServer.multimesh_set_visible_instances(_multimesh, _node_count)
 	# Instance transforms are identity, so culling needs explicit bounds, in the ocean's
 	# local space (it is never rotated or scaled).
-	var center := camera_position - water_position
+	var center := Vector3(camera_position.x, water_level, camera_position.z) - ocean_origin
 	var drop := radius * radius * 0.5 / OceanSystem.EARTH_RADIUS
-	RenderingServer.multimesh_set_custom_aabb(_multimesh, AABB(Vector3(center.x - radius, -LOD_WAVE_MARGIN - drop, center.z - radius), Vector3(2.0 * radius, 2.0 * LOD_WAVE_MARGIN + drop, 2.0 * radius)))
+	RenderingServer.multimesh_set_custom_aabb(_multimesh, AABB(Vector3(center.x - radius, center.y - LOD_WAVE_MARGIN - drop, center.z - radius), Vector3(2.0 * radius, 2.0 * LOD_WAVE_MARGIN + drop, 2.0 * radius)))
 
 
 ## LOD_GRID x LOD_GRID quads; UV holds the lattice coordinates (0..LOD_GRID).

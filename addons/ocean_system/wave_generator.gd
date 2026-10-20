@@ -1,6 +1,7 @@
-@tool
-class_name WaveGenerator extends Node
-## Handles the compute pipeline for wave spectra generation/FFT.
+class_name WaveGenerator extends RefCounted
+## OceanSystem's compute pipeline (internal): generates each cascade's spectrum and
+## transforms it (FFT) into displacement and normal maps with full mip chains. Its GPU
+## resources are freed with it.
 ##
 ## Output goes to two fixed pairs of maps, A and B (descriptors
 ## displacement_map_a/b, normal_map_a/b). Each cascade updates on its own
@@ -13,12 +14,13 @@ const G := 9.81
 ## frequencies to multiples of 2 pi / it), so the clock reaches the GPU modulo it and
 ## keeps its float32 precision in long sessions.
 const WAVE_REPEAT_SECONDS := 1000.0
-const SPECTRUM_SLOT_COUNT := WaveCascadeParameters.SPECTRUM_SLOT_COUNT
+const SPECTRUM_SLOT_COUNT := WaveCascadeState.SLOT_COUNT
 ## Mip levels mip_chain.glsl builds per dispatch (a 16 x 16 workgroup halves a 32 x 32
 ## tile five times).
 const MIP_LEVELS_PER_DISPATCH := 5
 
 var map_size : int
+## Check context.failed after init_gpu().
 var context : RenderingContext
 var pipelines : Dictionary = {}
 var descriptors : Dictionary = {}
@@ -38,8 +40,11 @@ var spectrum_layer_capacity := 0
 ## Per cascade: the output (0 = A, 1 = B) holding its newest frame.
 var cascade_newest_output := PackedInt32Array()
 
-func init_gpu(num_cascades : int) -> void:
+## Creates the GPU resources for num_cascades cascades of map_size x map_size texels
+## (a power of two, 128-1024, see fft_compute.glsl). Check context.failed afterwards.
+func init_gpu(size : int, num_cascades : int) -> void:
 	assert(context == null, "WaveGenerator.init_gpu() must only be called once.")
+	map_size = size
 	cascade_capacity = num_cascades
 	spectrum_layer_capacity = num_cascades * SPECTRUM_SLOT_COUNT
 	cascade_newest_output.resize(num_cascades)
@@ -154,32 +159,33 @@ func init_gpu(num_cascades : int) -> void:
 	pipelines[&'fft_butterfly'].call(context, compute_list)
 	context.compute_list_end()
 
-## Computes the cascade's next frame (at params.time; call params.advance()
-## first) into the output that does not hold its newest frame, which it then
-## becomes.
-func update_cascade(cascade_index : int, params : WaveCascadeParameters) -> void:
+## Computes the cascade's next frame (at state.time; call state.advance() first)
+## into the output that does not hold its newest frame, which it then becomes.
+## displacement_scale is WaveSpectrum.displacement_scale.
+func update_cascade(cascade_index : int, cascade : WaveCascade, state : WaveCascadeState, displacement_scale : float) -> void:
 	assert(context != null, "WaveGenerator.update_cascade() called before init_gpu().")
 	assert(cascade_index < cascade_capacity, "More cascades than the generator was initialized for.")
 	var write_output := 1 - cascade_newest_output[cascade_index]
 	var compute_list := context.compute_list_begin()
-	for slot in params.get_slots_to_update():
-		_update_spectrum_slot(compute_list, cascade_index, slot, params, write_output)
+	for slot in state.get_slots_to_update():
+		_update_spectrum_slot(compute_list, cascade_index, slot, cascade, state, displacement_scale, write_output)
 	context.compute_list_end()
 	cascade_newest_output[cascade_index] = write_output
 
-func _update_spectrum_slot(compute_list : int, cascade_index : int, slot : int, params : WaveCascadeParameters, write_output : int) -> void:
+func _update_spectrum_slot(compute_list : int, cascade_index : int, slot : int, cascade : WaveCascade, state : WaveCascadeState, displacement_scale : float, write_output : int) -> void:
 	var spectrum_layer := cascade_index * SPECTRUM_SLOT_COUNT + slot
-	var inputs := params.get_slot_inputs(slot)
+	var inputs := state.get_slot_inputs(slot)
+	var tile_length := cascade.tile_length
 	# Every pass reads what the previous one wrote. Dispatches inside one compute
 	# list are not ordered, so each dependency needs a barrier.
 	## --- WAVE SPECTRA UPDATE ---
-	if params.is_spectrum_slot_dirty(slot):
+	if state.is_slot_dirty(slot):
 		var alpha := JONSWAP_alpha(inputs.wind_speed, inputs.fetch_length*1e3)
 		var omega := JONSWAP_peak_angular_frequency(inputs.wind_speed, inputs.fetch_length*1e3)
-		pipelines[&'spectrum_compute'].call(context, compute_list, RenderingContext.create_push_constant([params.spectrum_seed.x, params.spectrum_seed.y, params.tile_length.x, params.tile_length.y, alpha, omega, inputs.wind_speed, deg_to_rad(inputs.wind_direction), inputs.water_depth_meters, inputs.swell, inputs.detail, inputs.spread, spectrum_layer]))
-		params.mark_spectrum_slot_clean(slot)
+		pipelines[&'spectrum_compute'].call(context, compute_list, RenderingContext.create_push_constant([state.spectrum_seed.x, state.spectrum_seed.y, tile_length, tile_length, alpha, omega, inputs.wind_speed, deg_to_rad(inputs.wind_direction), inputs.water_depth, inputs.swell, inputs.detail, inputs.spread, spectrum_layer, state.wavenumber_band.x, state.wavenumber_band.y]))
+		state.mark_slot_clean(slot)
 		context.compute_list_add_barrier(compute_list)
-	pipelines[&'spectrum_modulate'].call(context, compute_list, RenderingContext.create_push_constant([params.tile_length.x, params.tile_length.y, inputs.water_depth_meters, fposmod(params.time, WAVE_REPEAT_SECONDS), spectrum_layer, slot]))
+	pipelines[&'spectrum_modulate'].call(context, compute_list, RenderingContext.create_push_constant([tile_length, tile_length, inputs.water_depth, fposmod(state.time, WAVE_REPEAT_SECONDS), spectrum_layer, slot]))
 	context.compute_list_add_barrier(compute_list)
 
 	## --- WAVE SPECTRA INVERSE FOURIER TRANSFORM ---
@@ -194,7 +200,7 @@ func _update_spectrum_slot(compute_list : int, cascade_index : int, slot : int, 
 	context.compute_list_add_barrier(compute_list)
 
 	## --- DISPLACEMENT/NORMAL MAP UPDATE ---
-	pipelines[&'fft_unpack'].call(context, compute_list, RenderingContext.create_push_constant([slot, params.whitecap, params.foam_grow_rate, params.foam_decay_rate, params.displacement_scale]), [unpack_sets[write_output][spectrum_layer], fft_buffer_set])
+	pipelines[&'fft_unpack'].call(context, compute_list, RenderingContext.create_push_constant([slot, cascade.whitecap, state.foam_grow_rate, state.foam_decay_rate, displacement_scale, state.foam_shift.x, state.foam_shift.y]), [unpack_sets[write_output][spectrum_layer], fft_buffer_set])
 
 	## --- MIP CHAINS (displacement and normal maps of this layer, up to five levels a dispatch) ---
 	for step in mip_steps.size():
@@ -216,10 +222,33 @@ func _notification(what):
 	if what == NOTIFICATION_PREDELETE and context != null:
 		context.free()
 
-# Source: https://wikiwaves.org/Ocean-Wave_Spectra#JONSWAP_Spectrum
-static func JONSWAP_alpha(wind_speed:=20.0, fetch_length:=550e3) -> float:
-	return 0.076 * pow(wind_speed**2 / (fetch_length*G), 0.22)
+## JONSWAP's fetch laws (Hasselmann et al. 1973) in the dimensionless fetch g F / U^2:
+## alpha = 0.076 x^-0.22, peak omega = 22 (g / U) x^-1/3. Past this fetch the sea is fully
+## developed (Pierson-Moskowitz: alpha 0.0081-0.0084, peak omega about 0.8 g / U), so
+## longer fetches no longer grow the waves.
+const FULLY_DEVELOPED_DIMENSIONLESS_FETCH := 2.2e4
+
+## g F / U^2 for wind_speed (m/s) and fetch_length (m), capped at the fully developed sea.
+static func dimensionless_fetch(wind_speed : float, fetch_length : float) -> float:
+	return minf(G * fetch_length / maxf(wind_speed * wind_speed, 1e-8), FULLY_DEVELOPED_DIMENSIONLESS_FETCH)
 
 # Source: https://wikiwaves.org/Ocean-Wave_Spectra#JONSWAP_Spectrum
-static func JONSWAP_peak_angular_frequency(wind_speed:=20.0, fetch_length:=550e3) -> float:
-	return 22.0 * pow(G*G / (wind_speed*fetch_length), 1.0/3.0)
+static func JONSWAP_alpha(wind_speed : float, fetch_length : float) -> float:
+	return 0.076 * pow(dimensionless_fetch(wind_speed, fetch_length), -0.22)
+
+# Source: https://wikiwaves.org/Ocean-Wave_Spectra#JONSWAP_Spectrum
+static func JONSWAP_peak_angular_frequency(wind_speed : float, fetch_length : float) -> float:
+	return 22.0 * G / maxf(wind_speed, 1e-4) * pow(dimensionless_fetch(wind_speed, fetch_length), -1.0 / 3.0)
+
+## Wavelength (m) of the spectrum's peak for wind_speed (m/s), fetch_length (m) and
+## water depth (m): the finite-depth dispersion relation omega^2 = g k tanh(k depth),
+## solved by Newton's method from the deep-water wavenumber.
+static func peak_wavelength(wind_speed : float, fetch_length : float, depth : float) -> float:
+	var omega := JONSWAP_peak_angular_frequency(wind_speed, fetch_length)
+	var k := omega * omega / G
+	for i in 8:
+		var t := tanh(k * depth)
+		var f := G * k * t - omega * omega
+		var df := G * (t + k * depth * (1.0 - t * t))
+		k = maxf(k - f / df, 1e-6)
+	return TAU / k

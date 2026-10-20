@@ -1,6 +1,11 @@
+@tool
 class_name ProjectileHitbox
 extends Area3D
-## Area3D hitbox that reports projectile impacts to a compatible hitbox manager.
+## An Area3D that detects projectiles and reports their hits to its hitbox manager (a
+## HitboxHealthManager it sits under, or manager_path). Give it collision shapes and
+## a collision_mask that includes the projectiles' layer (the demo: layer 3
+## "Hitbox", mask 2 "Projectile"). A projectile is a body in group "projectile" or
+## with a launch() method.
 
 ## Emitted for every projectile hit on this hitbox, before the manager handles it.
 signal projectile_hit(projectile: Node, hit_data: Dictionary)
@@ -11,51 +16,46 @@ signal projectile_hit(projectile: Node, hit_data: Dictionary)
 @export var hitbox_group: StringName = &"default"
 ## Per-hitbox multiplier applied to calculated or explicit hit damage.
 @export_range(0.0, 100.0, 0.01, "or_greater") var damage_multiplier := 1.0
-## Optional HitboxHealthManager path. Leave empty to find the nearest compatible manager.
-@export var manager_path: NodePath
-## Applies hitbox_collision_layer and projectile_collision_mask in _ready().
-@export var configure_collision_layers := true
-## Physics layer assigned to this Area3D when configure_collision_layers is enabled.
-@export_flags_3d_physics var hitbox_collision_layer: int = 4
-## Physics mask used to detect projectile bodies when configure_collision_layers is enabled.
-@export_flags_3d_physics var projectile_collision_mask: int = 2
+## The manager hits are reported to: any node with handle_projectile_hit() (a
+## HitboxHealthManager). Empty: the nearest such ancestor.
+@export var manager_path: NodePath :
+	set(value):
+		manager_path = value
+		update_configuration_warnings()
 ## Minimum seconds before the same projectile can register another hit on this hitbox.
-@export_range(0.0, 5.0, 0.001, "or_greater") var same_projectile_hit_interval := 0.08
+@export_range(0.0, 5.0, 0.001, "or_greater", "suffix:s") var same_projectile_hit_interval := 0.08
 
 var _manager: Node
 var _last_hit_time_by_projectile := {}
 
 
 func _ready() -> void:
-	if configure_collision_layers:
-		collision_layer = hitbox_collision_layer
-		collision_mask = projectile_collision_mask
-	monitoring = true
-	monitorable = true
-	if not body_entered.is_connected(_on_body_entered):
-		body_entered.connect(_on_body_entered)
+	if Engine.is_editor_hint():
+		return
+	_manager = _find_manager()
+	if _manager == null:
+		push_error("ProjectileHitbox %s: no hitbox manager (manager_path, or a HitboxHealthManager ancestor); hits only emit projectile_hit." % get_path())
+	body_entered.connect(_on_body_entered)
 
 
-## Sets the manager hits are reported to. HitboxHealthManager calls it for its hitboxes.
-func set_manager(manager: Node) -> void:
-	_manager = manager
+func _get_configuration_warnings() -> PackedStringArray:
+	if _find_manager() == null:
+		return PackedStringArray(["No hitbox manager: put this hitbox under a HitboxHealthManager or set manager_path. Hits then only emit projectile_hit."])
+	return PackedStringArray()
 
 
 func _on_body_entered(body: Node3D) -> void:
-	if not enabled or body == null:
+	if not enabled or not _is_projectile(body):
 		return
-	if not _is_projectile(body):
-		return
-	var manager := _resolve_manager()
-	if manager != null and manager.has_method(&"should_ignore_projectile") and bool(manager.call(&"should_ignore_projectile", body, self)):
+	if _manager != null and _manager.has_method(&"should_ignore_projectile") and bool(_manager.call(&"should_ignore_projectile", body)):
 		return
 	if not _can_register_hit(body):
 		return
 
 	var hit_data := _build_hit_data(body)
 	projectile_hit.emit(body, hit_data)
-	if manager != null and manager.has_method(&"handle_projectile_hit"):
-		manager.call(&"handle_projectile_hit", self, body, hit_data)
+	if _manager != null:
+		_manager.call(&"handle_projectile_hit", self, body, hit_data)
 
 
 func _is_projectile(body: Node) -> bool:
@@ -74,7 +74,7 @@ func _can_register_hit(projectile: Node) -> bool:
 	return true
 
 
-func _build_hit_data(projectile: Node) -> Dictionary:
+func _build_hit_data(projectile: Node3D) -> Dictionary:
 	var projectile_body := projectile as RigidBody3D
 	var velocity := Vector3.ZERO
 	var projectile_mass := 0.0
@@ -82,16 +82,12 @@ func _build_hit_data(projectile: Node) -> Dictionary:
 		velocity = projectile_body.linear_velocity
 		projectile_mass = projectile_body.mass
 	var momentum := velocity * projectile_mass
-	var impact_position := global_position
-	var projectile_3d := projectile as Node3D
-	if projectile_3d != null:
-		impact_position = projectile_3d.global_position
 	return {
 		"hitbox": self,
 		"hitbox_group": hitbox_group,
 		"damage_multiplier": damage_multiplier,
 		"projectile": projectile,
-		"position": impact_position,
+		"position": projectile.global_position,
 		"velocity": velocity,
 		"speed": velocity.length(),
 		"mass": projectile_mass,
@@ -100,35 +96,18 @@ func _build_hit_data(projectile: Node) -> Dictionary:
 	}
 
 
-func _resolve_manager() -> Node:
-	if _manager != null and is_instance_valid(_manager):
-		return _manager
+## The node at manager_path, else the nearest ancestor manager.
+func _find_manager() -> Node:
 	if not manager_path.is_empty():
-		_manager = get_node_or_null(manager_path)
-		if _manager != null:
-			return _manager
-	_manager = _find_nearest_manager()
-	return _manager
-
-
-func _find_nearest_manager() -> Node:
+		var configured := get_node_or_null(manager_path)
+		return configured if _is_manager(configured) else null
 	var ancestor := get_parent()
-	while ancestor != null:
-		var manager := _find_manager_descendant(ancestor)
-		if manager != null:
-			return manager
+	while ancestor != null and not _is_manager(ancestor):
 		ancestor = ancestor.get_parent()
-	return null
+	return ancestor
 
 
-func _find_manager_descendant(root: Node) -> Node:
-	if root != self and root.has_method(&"handle_projectile_hit"):
-		return root
-	for child in root.get_children():
-		var child_node := child as Node
-		if child_node == null or child_node == self:
-			continue
-		var manager := _find_manager_descendant(child_node)
-		if manager != null:
-			return manager
-	return null
+## A HitboxHealthManager (checked by type in the editor, where its script does not
+## run), or any node with handle_projectile_hit().
+static func _is_manager(node : Node) -> bool:
+	return node is HitboxHealthManager or (node != null and node.has_method(&"handle_projectile_hit"))

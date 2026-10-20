@@ -7,4 +7,3 @@ script = ExtResource("1_cloud_preset")
 coverage = 0.38
 cloud_type = 0.55
 base_altitude = 1400.0
-sun_light_scale = 0.95

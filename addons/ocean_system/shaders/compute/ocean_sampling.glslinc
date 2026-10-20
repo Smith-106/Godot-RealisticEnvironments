@@ -16,7 +16,7 @@
 #define OCEAN_DISPLACEMENT_INVERSION_ITERATIONS 3
 
 struct OceanCascade {
-	vec4 map_scales;  // [uv scale xy, displacement scale, normal scale]
+	vec4 map_scales;  // [uv scale xy (1 / tile length), displacement scale, unused]
 	vec4 blend_state; // [active layer, pending layer, active weight, pending weight]
 	// x: weight of map B (map A gets the rest) for the current time; y (1/s) turns
 	// B - A into a velocity. Each cascade updates at its own rate into whichever

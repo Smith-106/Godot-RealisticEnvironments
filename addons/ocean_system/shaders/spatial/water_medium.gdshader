@@ -4,5 +4,6 @@ render_mode world_vertex_coords, cull_disabled, depth_draw_always;
 #define REFRACTION_MARCH_STEPS 16
 #define REFRACTION_REFINE_STEPS 4
 #define CREST_MARCH_STEPS 5
+#define NORMAL_ANISOTROPY_TAPS 4
 #define PLANAR_REFLECTION_STEPS 2
 #include "res://addons/ocean_system/shaders/spatial/water.gdshaderinc"

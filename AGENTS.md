@@ -22,6 +22,26 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
 - `docs/*-plan.md` are completed design records (their *Deferred verification*
   lists are still open).
 
+## API conventions (frozen with 0.1)
+- Public API = exported properties, signals, constants, enums and methods
+  without a leading `_`, each with a `##` doc comment. Everything else is
+  internal: `_` members, and the helper classes (`WaveGenerator`,
+  `WaveCascadeState`, `OceanLodGrid`, `OceanHulls`, `OceanSurfaceQueries`,
+  `WaterInteractionSim`, `AtmosphereRenderer`, `CloudRenderer`, the
+  compositor effects). Don't expose runtime state as public vars.
+- Resources (`WaveSpectrum`, `WaveCascade`, `CloudPreset`, `HullProfile`) hold
+  settings only, never simulation state, so one can be shared.
+- Another system is referenced by a `*_source_path` / `*_path` NodePath; an
+  empty path means "use own values" (no separate enable flag). Read it through
+  its contract (`WindSource`, `WaterSurface`, the sky and light sources),
+  never by type.
+- One value, one place: no export that must equal another export, and no
+  export shadowing an engine property (e.g. an `Area3D`'s collision layers).
+- Fixed choices are `enum`s (`OceanSystem.ReflectionMode`, `ShaderQuality`);
+  values that are sizes stay `@export_enum` ints. Units go in the doc comment
+  and hint (`"suffix:m"`, `"degrees"`); existing unit-suffixed names
+  (`latitude_degrees`, `cycle_duration_seconds`, ...) stay.
+
 ## Project basics
 - Godot 4.8, Forward+. Main scene `res://demo/main.tscn`. No package manager,
   CI, formatter or tests. Verify by running `demo/main.tscn` (or
@@ -36,7 +56,13 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `examples/` uses only the open-source addons (never `systems/`, `demo/`,
   projectile weapons or `floating_boat_template`); its hull mesh comes from
   `tools/make_example_hull.py`.
-- Runtime types use `class_name`; `*_plugin.gd` only set up the project via
+- User docs are pairs: `README.md` (English) and `README.zh-CN.md`
+  (Simplified Chinese) at the top level, in `examples/` and in each
+  open-source addon. Each covers briefly how it works and how to use it;
+  change both languages together.
+- Runtime types use `class_name`, except internal `Node` helpers
+  (`OceanReflectionRenderer`), which are preloaded so they stay out of the
+  Create Node dialog; `*_plugin.gd` only set up the project via
   core's `ProjectSetup`, adding missing settings and never changing existing
   ones. A new project requirement goes into the plugin plus a runtime check
   that reports it. `plugin.cfg` `script` paths are relative.
@@ -54,7 +80,12 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   renaming/reordering template nodes breaks them, `sinking_probe_paths` and
   `demo/main.gd`.
 - Buoyancy probes and hull profiles are generated in the editor and saved;
-  runtime generation is refused. The template has neither.
+  runtime generation is refused. The template has neither. Physical probes are
+  hull columns baked from the mesh (`area_profile`, `side_panels`): every force
+  follows from them, the body's mass and centre of mass, so fix floating by
+  mass / `center_of_mass` / the mesh (the volume's warnings say how), never by
+  force multipliers. Changing the probe data or the bake means re-baking every
+  scene (`tools/bake_buoyancy_probes.gd`).
 - A non-uniformly scaled collision shape gives zero inverse inertia; set
   `inertia` explicitly (as `floating_box.tscn` does).
 - No `/** */` doc comments in `.gdshader`/`.gdshaderinc` (editor extracts them
@@ -75,19 +106,21 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
 - `projectile_launcher_system` and `floating_boat_template` are dev/demo, not
   open source: leave them be, and keep other addons independent of them.
 - Directions: degrees, 0 = +Z, 90 = +X. Only
-  `WaveCascadeParameters._world_wind_direction_to_spectrum_direction` converts
-  to the FFT's frame.
+  `WaveCascadeState._world_to_spectrum_direction` converts to the FFT's frame.
 
 ## Cross-system contracts (change both sides together)
 - **Wind source:** `get_wind_speed()` + `get_wind_direction_degrees()`, or
-  `wind_speed` / `wind_direction` properties.
-- **Sky source:** `get_sun_direction/sky_top_color/sky_horizon_color/
-  sky_ground_horizon_color/sky_ground_bottom_color/sun_visibility()` (or same-
-  name properties; missing values fall back to `manual_*`). With a
-  `lighting_changed` signal it is read only when that fires, so emit it after
-  every lighting change and before freeing textures it handed out. Optional:
-  - `get_cloud_cubemap()`: rgb premultiplied cloud radiance at the cloud, a
-    opacity, full mips; `null` = no clouds.
+  `wind_speed` / `wind_direction` properties. Read only through core's
+  `WindSource` (`OceanSystem`, `SkySystem`, the demo HUD and panel).
+- **Sky source** (documented for users in the ocean README):
+  `get_sun_direction()`, `get_sun_visibility()` (methods only; missing ones fall
+  back to `manual_*`; without an atmosphere the water reflects the
+  `manual_sky_*` gradient). With a `lighting_changed` signal it is read only
+  when that fires, so emit it after every lighting change and before freeing
+  textures it handed out. Optional:
+  - `get_cloud_cubemap()`: the clouds seen from the sea below the camera, rgb
+    premultiplied cloud radiance at the cloud, a opacity, full mips; `null` =
+    no clouds.
   - `get_star_cubemap()`, `get_star_basis()`, `get_star_radiance_scale()`: the
     water reflects them weighted by `1 − planar coverage` (the mirrored camera
     draws its own starfield), so stars never count twice.
@@ -131,19 +164,35 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   or levels crack. Only the drawing curves with the earth (`EARTH_RADIUS`);
   queries, buoyancy, hulls, reflections and the simulation stay flat. Keep
   camera far planes past the horizon (demo: 60 km). The editor shows
-  `editor_water_preview_mesh.tres`. Never save a generated mesh; don't rotate
-  or scale the ocean.
+  `editor_water_preview_mesh.tres`. Never save a generated mesh. The water is
+  drawn at `water_level` (the `water_level` uniform), whatever the node's
+  transform: one height for drawing, queries, hulls and reflections.
 - Shader code lives in `water.gdshaderinc`; `water.gdshader`,
   `water_medium.gdshader`, `water_low.gdshader` only set defines. All variants
-  keep identical uniforms (compile features out, not uniforms).
+  keep identical uniforms (compile features out, not uniforms). Water optics,
+  wave sampling, caustic focusing and the underwater light are in
+  `ocean_common.gdshaderinc`, shared with `underwater.gdshader` (the internal
+  full-screen view shown while the camera is below the waves, drawn one render
+  priority before the water); both declare its uniforms under the water's names and
+  OceanSystem sets every water parameter on both.
 - The ocean renders with a private duplicate of `water_material` via
   `instance_geometry_set_material_override`. Never set `material_override`;
   keep `mat_water.tres` free of runtime values.
 - Push constants (`RenderingContext.create_push_constant()`) are packed at the
   shader's exact size, 4 bytes per value, no padding: edit GLSL and packing
-  together. Same for `CloudRenderer`'s push constants and Params buffer.
+  together. Same for `CloudRenderer`'s push constants and Params buffer, and
+  `VolumetricCloudEffect`'s Frame buffer (`cloud_screen_common.glslinc`).
 - Storage images are `readonly`/`writeonly`; descriptor sets bind by array
   index, so order matches binding numbers.
+- One `WaveSpectrum` (`OceanSystem.spectrum`: wind, fetch, depth, shape,
+  `displacement_scale`, response) feeds every cascade; a `WaveCascade` holds
+  only its tile and foam. Each cascade's runtime state (seed, clock, band,
+  spectrum slots, frame times) is a `WaveCascadeState` owned by `OceanSystem`,
+  index-aligned with `cascades`. The cascades split the spectrum by wavelength
+  (`OceanSystem._update_spectrum_bands()`, run on tile, cascade-list and
+  map-size changes; `wavenumber_band` → `spectrum_compute.glsl`): a cascade
+  draws waves up to tile / 6, the next larger one the longer. Keep tiles
+  non-commensurate (default 250 / 37 / 9).
 - `simulation_map_size`: power of two, 128–1024 (`fft_compute.glsl` has one
   `#[versions]` entry per size). ≤ 8 cascades, each with active + pending
   spectrum slots crossfading every input change; only `tile_length`, cascade
@@ -160,14 +209,15 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   only from `water_absorption`, `water_scattering`,
   `water_scattering_anisotropy`: no artistic tints. `SPECULAR = 0` (engine
   specular doubles the sky). Reflections share one rough-surface Fresnel
-  (`rough_fresnel`), never plain Schlick. `normal_scale` 1 = physical slopes.
+  (`rough_fresnel`), never plain Schlick. `OceanSystem.normal_scale` 1 =
+  physical slopes (one value for every cascade and the interaction waves).
 - Transparency: water is in the transparent pass; light from behind goes into
   `EMISSION` (no `ALPHA`) via `underwater_transmittance()`, albedo scaled by
   `1 − transmittance` (same transmittance). Keep `depth_draw_always`,
   `cast_shadow` off and `mat_water.tres` `render_priority` below every other
   transparent material. Caustics only in the water (`caustic_light()`).
-- `displacement_scale` 1 = physical JONSWAP height (demo uses ~2). `whitecap`
-  thresholds include it; retune them together. Foam is coverage averaged by
+- `WaveSpectrum.displacement_scale` 1 = physical JONSWAP height (demo uses
+  2). `whitecap` thresholds include it; retune them together. Foam is coverage averaged by
   mips: no distance fades. `foam_detail.png` must stay uniformly distributed
   (regenerate with `generate_foam_detail.py`).
 - Surface queries are async: `submit_query` every tick, `get_query_result`
@@ -177,15 +227,20 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
 - Anything sampling wave displacement must match the vertex shader:
   per-cascade A/B frame blend (`OceanSystem._get_cascade_frame_blend()`),
   spectrum blend weights (`spectrum_blend_states.zw`, skip pending when
-  `.w == 0`). Cascade buffer = 48 bytes/cascade
-  (`OceanSurfaceQueries.BYTES_PER_CASCADE`, `ocean_sampling.glslinc`). Queries
-  read mip 0 and invert horizontal displacement.
+  `.w == 0`). Cascade buffer = 12 floats/cascade
+  (`OceanSurfaceQueries.FLOATS_PER_CASCADE`, `OceanSystem._update_cascade_uniforms()`,
+  `ocean_sampling.glslinc`). Queries read mip 0 and invert horizontal
+  displacement.
 - Includes aren't tracked by the importer: after editing an include, delete
   `.godot/imported/<name>-*` of every shader using it (touching is not
   enough). `ocean_sampling.glslinc` → `surface_query.glsl`,
   `iwave_pressure.glsl`; `iwave_common.glslinc` → every `iwave_*.glsl`;
-  `atmosphere_common.glslinc` → `atmosphere_*.glsl`, `aerial_perspective.glsl`;
-  `cloud_noise.glslinc` → `cloud_noise_bake.glsl`, `cloud_weather.glsl`.
+  `atmosphere_common.glslinc` → `atmosphere_*.glsl`, `aerial_perspective.glsl`,
+  `cloud_raymarch.glsl`, `cloud_trace.glsl`;
+  `cloud_noise.glslinc` → `cloud_noise_bake.glsl`, `cloud_weather.glsl`;
+  `cloud_common.glslinc` → `cloud_raymarch.glsl`, `cloud_trace.glsl`;
+  `cloud_screen_common.glslinc` → `cloud_trace.glsl`, `cloud_reconstruct.glsl`,
+  `cloud_composite.glsl` (which also includes `atmosphere_common.glslinc`).
 - Interaction sim (`WaterInteractionSim`, runtime only) simulates `η = h + p`.
   Render texture `(h, η, foam, hull coverage)`. Queries add `η · (1 −
   coverage)`, except for owners on a wave-making body, which read FFT waves
@@ -204,16 +259,29 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   window resizes.
 
 ## Sky invariants
-- `CloudRenderer` renders clouds as seen at the cloud into a cubemap's upper
-  half; sky shader, starfield and water composite it inside the atmosphere
-  (`atmosphere_sky_with_clouds()`). Change the encoding everywhere together.
-  Camera is assumed below the cloud base.
+- The clouds are a real volume the camera can fly through: one density field and
+  light model (`cloud_common.glslinc`, cloud altitudes above `sea_level`, any
+  observer altitude), marched three ways. Change the encoding (rgb premultiplied
+  radiance at the cloud, a opacity) everywhere together:
+  - `VolumetricCloudEffect` (in `sky_system.tscn`'s compositor, after the
+    transparent pass, no exported state): the camera's view, traced on a
+    half-size buffer (a quarter of it per frame), reprojected by cloud distance
+    and composited inside the atmosphere in front of each pixel's surface.
+    History and upsampling match pixels by scene distance (moving objects, MSAA
+    edges); the buffers live in the viewport's render buffers.
+  - `CloudRenderer.sea_cubemap`: seen from the sea below the camera (observer
+    clamped under the base): the water's reflection, the atmosphere's cloud
+    shadows and dome light, the mirrored camera's starfield.
+  - `CloudRenderer.camera_cubemap`: seen from the camera, all faces: the sky's
+    radiance map (`AT_CUBEMAP_PASS`) and the camera's light meter.
+  With the effect present the sky and starfield leave the camera's own view to
+  it (`screen_clouds`).
 - Sky/starfield cloud uniforms go only through
   `RenderingServer.material_set_param`, never `set_shader_parameter`.
 - The sky shader must not read `POSITION` or `TIME` (forces radiance re-renders);
   the `Sky` is INCREMENTAL and `SkySystem._refresh_sky_radiance()` refreshes it.
-- The weather map is written only by `cloud_weather.glsl`; the raymarcher is a
-  pure reader. Noise percentile constants in `cloud_noise_bake.glsl` must be
+- The weather map is written only by `cloud_weather.glsl`; the raymarchers are
+  pure readers. Its `a` channel warps the shape noise so its tiles do not line up. Noise percentile constants in `cloud_noise_bake.glsl` must be
   recomputed when the noise changes.
 - `CloudPreset` fields interpolate and are listed in `BLENDED_PROPERTIES`
   (`haze_visibility` also in `GEOMETRIC_BLENDED_PROPERTIES`).
@@ -223,6 +291,15 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   writes `POSITION` on the far plane; take `abs()` of the projection's `[1][1]`.
   `bright_star_catalog.tres` and `milky_way.exr` are generated by `tools/`; the
   Milky Way holds only stars fainter than V = 8, keep the catalog within that.
+- Sky colour is spectral: 16 wavelengths turned into linear sRGB by the CIE
+  observer (`ATMOSPHERE_SPECTRUM_TO_RGB`). The transmittance LUT stores optical depths
+  at 550 nm (air, transport haze, ozone), read through
+  `atmosphere_light_optical_depth()` / `atmosphere_light_transmittance()`; the
+  tables are copied in `SkySystem` (change both). View-volume lookups stay on their
+  own side of the horizon (`atmosphere_view_v()` and its copies).
+- The sun and moon disks get their light above the atmosphere; the view volume
+  dims them (never pre-dim them). Disks are drawn from their true positions
+  through unrefracted, per-colour view rays (green flash).
 - The atmosphere model lives only in `AtmosphereRenderer`'s compute passes;
   consumers only sample. The one CPU copy is
   `SkySystem._get_atmosphere_transmittance()` (same constants). Don't add sky

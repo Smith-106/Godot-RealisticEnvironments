@@ -13,8 +13,17 @@
  *   ozone: ATMOSPHERE_OZONE_ABSORPTION times a tent profile peaking at 25 km and
  *     ending at 10 and 40 km, absorbing only;
  *   haze (aerosols and droplets, CloudPreset haze_*): haze_density *
- *     exp(-altitude / haze_scale_height), grey, scattering albedo 1.
- * Values from Bruneton 2017 and Hillaire 2020 (at 680, 550 and 440 nm for r, g, b).
+ *     exp(-altitude / haze_scale_height) at 550 nm, coloured and slightly absorbing by
+ *     its particles' size (atmosphere_haze_optics()).
+ * Values from Bruneton 2017 and Hillaire 2020. Colour is spectral: the media are
+ * known at ATMOSPHERE_SPECTRAL_SAMPLES wavelengths (400-700 nm), and light travelling
+ * along long paths (the transmittance LUT's optical depths, the key light's single
+ * scattering in the view volumes) is integrated per wavelength, then turned into linear
+ * sRGB with the CIE 1931 observer (ATMOSPHERE_SPECTRUM_TO_RGB: a flat spectrum, the
+ * sun's white light above the air, gives white). Three single wavelengths would let the
+ * red channel's long-wavelength end through a sunset far too easily. The rest (higher
+ * orders, the secondary light) uses the band averages (ATMOSPHERE_RAYLEIGH_SCATTERING,
+ * ...).
  * The sea below reflects diffusely with ATMOSPHERE_SEA_ALBEDO, for the light the
  * atmosphere gets back from it.
  * Light: single scattering of the key light (the air with the Rayleigh phase, the haze
@@ -36,11 +45,46 @@
 #define ATMOSPHERE_EARTH_RADIUS 6371000.0
 // Share of the haze's scattering in its forward (Henyey-Greenstein) lobe; the rest is isotropic.
 #define ATMOSPHERE_HAZE_FORWARD_SHARE 0.75
-// Air molecules at sea level (1/m) and their scale height (m).
-#define ATMOSPHERE_RAYLEIGH_SCATTERING vec3(5.802e-6, 13.558e-6, 33.1e-6)
+// Air molecules at sea level (1/m) at 550 nm (lambda^-4 elsewhere) and their scale height (m).
+#define ATMOSPHERE_RAYLEIGH_SCATTERING_550 13.558e-6
 #define ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT 8000.0
-// Ozone at its peak (1/m), and its layer: a tent around the centre altitude (m).
-#define ATMOSPHERE_OZONE_ABSORPTION vec3(0.650e-6, 1.881e-6, 0.085e-6)
+// Ozone at its peak (1/m) at 550 nm (Chappuis band elsewhere), and its layer: a tent
+// around the centre altitude (m).
+#define ATMOSPHERE_OZONE_ABSORPTION_550 1.881e-6
+// The same as linear sRGB band averages (ATMOSPHERE_SPECTRUM_TO_RGB of the spectra), for
+// the light that is not integrated per wavelength.
+#define ATMOSPHERE_RAYLEIGH_SCATTERING vec3(7.322e-6, 13.76e-6, 32.67e-6)
+#define ATMOSPHERE_OZONE_ABSORPTION vec3(2.873e-6, 1.880e-6, 0.0)
+
+/*
+ * The spectral samples: 400 to 700 nm in steps of 20 nm. Per sample: its wavelength over
+ * 550 nm; the air's scattering and the ozone's absorption over their 550 nm values
+ * ((550 / lambda)^4; Chappuis band cross sections, Serdyuchenko et al. 2014); and its
+ * weight in linear sRGB (CIE 1931 2-degree colour matching functions through the XYZ to
+ * sRGB matrix, each channel's weights summing to 1). SkySystem keeps a GDScript copy.
+ */
+#define ATMOSPHERE_SPECTRAL_SAMPLES 16
+const float ATMOSPHERE_WAVELENGTH_RATIO[ATMOSPHERE_SPECTRAL_SAMPLES] = float[ATMOSPHERE_SPECTRAL_SAMPLES](0.72727, 0.76364, 0.80000, 0.83636, 0.87273, 0.90909, 0.94545, 0.98182, 1.01818, 1.05455, 1.09091, 1.12727, 1.16364, 1.20000, 1.23636, 1.27273);
+const float ATMOSPHERE_RAYLEIGH_SPECTRUM[ATMOSPHERE_SPECTRAL_SAMPLES] = float[ATMOSPHERE_SPECTRAL_SAMPLES](3.57446, 2.94072, 2.44141, 2.04371, 1.72380, 1.46410, 1.25152, 1.07616, 0.93046, 0.80861, 0.70607, 0.61928, 0.54542, 0.48225, 0.42797, 0.38112);
+const float ATMOSPHERE_OZONE_SPECTRUM[ATMOSPHERE_SPECTRAL_SAMPLES] = float[ATMOSPHERE_SPECTRAL_SAMPLES](0.00310, 0.01240, 0.04651, 0.13953, 0.29457, 0.48062, 0.74419, 0.93023, 1.06977, 1.44186, 1.59690, 1.42636, 1.00775, 0.69767, 0.35349, 0.26357);
+const vec3 ATMOSPHERE_SPECTRUM_TO_RGB[ATMOSPHERE_SPECTRAL_SAMPLES] = vec3[ATMOSPHERE_SPECTRAL_SAMPLES](
+	vec3(0.00186, -0.00203, 0.01500),
+	vec3(0.01670, -0.01889, 0.14268),
+	vec3(0.03454, -0.04368, 0.38541),
+	vec3(0.00278, -0.01968, 0.36614),
+	vec3(-0.04805, 0.03975, 0.17315),
+	vec3(-0.09579, 0.12062, 0.04594),
+	vec3(-0.14384, 0.25087, -0.01213),
+	vec3(-0.08324, 0.29720, -0.03250),
+	vec3(0.06141, 0.25418, -0.03432),
+	vec3(0.25355, 0.14657, -0.02582),
+	vec3(0.38422, 0.03043, -0.01423),
+	vec3(0.33935, -0.02229, -0.00620),
+	vec3(0.18380, -0.02082, -0.00222),
+	vec3(0.06849, -0.00893, -0.00067),
+	vec3(0.01950, -0.00264, -0.00018),
+	vec3(0.00474, -0.00065, -0.00004));
+
 #define ATMOSPHERE_OZONE_CENTER 25000.0
 #define ATMOSPHERE_OZONE_HALF_WIDTH 15000.0
 /*
@@ -126,6 +170,40 @@ float atmosphere_ozone_integral(float h) {
 	return u <= 0.0 ? (u + w) * (u + w) / (2.0 * w) : 0.5 * w + u - u * u / (2.0 * w);
 }
 
+/*
+ * The haze's optics for an Angstrom exponent a (CloudPreset.haze_wavelength_exponent):
+ * rgb its extinction per channel over its value at 550 nm, lambda^-a at 680, 550 and
+ * 440 nm (fine aerosol, a about 1, dims blue more and its glow is bluish; coarse sea salt
+ * and fog droplets, a near 0, are grey); w its single-scattering albedo, 1 - 0.075 a:
+ * fine aerosol absorbs a few percent of what it intercepts, droplets almost nothing.
+ */
+vec4 atmosphere_haze_optics(float exponent) {
+	vec3 band = vec3(0.0);
+	for (int i = 0; i < ATMOSPHERE_SPECTRAL_SAMPLES; ++i) {
+		band += ATMOSPHERE_SPECTRUM_TO_RGB[i] * pow(ATMOSPHERE_WAVELENGTH_RATIO[i], -exponent);
+	}
+	return vec4(band, clamp(1.0 - 0.075 * exponent, 0.0, 1.0));
+}
+
+/* The haze's extinction per spectral sample over its value at 550 nm (lambda^-exponent). */
+void atmosphere_haze_spectrum(float exponent, out float spectrum[ATMOSPHERE_SPECTRAL_SAMPLES]) {
+	for (int i = 0; i < ATMOSPHERE_SPECTRAL_SAMPLES; ++i) {
+		spectrum[i] = pow(ATMOSPHERE_WAVELENGTH_RATIO[i], -exponent);
+	}
+}
+
+/*
+ * Linear sRGB of white light after optical depths at 550 nm of depth (r air, g haze,
+ * b ozone; haze_spectrum: atmosphere_haze_spectrum()), integrated over the spectrum.
+ */
+vec3 atmosphere_band_transmittance(vec3 depth, float haze_spectrum[ATMOSPHERE_SPECTRAL_SAMPLES]) {
+	vec3 band = vec3(0.0);
+	for (int i = 0; i < ATMOSPHERE_SPECTRAL_SAMPLES; ++i) {
+		band += ATMOSPHERE_SPECTRUM_TO_RGB[i] * exp(-(depth.r * ATMOSPHERE_RAYLEIGH_SPECTRUM[i] + depth.g * haze_spectrum[i] + depth.b * ATMOSPHERE_OZONE_SPECTRUM[i]));
+	}
+	return max(band, vec3(0.0));
+}
+
 /* Mean of the ozone's profile along a segment whose altitude goes linearly from h_a to h_b. */
 float atmosphere_ozone_mean(float h_a, float h_b) {
 	float dh = h_b - h_a;
@@ -138,28 +216,34 @@ float atmosphere_ozone_mean(float h_a, float h_b) {
 
 /*
  * The media along a segment whose altitude goes linearly from h_a to h_b, as mean
- * coefficients (1/m): the air's scattering, the haze's scattering (grey) and the
- * extinction of everything (ozone only absorbs).
+ * coefficients (1/m): the air's scattering, the haze's scattering and the extinction of
+ * everything (ozone only absorbs). haze_optics: atmosphere_haze_optics(). transport: the
+ * share of the haze's scattering light transport sees (atmosphere_haze_transport_share();
+ * 1 for all of it): its forward peak leaves the scattering and the extinction, its
+ * absorption stays.
  */
-void atmosphere_segment_media(float h_a, float h_b, float haze_density, float haze_scale_height,
-		out vec3 rayleigh, out float haze, out vec3 extinction) {
+void atmosphere_segment_media(float h_a, float h_b, float haze_density, float haze_scale_height, vec4 haze_optics, float transport,
+		out vec3 rayleigh, out vec3 haze, out vec3 extinction) {
 	rayleigh = ATMOSPHERE_RAYLEIGH_SCATTERING * atmosphere_exponential_mean(h_a, h_b, ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT);
-	haze = haze_density * atmosphere_exponential_mean(h_a, h_b, haze_scale_height);
-	extinction = rayleigh + haze + ATMOSPHERE_OZONE_ABSORPTION * atmosphere_ozone_mean(h_a, h_b);
+	vec3 haze_extinction = haze_density * atmosphere_exponential_mean(h_a, h_b, haze_scale_height) * haze_optics.rgb;
+	vec3 haze_scattering = haze_extinction * haze_optics.a;
+	haze = haze_scattering * transport;
+	extinction = rayleigh + haze_extinction - haze_scattering * (1.0 - transport) + ATMOSPHERE_OZONE_ABSORPTION * atmosphere_ozone_mean(h_a, h_b);
 }
 
-/* Mean extinction (1/m) of every medium along such a segment. */
-vec3 atmosphere_mean_extinction(float h_a, float h_b, float haze_density, float haze_scale_height) {
+/* Mean extinction (1/m) of every medium along such a segment (as atmosphere_segment_media()). */
+vec3 atmosphere_mean_extinction(float h_a, float h_b, float haze_density, float haze_scale_height, vec4 haze_optics, float transport) {
 	vec3 rayleigh;
-	float haze;
+	vec3 haze;
 	vec3 extinction;
-	atmosphere_segment_media(h_a, h_b, haze_density, haze_scale_height, rayleigh, haze, extinction);
+	atmosphere_segment_media(h_a, h_b, haze_density, haze_scale_height, haze_optics, transport, rayleigh, haze, extinction);
 	return extinction;
 }
 
 /*
- * Transmittance LUT (atmosphere_transmittance.glsl): transmittance from altitude h to
- * space along mu, for rays that do not hit the sea. Bruneton's parameterisation: x is
+ * Transmittance LUT (atmosphere_transmittance.glsl): optical depths at 550 nm from
+ * altitude h to space along mu (r air, g haze as light transport sees it, b ozone), for
+ * rays that do not hit the sea; atmosphere_light_transmittance() turns them into colour. Bruneton's parameterisation: x is
  * the distance to the top between its minimum and maximum, y the distance to the
  * horizon; both concentrate texels near the horizon.
  */
@@ -209,6 +293,16 @@ float atmosphere_view_y(float h, float mu) {
 	return 0.5 + 0.5 * sqrt(clamp((zenith - zenith_horizon) / max(beta, 1e-6), 0.0, 1.0));
 }
 
+/*
+ * A view angle coordinate (atmosphere_view_y()) on the texel centres of `rows` rows, kept
+ * on its own side of the horizon: the horizon falls on a texel edge, and filtering across
+ * it would blend the sky with the sea for directions within half a texel of it (about
+ * 0.3', where a setting sun stands).
+ */
+float atmosphere_view_v(float y, float rows) {
+	return y < 0.5 ? clamp(y, 0.5 / rows, 0.5 - 0.5 / rows) : clamp(y, 0.5 + 0.5 / rows, 1.0 - 0.5 / rows);
+}
+
 float atmosphere_view_mu(float h, float y) {
 	float horizon_mu = atmosphere_horizon_mu(h);
 	float beta = acos(clamp(-horizon_mu, -1.0, 1.0));
@@ -251,21 +345,35 @@ float atmosphere_slice_distance(int k, int slice_count, float max_distance) {
  */
 vec3 atmosphere_view_uvw(vec3 direction, float distance, vec3 light_direction, float observer_altitude, float max_distance, vec3 size) {
 	float x = atmosphere_unit_to_uv(atmosphere_view_x(direction, light_direction), size.x);
-	float y = clamp(atmosphere_view_y(observer_altitude, direction.y), 0.5 / size.y, 1.0 - 0.5 / size.y);
+	float y = atmosphere_view_v(atmosphere_view_y(observer_altitude, direction.y), size.y);
 	float slice = distance < 0.0 ? size.z - 1.0 : sqrt(clamp(distance / max_distance, 0.0, 1.0)) * (size.z - 2.0);
 	return vec3(x, y, (slice + 0.5) / size.z);
 }
 
+// Optical depth standing for "the planet is in the way": nothing gets through.
+#define ATMOSPHERE_OPAQUE_DEPTH 1.0e4
+
 /*
- * Transmittance from space to altitude h along mu, from the transmittance LUT; 0 where
- * the planet is in the way.
+ * Optical depths at 550 nm (r air, g haze, b ozone) from space down to altitude h along
+ * mu, from the transmittance LUT; ATMOSPHERE_OPAQUE_DEPTH where the planet is in the way.
  */
-vec3 atmosphere_light_transmittance(sampler2D transmittance_lut, float h, float mu, float top) {
+vec3 atmosphere_light_optical_depth(sampler2D transmittance_lut, float h, float mu, float top) {
 	if (mu < atmosphere_horizon_mu(h)) {
-		return vec3(0.0);
+		return vec3(ATMOSPHERE_OPAQUE_DEPTH);
 	}
 	vec2 size = vec2(textureSize(transmittance_lut, 0));
 	return textureLod(transmittance_lut, atmosphere_transmittance_uv(h, mu, top, size), 0.0).rgb;
+}
+
+/*
+ * Linear sRGB of the white light from space reaching altitude h along mu (spectral,
+ * atmosphere_band_transmittance()); 0 where the planet is in the way.
+ */
+vec3 atmosphere_light_transmittance(sampler2D transmittance_lut, float h, float mu, float top, float haze_spectrum[ATMOSPHERE_SPECTRAL_SAMPLES]) {
+	if (mu < atmosphere_horizon_mu(h)) {
+		return vec3(0.0);
+	}
+	return atmosphere_band_transmittance(atmosphere_light_optical_depth(transmittance_lut, h, mu, top), haze_spectrum);
 }
 
 /*

@@ -1,7 +1,7 @@
 #[compute]
 #version 450
 /**
- * Builds one mip level of the cloud cubemap with a 2x2 box filter of the level
+ * Builds one mip level of a cloud cubemap with a 2x2 box filter of the level
  * above, per face (no filtering across face edges). Premultiplied radiance and
  * opacity average linearly, so every level composites like the top one.
  * Consumers read coarser levels for blurred cloud reflections.
@@ -16,16 +16,17 @@ layout(rgba16f, set = 0, binding = 1) uniform restrict writeonly imageCube targe
 layout(push_constant, std430) restrict readonly uniform PushConstants {
 	int source_size;
 	int target_size;
+	int face_mode; // as cloud_raymarch.glsl: 0 every face but -Y (it stays cleared), 1 every face
 } pc;
 
-const int RENDERED_FACES[5] = int[](0, 1, 2, 4, 5); // -Y stays cleared, as at the top level
+const int SEA_FACES[5] = int[](0, 1, 2, 4, 5);
 
 void main() {
 	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(texel, ivec2(pc.target_size)))) {
 		return;
 	}
-	int face = RENDERED_FACES[gl_GlobalInvocationID.z];
+	int face = pc.face_mode == 0 ? SEA_FACES[gl_GlobalInvocationID.z] : int(gl_GlobalInvocationID.z);
 	// Clamped: a level with an odd size drops its last row and column.
 	ivec2 last = ivec2(pc.source_size - 1);
 	ivec2 source_texel = texel * 2;

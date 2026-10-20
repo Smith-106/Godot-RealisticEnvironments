@@ -12,7 +12,9 @@ extends RefCounted
 ## and the ray's end), one for an observer on the sea (sea_*, at the cloud layer and
 ## at the ray's end: the sky the water reflects) and one at the cloud layer (ray ends
 ## only); and from the last and the first, the sky light at the cloud layer
-## (sky_ambient_buffer) and at the camera (camera_sky_light_buffer).
+## (sky_ambient_buffer) and at the camera (camera_sky_light_buffer). The clouds seen
+## from the sea shade the air below them; those seen from the camera cover its sky in
+## the light meter.
 
 const TRANSMITTANCE_SHADER := preload("res://addons/sky_system/shaders/compute/atmosphere_transmittance.glsl")
 const MULTIPLE_SCATTERING_SHADER := preload("res://addons/sky_system/shaders/compute/atmosphere_multiple_scattering.glsl")
@@ -34,8 +36,8 @@ const MAX_DISTANCE := 100000.0
 const AIR_TOP_ALTITUDE := 100000.0
 ## The atmosphere reaches at least this many haze scale heights up.
 const HAZE_TOP_SCALE_HEIGHTS := 12.0
-## Bytes of a sky light buffer: three vec4s (atmosphere_ambient.glsl).
-const SKY_LIGHT_SIZE := 48
+## Bytes of a sky light buffer: four vec4s (atmosphere_ambient.glsl).
+const SKY_LIGHT_SIZE := 64
 
 ## Camera view volume (sampled by the sky, starfield, aerial perspective and transparent
 ## materials): rgb transmittance, rgb in-scatter but the lobe, rgb lobe in-scatter per
@@ -52,15 +54,20 @@ var sea_inscatter_lobe := Texture3DRD.new()
 ## below, irradiance on a level surface), written on the GPU:
 ## at the cloud layer (cloud_ambient_altitude), clear sky: the clouds' ambient light;
 var sky_ambient_buffer : RID
-## at the camera, through the clouds: the sky's share of the scene's light meter (read
-## back by SkySystem).
+## at the camera, through the clouds around it (above or below): the sky's share of the
+## scene's light meter, and the share of the key and secondary lights the clouds let
+## through to the camera and to the sea below it (read back by SkySystem).
 var camera_sky_light_buffer : RID
+## The transmittance LUT (atmosphere_common.glslinc): the clouds light themselves with it.
+var transmittance_lut : RID
 
 ## Haze (CloudPreset haze_*): extinction at sea level (1/m), scale height (m) and its
 ## forward lobe's Henyey-Greenstein g.
 var haze_density := 0.0
 var haze_scale_height := 1000.0
 var haze_anisotropy := 0.97
+## Its Angstrom exponent (atmosphere_haze_optics()): its colour and absorption.
+var haze_wavelength_exponent := 0.4
 ## Toward the key light (sun or moon).
 var light_direction := Vector3.UP
 ## The key light above the atmosphere: pi * energy, white.
@@ -105,7 +112,11 @@ func _init(device : RenderingDevice) -> void:
 	_context = RenderingContext.new(device)
 	_linear_clamp = _context.create_sampler(RenderingContext.linear_sampler_state(RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE, true))
 	var storage_usage := RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_STORAGE_BIT
-	_transmittance_rid = _create_texture(RenderingDevice.TEXTURE_TYPE_2D, Vector3i(TRANSMITTANCE_SIZE.x, TRANSMITTANCE_SIZE.y, 1), storage_usage)
+	_transmittance_rid = _create_texture(RenderingDevice.TEXTURE_TYPE_2D, Vector3i(TRANSMITTANCE_SIZE.x, TRANSMITTANCE_SIZE.y, 1), storage_usage | RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT)
+	transmittance_lut = _transmittance_rid
+	# The clouds render before the atmosphere each frame, so on the first one they read the
+	# LUT before it is built: clear air until then, never undefined memory in their history.
+	device.texture_clear(_transmittance_rid, Color(1.0, 1.0, 1.0, 1.0), 0, 1, 0, 1)
 	_multiple_scattering_rid = _create_texture(RenderingDevice.TEXTURE_TYPE_2D, Vector3i(MULTIPLE_SCATTERING_SIZE.x, MULTIPLE_SCATTERING_SIZE.y, 1), storage_usage)
 	for i in 3:
 		_view_rids.push_back(_create_texture(RenderingDevice.TEXTURE_TYPE_3D, VIEW_SIZE, storage_usage))
@@ -168,12 +179,13 @@ func get_observer_altitude(camera_altitude : float) -> float:
 
 
 ## Records this frame's passes for a camera at camera_altitude (m above the sea).
-## cloud_cubemap: the clouds' RenderingDevice cubemap, or an empty RID. exposure: the
-## camera's exposure, which every result but the transmittance is stored at
-## (pre-exposed: the light is scaled by it).
-func render(camera_altitude : float, cloud_cubemap : RID, exposure : float) -> void:
+## sea_clouds, camera_clouds: the clouds seen from the sea below the camera (they
+## shade the air below them) and from the camera (its light meter), as RenderingDevice
+## cubemaps, or empty RIDs. exposure: the camera's exposure, which every result but the
+## transmittance is stored at (pre-exposed: the light is scaled by it).
+func render(camera_altitude : float, sea_clouds : RID, camera_clouds : RID, exposure : float) -> void:
 	var top := get_top_altitude()
-	var media_push := RenderingContext.create_float_push_constant([haze_density, haze_scale_height, top, haze_anisotropy])
+	var media_push := RenderingContext.create_float_push_constant([haze_density, haze_scale_height, top, haze_anisotropy, haze_wavelength_exponent])
 	var compute_list := _device.compute_list_begin()
 	_device.compute_list_bind_compute_pipeline(compute_list, _transmittance_pipeline)
 	_device.compute_list_bind_uniform_set(compute_list, _transmittance_set, 0)
@@ -188,7 +200,8 @@ func render(camera_altitude : float, cloud_cubemap : RID, exposure : float) -> v
 	_device.compute_list_dispatch(compute_list, MULTIPLE_SCATTERING_SIZE.x, MULTIPLE_SCATTERING_SIZE.y, 1)
 	_device.compute_list_add_barrier(compute_list)
 
-	var clouds := cloud_cubemap if cloud_cubemap.is_valid() else _no_cloud_cubemap
+	var clouds := sea_clouds if sea_clouds.is_valid() else _no_cloud_cubemap
+	var camera_view_clouds := camera_clouds if camera_clouds.is_valid() else _no_cloud_cubemap
 	var ambient_altitude := clampf(cloud_ambient_altitude, 0.0, top * 0.999)
 	for volume in [[get_observer_altitude(camera_altitude), _view_rids, VIEW_SIZE.z], [0.0, _sea_rids, 2], [ambient_altitude, _cloud_layer_rids, 1]]:
 		_device.compute_list_bind_compute_pipeline(compute_list, _view_pipeline)
@@ -209,22 +222,25 @@ func render(camera_altitude : float, cloud_cubemap : RID, exposure : float) -> v
 			cloud_altitude, cloud_top_altitude, haze_anisotropy, airglow_radiance.r * exposure,
 			secondary_direction.x, secondary_direction.y, secondary_direction.z, airglow_radiance.g * exposure,
 			secondary_color.r * exposure, secondary_color.g * exposure, secondary_color.b * exposure, airglow_radiance.b * exposure,
+			haze_wavelength_exponent,
 		])
 		_device.compute_list_set_push_constant(compute_list, view_push, view_push.size())
 		_device.compute_list_dispatch(compute_list, ceili(VIEW_SIZE.x / 8.0), ceili(VIEW_SIZE.y / 8.0), 1)
 	_device.compute_list_add_barrier(compute_list)
 
-	for light in [[ambient_altitude, _cloud_layer_rids, sky_ambient_buffer, 0.0], [get_observer_altitude(camera_altitude), _view_rids, camera_sky_light_buffer, 1.0]]:
+	for light in [[ambient_altitude, _cloud_layer_rids, sky_ambient_buffer, 0.0, _no_cloud_cubemap, _no_cloud_cubemap], [get_observer_altitude(camera_altitude), _view_rids, camera_sky_light_buffer, 1.0, camera_view_clouds, clouds]]:
 		_device.compute_list_bind_compute_pipeline(compute_list, _ambient_pipeline)
 		var volumes : Array[RID] = light[1]
 		var ambient_set := UniformSetCacheRD.get_cache(_ambient_shader, 0, [
 			_sampled_uniform(0, volumes[1]),
 			_sampled_uniform(1, volumes[2]),
 			RenderingContext.buffer_uniform(2, light[2]),
-			_sampled_uniform(3, clouds),
+			_sampled_uniform(3, light[4]),
+			_sampled_uniform(4, light[5]),
 		])
 		_device.compute_list_bind_uniform_set(compute_list, ambient_set, 0)
-		var ambient_push := RenderingContext.create_float_push_constant([light[0], light[3], 0.0, 0.0, light_direction.x, light_direction.y, light_direction.z, 0.0])
+		var ambient_push := RenderingContext.create_float_push_constant([light[0], light[3], 0.0, 0.0, light_direction.x, light_direction.y, light_direction.z, 0.0,
+				secondary_direction.x, secondary_direction.y, secondary_direction.z, 0.0])
 		_device.compute_list_set_push_constant(compute_list, ambient_push, ambient_push.size())
 		_device.compute_list_dispatch(compute_list, 1, 1, 1)
 	_device.compute_list_end()

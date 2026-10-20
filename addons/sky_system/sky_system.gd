@@ -4,7 +4,7 @@ extends Node3D
 ## Day/night sky for an open sea: places the sun and moon for latitude, date and time
 ## and drives their DirectionalLight3Ds, renders a physical atmosphere (blue sky,
 ## twilight, sea haze and fog, distance haze on the scene), volumetric clouds with
-## weather presets, the stars, the Milky Way, airglow and planets, and meters the
+## weather presets (the camera can fly into and above them), the stars, the Milky Way, airglow and planets, and meters the
 ## scene's light for an exposure controller. Instance sky_system.tscn; see
 ## addons/sky_system/README.md.
 ##
@@ -107,13 +107,21 @@ const SATURN_RING_POLE := Vector3(0.08537, 0.07311, 0.99366)
 const LUMINANCE_WEIGHTS := Vector3(0.2126, 0.7152, 0.0722)
 ## Angular radii (rad) of the sun's and the moon's disks, as the sky material's
 ## sun_disk_size and moon_disk_size.
+## Illuminance the full earth gives the moon over the sun's (about 13 lux against
+## 128 000): the earthshine on its night side, as a share of the full moon's radiance.
+const EARTHSHINE_FULL_EARTH := 1.0e-4
 const SUN_ANGULAR_RADIUS := 0.00465
 const MOON_ANGULAR_RADIUS := 0.00465
 ## As shaders/compute/atmosphere_common.glslinc.
 const ATMOSPHERE_EARTH_RADIUS := 6371000.0
-const ATMOSPHERE_RAYLEIGH_SCATTERING := Vector3(5.802e-6, 13.558e-6, 33.1e-6)
+## As atmosphere_common.glslinc: the media at 550 nm and the spectral samples.
+const ATMOSPHERE_RAYLEIGH_SCATTERING_550 := 13.558e-6
+const ATMOSPHERE_OZONE_ABSORPTION_550 := 1.881e-6
+const ATMOSPHERE_WAVELENGTH_RATIO := [0.72727, 0.76364, 0.80000, 0.83636, 0.87273, 0.90909, 0.94545, 0.98182, 1.01818, 1.05455, 1.09091, 1.12727, 1.16364, 1.20000, 1.23636, 1.27273]
+const ATMOSPHERE_RAYLEIGH_SPECTRUM := [3.57446, 2.94072, 2.44141, 2.04371, 1.72380, 1.46410, 1.25152, 1.07616, 0.93046, 0.80861, 0.70607, 0.61928, 0.54542, 0.48225, 0.42797, 0.38112]
+const ATMOSPHERE_OZONE_SPECTRUM := [0.00310, 0.01240, 0.04651, 0.13953, 0.29457, 0.48062, 0.74419, 0.93023, 1.06977, 1.44186, 1.59690, 1.42636, 1.00775, 0.69767, 0.35349, 0.26357]
+const ATMOSPHERE_SPECTRUM_TO_RGB := [Vector3(0.00186, -0.00203, 0.01500), Vector3(0.01670, -0.01889, 0.14268), Vector3(0.03454, -0.04368, 0.38541), Vector3(0.00278, -0.01968, 0.36614), Vector3(-0.04805, 0.03975, 0.17315), Vector3(-0.09579, 0.12062, 0.04594), Vector3(-0.14384, 0.25087, -0.01213), Vector3(-0.08324, 0.29720, -0.03250), Vector3(0.06141, 0.25418, -0.03432), Vector3(0.25355, 0.14657, -0.02582), Vector3(0.38422, 0.03043, -0.01423), Vector3(0.33935, -0.02229, -0.00620), Vector3(0.18380, -0.02082, -0.00222), Vector3(0.06849, -0.00893, -0.00067), Vector3(0.01950, -0.00264, -0.00018), Vector3(0.00474, -0.00065, -0.00004)]
 const ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT := 8000.0
-const ATMOSPHERE_OZONE_ABSORPTION := Vector3(0.650e-6, 1.881e-6, 0.085e-6)
 const ATMOSPHERE_OZONE_CENTER := 25000.0
 const ATMOSPHERE_OZONE_HALF_WIDTH := 15000.0
 ## As TRANSMITTANCE_STEPS in shaders/compute/atmosphere_transmittance.glsl.
@@ -124,7 +132,21 @@ const RADIANCE_ALTITUDE_TOLERANCE := 0.1
 ## A light whose irradiance is below this share of the other's is hidden (the moon by
 ## day, the sun deep in twilight): it would cost a shadowed light for nothing.
 const NEGLIGIBLE_LIGHT_SHARE := 0.001
+## Seconds the scene's lights take to follow a change in the clouds over the sun or the
+## moon (to 1/e): the measurement arrives in steps as the cloud cubemaps refresh.
+const CLOUD_LIGHT_RESPONSE_SECONDS := 0.3
+## Relative change in the clouds' share of a light that updates the scene's lights
+## (shares under 0.01 count as 0.01, so a covered light still settles).
+const CLOUD_LIGHT_UPDATE_THRESHOLD := 0.01
 
+## World height of the sea surface: keep it equal to OceanSystem.water_level
+## (OceanEnvironment.sea_level sets both). The sea's horizon lies below eye level by
+## sqrt(2 h / R) for a camera h meters above it (earth radius R), and the sky
+## shows down to there. The atmosphere's haze (CloudPreset haze_*) is densest here.
+@export var sea_level := 0.0 :
+	set(value):
+		sea_level = value
+		_update_sky()
 ## Normalized day time. 0 is midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset.
 @export_range(0.0, 1.0, 0.001) var time_of_day := 0.35 :
 	set(value):
@@ -134,10 +156,11 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 ## Advances time_of_day automatically during gameplay.
 @export var cycle_enabled := true
 ## Real seconds required for one full in-game day.
-@export_range(1.0, 86400.0, 1.0, "or_greater") var cycle_duration_seconds := 600.0
+@export_range(1.0, 86400.0, 1.0, "or_greater", "suffix:s") var cycle_duration_seconds := 600.0
+
 @export_group("Astronomy")
 ## Observer latitude in degrees. This controls sun/moon altitude and seasonality.
-@export_range(-89.0, 89.0, 0.1) var latitude_degrees := 35.0 :
+@export_range(-89.0, 89.0, 0.1, "degrees") var latitude_degrees := 35.0 :
 	set(value):
 		latitude_degrees = value
 		_update_sky()
@@ -158,17 +181,19 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 		year = value
 		_update_sky()
 ## Rotates celestial north around world up, useful when a level's north is not -Z.
-@export_range(-180.0, 180.0, 0.1) var north_offset_degrees := 0.0 :
+@export_range(-180.0, 180.0, 0.1, "degrees") var north_offset_degrees := 0.0 :
 	set(value):
 		north_offset_degrees = value
 		_update_sky()
 ## Planetary axis tilt in degrees. Earth-like default is 23.44.
-@export_range(0.0, 45.0, 0.01) var axis_tilt_degrees := 23.44 :
+@export_range(0.0, 45.0, 0.01, "degrees") var axis_tilt_degrees := 23.44 :
 	set(value):
 		axis_tilt_degrees = value
 		_update_sky()
 ## When cycle_enabled is true, also advances day_of_year and lunar_age_days.
 @export var advance_calendar_with_cycle := true
+
+@export_group("Lights")
 ## Multiplies the sun's light energy above the atmosphere (SOLAR_ENERGY).
 @export_range(0.0, 8.0, 0.01) var sun_energy_multiplier := 1.0 :
 	set(value):
@@ -179,6 +204,20 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 	set(value):
 		moon_energy_multiplier = value
 		_update_sky()
+## Strength of the sun's and the moon's disks in the sky's radiance map (the ambient
+## light and reflections it gives): at their real radiance they would sparkle in every
+## glossy surface. The sky itself shows them at full radiance.
+@export_range(0.0, 3.0, 0.01) var radiance_sun_disk_strength := 0.16 :
+	set(value):
+		radiance_sun_disk_strength = value
+		_update_sky()
+## Strength of their halos in the radiance map.
+@export_range(0.0, 1.0, 0.01) var radiance_sun_halo_strength := 0.18 :
+	set(value):
+		radiance_sun_halo_strength = value
+		_update_sky()
+
+@export_group("Night Sky")
 ## Multiplies the stars' light. 1 is physical: the exposure decides which stars show
 ## (none by day, the brightest first at dusk, fewer under a bright moon).
 @export_range(0.0, 8.0, 0.01, "or_greater") var star_brightness := 1.0 :
@@ -206,39 +245,9 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 		if is_node_ready():
 			_setup_starfield()
 
-@export_group("Visuals")
-## World height of the sea surface. The sea's horizon lies below eye level by
-## sqrt(2 h / R) for a camera h meters above it (earth radius R), and the sky
-## shows down to there. The atmosphere's haze (CloudPreset haze_*) is densest here.
-@export var sea_level := 0.0 :
-	set(value):
-		sea_level = value
-		_update_sky()
-## Keeps the optional sun and moon meshes centered around the active camera.
-@export var follow_active_camera := true
-## Renders sun/moon disks directly in the sky shader instead of using mesh billboards.
-@export var render_bodies_in_sky := true :
-	set(value):
-		render_bodies_in_sky = value
-		_update_sky()
-## Distance from origin/camera for optional sun and moon visual meshes.
-@export_range(100.0, 10000.0, 1.0, "or_greater") var celestial_visual_distance := 900.0 :
-	set(value):
-		celestial_visual_distance = value
-		_update_visual_positions()
-## Strength of the sun disk drawn into the radiance sky material.
-@export_range(0.0, 3.0, 0.01) var radiance_sun_disk_strength := 0.16 :
-	set(value):
-		radiance_sun_disk_strength = value
-		_update_sky()
-## Strength of the sun halo drawn into the radiance sky material.
-@export_range(0.0, 1.0, 0.01) var radiance_sun_halo_strength := 0.18 :
-	set(value):
-		radiance_sun_halo_strength = value
-		_update_sky()
-
 @export_group("Clouds")
-## Renders volumetric clouds into the sky, the starfield and (through
+## Renders volumetric clouds: over the camera's view (VolumetricCloudEffect in the
+## WorldEnvironment's compositor), in the sky's ambient light and (through
 ## get_cloud_cubemap()) the ocean's sky reflection. Needs a RenderingDevice
 ## (Forward+ or Mobile renderer) and a cloud_preset.
 @export var clouds_enabled := true :
@@ -255,12 +264,12 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 			_start_cloud_transition()
 ## Seconds a new cloud_preset takes to blend in at runtime.
 @export_range(0.0, 600.0, 0.1, "or_greater") var cloud_transition_seconds := 30.0
-## Optional wind source the clouds drift with: get_wind_speed() and
-## get_wind_direction_degrees(), or wind_speed / wind_direction properties.
-## Empty uses cloud_wind_speed and cloud_wind_direction.
+## The wind the clouds drift with: a WindSystem, or any node with the wind contract
+## (see core's WindSource). Empty: cloud_wind_speed and cloud_wind_direction.
 @export var cloud_wind_source_path : NodePath :
 	set(value):
 		cloud_wind_source_path = value
+		update_configuration_warnings()
 		if is_node_ready():
 			_resolve_cloud_wind_source()
 ## Multiplies the wind source's speed: wind at cloud height is stronger than at the surface.
@@ -284,16 +293,19 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 		if is_node_ready():
 			_update_sky()
 @export_subgroup("Cloud Quality")
-## Edge length in texels of the cloud cubemap faces.
+## Edge length in texels of the faces of the cloud cubemap the water reflects
+## (the clouds seen from the sea, get_cloud_cubemap()).
 @export_range(256, 2048, 128) var cloud_cubemap_size := 1024 :
 	set(value):
 		cloud_cubemap_size = value
 		if is_node_ready():
 			_setup_clouds()
-## Each frame re-renders one cloud texel in every stride x stride block. Higher
-## is cheaper; the clouds then take stride^2 frames to fully update.
+## Each frame re-renders one texel in every stride x stride block of the cloud
+## cubemaps (reflections and ambient light). Higher is cheaper; they then take
+## stride^2 frames to fully update. The camera's view always traces a quarter of
+## its cloud pixels per frame.
 @export_enum("1:1", "2:2", "4:4") var cloud_update_stride := 4
-## Raymarch steps along each view ray.
+## Raymarch steps along each view ray (cubemaps and the camera's view).
 @export_range(8, 256, 1) var cloud_view_steps := 64
 ## Raymarch steps from each cloud sample toward the sun or moon.
 @export_range(1, 16, 1) var cloud_light_steps := 6
@@ -303,8 +315,6 @@ const NEGLIGIBLE_LIGHT_SHARE := 0.001
 @onready var _world_environment : WorldEnvironment = $WorldEnvironment
 @onready var _sun_light : DirectionalLight3D = $SunLight
 @onready var _moon_light : DirectionalLight3D = $MoonLight
-@onready var _sun_visual : MeshInstance3D = $SunVisual
-@onready var _moon_visual : MeshInstance3D = $MoonVisual
 
 var _elapsed_time := 0.0
 var _sun_hour_angle := 0.0
@@ -314,8 +324,14 @@ var _advancing_cycle := false
 
 # Lighting state, recomputed by _update_lighting_state() whenever an input changes.
 # The public getters return these, so reading the sky costs nothing per call.
+## Where the sun and the moon are seen (refracted by the air, _refracted()), and where
+## they are (the sky shader draws their disks from these).
 var _sun_direction := Vector3.UP
 var _moon_direction := Vector3.DOWN
+var _sun_true_direction := Vector3.UP
+var _moon_true_direction := Vector3.DOWN
+## Sun-moon-earth angle (rad): 0 at full moon.
+var _moon_phase_angle := 0.0
 var _sun_visibility := 1.0
 var _moon_visibility := 0.0
 var _moon_phase := 1.0
@@ -325,9 +341,9 @@ var _moon_brightness := 1.0
 ## light coloured by the atmosphere along their direction.
 var _sun_color := Color.WHITE
 var _moon_color := Color.WHITE
-## pi * energy * transmittance of the air (not the haze) along the sun's direction,
-## and the same for the full moon: the sky shader's disks, which the haze, the clouds
-## and the moon's phase dim themselves.
+## pi * energy of the sun and of the full moon above the atmosphere (white): the sky
+## shader's disks, which the atmosphere's view volume (air and haze), the clouds and
+## the moon's phase dim themselves.
 var _sun_irradiance := Color.BLACK
 var _moon_irradiance := Color.BLACK
 ## Share of the sun's and the moon's light that reaches the sea, per channel: the
@@ -339,6 +355,7 @@ var _moon_transmittance := Color.BLACK
 var _haze_density := 0.0
 var _haze_scale_height := 1000.0
 var _haze_anisotropy := 0.97
+var _haze_wavelength_exponent := 0.4
 ## Irradiance (scene units) of the sun's and the moon's lights on a level surface at the sea.
 var _direct_irradiance := 0.0
 ## Luminance of the sky's irradiance on a level surface at the camera, through the
@@ -386,6 +403,13 @@ var _cloud_wind_source : Node
 var _cloud_wind_offset := Vector2.ZERO
 var _cloud_evolution_time := 0.0
 var _cloud_frames_until_material_push := 0
+## Share of the light the clouds let through, measured on the GPU
+## (AtmosphereRenderer.camera_sky_light_buffer): x the sun's and y the moon's to the
+## camera, z the sun's and w the moon's to the sea below it. The target as last read
+## back, the value followed smoothly toward it, and the value the lights were last set with.
+var _cloud_light_target := Vector4.ONE
+var _cloud_light := Vector4.ONE
+var _cloud_light_applied := Vector4.ONE
 
 ## Internal child drawing star_catalog; not saved with the scene.
 var _starfield : MeshInstance3D
@@ -404,8 +428,8 @@ func _init() -> void:
 
 func _ready() -> void:
 	_check_project_settings()
-	if not Engine.is_editor_hint():
-		_ensure_unique_runtime_resources()
+	if _get_sky_material() == null:
+		push_error("SkySystem %s: its WorldEnvironment has no Sky with a ShaderMaterial (keep sky_system.tscn's); the sky stays empty." % get_path())
 	_setup_starfield()
 	if cloud_preset:
 		_cloud_state = cloud_preset.duplicate()
@@ -455,6 +479,10 @@ func _get_configuration_warnings() -> PackedStringArray:
 				break
 		if not exposed:
 			warnings.push_back("No ExposureController reads this sky (light_source_path): light levels are physical, so nights and overcast render near black. Add one (exposure_system), or ignore this if your own exposure reads get_scene_illuminance().")
+	if not cloud_wind_source_path.is_empty() and not WindSource.is_valid(get_node_or_null(cloud_wind_source_path)):
+		warnings.push_back("cloud_wind_source_path does not point to a wind source (e.g. a WindSystem); the clouds use cloud_wind_speed.")
+	if clouds_enabled and is_node_ready() and _get_cloud_effect() == null:
+		warnings.push_back("The WorldEnvironment's compositor has no VolumetricCloudEffect: the camera sees the clouds only as a blurred backdrop and cannot fly into them. Keep the one sky_system.tscn has.")
 	return warnings
 
 
@@ -462,6 +490,8 @@ func _enter_tree() -> void:
 	if is_node_ready():
 		_setup_atmosphere()
 		_setup_clouds()
+	elif not Engine.is_editor_hint():
+		_make_runtime_resources_unique()
 
 
 func _exit_tree() -> void:
@@ -484,36 +514,43 @@ func _process(delta : float) -> void:
 		_advancing_cycle = false
 		_update_sky()
 	_elapsed_time += delta
-	_update_visual_positions()
 	_update_starfield()
 	if _cloud_transition_duration > 0.0:
 		_process_weather_transition(delta)
 	if _cloud_renderer:
 		_process_clouds(delta)
+	_cloud_light = _cloud_light.lerp(_cloud_light_target, 1.0 - exp(-delta / CLOUD_LIGHT_RESPONSE_SECONDS))
+	var cloud_light_change := (_cloud_light - _cloud_light_applied).abs() / _cloud_light.max(_cloud_light_applied).max(Vector4.ONE * 0.01)
+	if maxf(maxf(cloud_light_change.x, cloud_light_change.y), maxf(cloud_light_change.z, cloud_light_change.w)) > CLOUD_LIGHT_UPDATE_THRESHOLD:
+		_update_sky()
 	if _atmosphere_renderer:
 		_process_atmosphere()
 
 
-func _ensure_unique_runtime_resources() -> void:
-	if _world_environment and _world_environment.environment:
-		_world_environment.environment = _world_environment.environment.duplicate()
-		var environment := _world_environment.environment
+## Gives this sky its own copies of the resources it writes at runtime: every instance
+## of sky_system.tscn shares its sub-resources, so two skies would otherwise drive one
+## sky material and one set of compositor effects. Runs on the first _enter_tree(),
+## before any node's _ready() can read them (an ExposureController adds its effects to
+## this compositor there).
+func _make_runtime_resources_unique() -> void:
+	var world_environment : WorldEnvironment = get_node_or_null(^"WorldEnvironment")
+	if world_environment == null:
+		return
+	var environment := world_environment.environment
+	if environment:
+		environment = environment.duplicate()
+		world_environment.environment = environment
 		if environment.sky:
 			environment.sky = environment.sky.duplicate()
 			if environment.sky.sky_material:
 				environment.sky.sky_material = environment.sky.sky_material.duplicate()
-	_duplicate_material_override(_sun_visual)
-	_duplicate_material_override(_moon_visual)
-
-
-func _duplicate_material_override(visual : MeshInstance3D) -> void:
-	if visual and visual.material_override:
-		visual.material_override = visual.material_override.duplicate()
-
-
-## time_of_day: 0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset.
-func get_time_of_day() -> float:
-	return time_of_day
+	if world_environment.compositor:
+		var compositor : Compositor = world_environment.compositor.duplicate()
+		var effects : Array[CompositorEffect] = []
+		for effect in compositor.compositor_effects:
+			effects.push_back(effect.duplicate() if effect else null)
+		compositor.compositor_effects = effects
+		world_environment.compositor = compositor
 
 
 ## World direction toward the sun (unit vector; y < 0 below the horizon).
@@ -526,10 +563,10 @@ func get_moon_direction() -> Vector3:
 	return _moon_direction
 
 
-## How much of the sun reaches the scene: the share of its disk above the horizon
-## times cloud cover.
+## How much of the sun reaches the sea: the share of its disk above the horizon
+## times the share the clouds over it let through.
 func get_sun_visibility() -> float:
-	return _sun_visibility * _get_cloud_sun_light_scale()
+	return _sun_visibility * _cloud_light.z
 
 
 ## Colour of the sun's light at the sea (brightest channel 1): white light coloured
@@ -548,11 +585,11 @@ func get_moon_phase() -> float:
 	return _moon_phase
 
 
-## The cloud cubemap (rgb: premultiplied cloud radiance, a: opacity, upper
-## hemisphere only), or null while clouds are off. The object changes when the
-## clouds are rebuilt; lighting_changed fires then.
+## The clouds seen from the sea surface below the camera (rgb: premultiplied cloud
+## radiance, a: opacity, upper hemisphere only, full mips), or null while clouds are
+## off. The object changes when the clouds are rebuilt; lighting_changed fires then.
 func get_cloud_cubemap() -> Texture:
-	return _cloud_renderer.cubemap if _cloud_renderer else null
+	return _cloud_renderer.sea_cubemap if _cloud_renderer else null
 
 
 ## The stars for consumers that draw their own sky (the ocean's reflection): a cubemap
@@ -656,7 +693,7 @@ func get_planet_directions() -> PackedVector3Array:
 	var to_world := _get_equatorial_to_world_basis()
 	var directions := PackedVector3Array()
 	for direction in _planet_directions:
-		directions.push_back(to_world * direction)
+		directions.push_back(_refracted(to_world * direction))
 	return directions
 
 
@@ -673,21 +710,30 @@ func get_planet_irradiance() -> PackedVector3Array:
 func _update_lighting_state() -> void:
 	var solar_coordinates := _get_solar_equatorial_coordinates()
 	_sun_hour_angle = _get_solar_hour_angle()
-	_sun_direction = _equatorial_to_horizontal_direction(solar_coordinates.y, _sun_hour_angle)
+	_sun_true_direction = _equatorial_to_horizontal_direction(solar_coordinates.y, _sun_hour_angle)
+	_sun_direction = _refracted(_sun_true_direction)
 	var moon_state := _get_moon_state()
-	_moon_direction = moon_state["direction"]
+	_moon_true_direction = moon_state["direction"]
+	_moon_direction = _refracted(_moon_true_direction)
 	_moon_phase = float(moon_state["phase"])
+	_moon_phase_angle = float(moon_state["phase_angle"])
 	_moon_brightness = float(moon_state["brightness"])
 	_sun_visibility = _disk_above_horizon(_sun_direction.y, SUN_ANGULAR_RADIUS)
 	_moon_visibility = _disk_above_horizon(_moon_direction.y, MOON_ANGULAR_RADIUS)
 	_update_haze_medium()
-	_sun_transmittance = _get_body_transmittance(_sun_direction, SUN_ANGULAR_RADIUS, true)
-	_moon_transmittance = _get_body_transmittance(_moon_direction, MOON_ANGULAR_RADIUS, true)
-	_sun_color = _light_color(_get_atmosphere_transmittance(0.0, _above_horizon(_sun_direction), true))
-	_moon_color = _light_color(_get_atmosphere_transmittance(0.0, _above_horizon(_moon_direction), true))
-	# The disks are drawn behind the haze and the clouds, which dim them themselves.
-	_sun_irradiance = _get_atmosphere_transmittance(0.0, _above_horizon(_sun_direction), false) * (_get_sun_energy() * PI)
-	_moon_irradiance = _get_atmosphere_transmittance(0.0, _above_horizon(_moon_direction), false) * (MOON_ENERGY * moon_energy_multiplier * PI)
+	# The light's colour is the transmittance's (taken at the horizon while the body
+	# sets), its strength also the share of the disk above the horizon.
+	var sun_transmittance := _get_atmosphere_transmittance(0.0, _above_horizon(_sun_direction), true)
+	var moon_transmittance := _get_atmosphere_transmittance(0.0, _above_horizon(_moon_direction), true)
+	_sun_transmittance = sun_transmittance * _sun_visibility
+	_moon_transmittance = moon_transmittance * _moon_visibility
+	_sun_color = _light_color(sun_transmittance)
+	_moon_color = _light_color(moon_transmittance)
+	# The disks are drawn in space: the sky's view volume dims them by the whole
+	# atmosphere along each view ray, per colour (dimming them here as well counted the
+	# air twice).
+	_sun_irradiance = Color.WHITE * (_get_sun_energy() * PI)
+	_moon_irradiance = Color.WHITE * (MOON_ENERGY * moon_energy_multiplier * PI)
 	_update_planets()
 
 
@@ -697,14 +743,19 @@ func _update_sky() -> void:
 	_update_lighting_state()
 	if not is_inside_tree():
 		return
-	var cloud_light_scale := _get_cloud_sun_light_scale()
-	var sun_energy := _get_sun_energy() * cloud_light_scale
-	var moon_energy := _get_moon_energy() * cloud_light_scale
+	# The atmosphere's lights above the clouds (it shades itself under them); the scene's
+	# by the clouds between the camera and the light, as measured (the camera may be
+	# below, inside or above them).
+	var sun_energy := _get_sun_energy()
+	var moon_energy := _get_moon_energy()
+	_cloud_light_applied = _cloud_light
+	var scene_sun_energy := sun_energy * _cloud_light.x
+	var scene_moon_energy := moon_energy * _cloud_light.y
 	# The lights reach the scene through the atmosphere between space and the sea.
-	_update_light(_sun_light, _sun_direction, sun_energy, _sun_transmittance)
-	_update_light(_moon_light, _moon_direction, moon_energy, _moon_transmittance)
-	var sun_irradiance := _level_irradiance(sun_energy, _sun_transmittance, _sun_direction)
-	var moon_irradiance := _level_irradiance(moon_energy, _moon_transmittance, _moon_direction)
+	_update_light(_sun_light, _sun_direction, scene_sun_energy, _sun_transmittance)
+	_update_light(_moon_light, _moon_direction, scene_moon_energy, _moon_transmittance)
+	var sun_irradiance := _level_irradiance(scene_sun_energy, _sun_transmittance, _sun_direction)
+	var moon_irradiance := _level_irradiance(scene_moon_energy, _moon_transmittance, _moon_direction)
 	_direct_irradiance = sun_irradiance + moon_irradiance
 	if _moon_light and moon_irradiance < NEGLIGIBLE_LIGHT_SHARE * sun_irradiance:
 		_moon_light.visible = false
@@ -715,9 +766,11 @@ func _update_sky() -> void:
 	else:
 		_update_haze_lighting(_moon_direction, moon_energy, _sun_direction, sun_energy)
 	_update_environment(_sun_direction, _moon_direction, _sun_visibility, _moon_visibility)
+	if _starfield_material:
+		_starfield_material.set_shader_parameter(&"planet_directions", _planet_directions)
+		_starfield_material.set_shader_parameter(&"planet_light", _planet_lux)
+		_starfield_material.set_shader_parameter(&"sea_level", sea_level)
 	_push_atmosphere_parameters()
-	_update_visual_colors(_sun_visibility, _moon_visibility)
-	_update_visual_positions()
 	lighting_changed.emit()
 
 
@@ -729,6 +782,7 @@ func _update_haze_medium() -> void:
 	_haze_density = 3.912 / _cloud_state.haze_visibility
 	_haze_scale_height = _cloud_state.haze_scale_height
 	_haze_anisotropy = _cloud_state.haze_anisotropy
+	_haze_wavelength_exponent = _cloud_state.haze_wavelength_exponent
 
 
 ## The light the atmosphere scatters: white at energy above the atmosphere, where pi *
@@ -771,21 +825,40 @@ static func _luminance(color : Color) -> float:
 	return Vector3(color.r, color.g, color.b).dot(LUMINANCE_WEIGHTS)
 
 
-## Share of a sun's or moon's light that reaches the sea, per channel: the
-## atmosphere's transmittance (taken at the horizon while the body sets) times the
-## share of its disk above the horizon.
-func _get_body_transmittance(direction : Vector3, angular_radius : float, with_haze : bool) -> Color:
-	var visible_share := _disk_above_horizon(direction.y, angular_radius)
-	if visible_share <= 0.0:
-		return Color.BLACK
-	return _get_atmosphere_transmittance(0.0, _above_horizon(direction), with_haze) * visible_share
-
-
 ## Share of a disk of angular_radius whose centre's elevation has sine height that is
 ## above the sea's horizon (seen from the sea; no refraction).
 static func _disk_above_horizon(height : float, angular_radius : float) -> float:
 	var d := clampf(asin(clampf(height, -1.0, 1.0)) / angular_radius, -1.0, 1.0)
 	return 1.0 - (acos(d) - d * sqrt(1.0 - d * d)) / PI
+
+
+## direction as seen through the air: lifted by the atmospheric refraction at its true
+## elevation (Saemundsson 1986, standard air at the sea: about 34' at the horizon, so
+## the sun is seen whole for a while after it has set), faded out a few degrees below
+## the horizon, where nothing is seen. As refracted() in starfield.gdshader; the sky
+## shader bends view rays back with Bennett's inverse formula.
+static func _refracted(direction : Vector3) -> Vector3:
+	var horizontal := Vector2(direction.x, direction.z).length()
+	if horizontal < 1e-5:
+		return direction
+	var elevation := rad_to_deg(asin(clampf(direction.y, -1.0, 1.0)))
+	var clamped := maxf(elevation, -1.5)
+	var lift := maxf(1.02 / tan(deg_to_rad(clamped + 10.3 / (clamped + 5.11))), 0.0) / 60.0 * smoothstep(-4.0, -1.5, elevation)
+	var apparent := deg_to_rad(elevation + lift)
+	return Vector3(direction.x / horizontal * cos(apparent), sin(apparent), direction.z / horizontal * cos(apparent))
+
+
+## The moon's disk-integrated brightness under the Lommel-Seeliger law at phase angle
+## (rad) as a share of the full moon's: 1 - sin(a/2) tan(a/2) ln(cot(a/4)).
+static func _lommel_seeliger_phase(phase_angle : float) -> float:
+	var a := clampf(absf(phase_angle), 1e-4, PI - 1e-3)
+	return maxf(1.0 - sin(0.5 * a) * tan(0.5 * a) * log(1.0 / tan(0.25 * a)), 1e-4)
+
+
+## A Lambert sphere's brightness at phase angle (rad) as a share of its full phase.
+static func _lambert_sphere_phase(phase_angle : float) -> float:
+	var a := clampf(absf(phase_angle), 0.0, PI)
+	return (sin(a) + (PI - a) * cos(a)) / PI
 
 
 ## direction lifted onto the horizon when below it.
@@ -823,7 +896,8 @@ func _get_atmosphere_transmittance(altitude : float, direction : Vector3, with_h
 	var root := sqrt(b * b + c)
 	var ray_length := c / (b + root) if mu >= 0.0 else root - b
 	var haze_density := _haze_density if with_haze else 0.0
-	var optical_depth := Vector3.ZERO
+	# Optical depths at 550 nm: air, haze (all of it: this is the direct beam), ozone.
+	var depth := Vector3.ZERO
 	var previous_t := 0.0
 	var previous_height := h
 	for i in range(1, ATMOSPHERE_TRANSMITTANCE_STEPS + 1):
@@ -832,14 +906,17 @@ func _get_atmosphere_transmittance(altitude : float, direction : Vector3, with_h
 		# Altitude along the ray (atmosphere_altitude_along()).
 		var k := t * (2.0 * r * mu + t)
 		var height := h + k / (sqrt(r * r + k) + r)
-		# Mean extinction over the step (atmosphere_mean_extinction()).
-		var extinction := Vector3.ONE * (haze_density * _exponential_mean(previous_height, height, _haze_scale_height)) \
-				+ ATMOSPHERE_RAYLEIGH_SCATTERING * _exponential_mean(previous_height, height, ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT) \
-				+ ATMOSPHERE_OZONE_ABSORPTION * _ozone_mean(previous_height, height)
-		optical_depth += extinction * (t - previous_t)
+		depth += Vector3(ATMOSPHERE_RAYLEIGH_SCATTERING_550 * _exponential_mean(previous_height, height, ATMOSPHERE_RAYLEIGH_SCALE_HEIGHT),
+				haze_density * _exponential_mean(previous_height, height, _haze_scale_height),
+				ATMOSPHERE_OZONE_ABSORPTION_550 * _ozone_mean(previous_height, height)) * (t - previous_t)
 		previous_t = t
 		previous_height = height
-	return Color(exp(-optical_depth.x), exp(-optical_depth.y), exp(-optical_depth.z))
+	# Integrated over the spectrum (atmosphere_band_transmittance()).
+	var band := Vector3.ZERO
+	for i in ATMOSPHERE_SPECTRUM_TO_RGB.size():
+		var haze_spectrum := pow(ATMOSPHERE_WAVELENGTH_RATIO[i], -_haze_wavelength_exponent)
+		band += ATMOSPHERE_SPECTRUM_TO_RGB[i] * exp(-(depth.x * ATMOSPHERE_RAYLEIGH_SPECTRUM[i] + depth.y * haze_spectrum + depth.z * ATMOSPHERE_OZONE_SPECTRUM[i]))
+	return Color(maxf(band.x, 0.0), maxf(band.y, 0.0), maxf(band.z, 0.0))
 
 
 ## As atmosphere_exponential_mean().
@@ -872,6 +949,7 @@ func _push_atmosphere_parameters() -> void:
 	_atmosphere_renderer.haze_density = _haze_density
 	_atmosphere_renderer.haze_scale_height = _haze_scale_height
 	_atmosphere_renderer.haze_anisotropy = _haze_anisotropy
+	_atmosphere_renderer.haze_wavelength_exponent = _haze_wavelength_exponent
 	_atmosphere_renderer.light_direction = _haze_light_direction
 	_atmosphere_renderer.light_color = _haze_light_color
 	_atmosphere_renderer.secondary_direction = _haze_secondary_direction
@@ -889,6 +967,17 @@ func _push_atmosphere_parameters() -> void:
 		effect.active = _haze_density > 0.0
 		effect.light_direction = _haze_light_direction
 		effect.phase_g = _haze_anisotropy
+	var cloud_effect := _get_cloud_effect()
+	if cloud_effect:
+		cloud_effect.light_direction = _haze_light_direction
+		cloud_effect.phase_g = _haze_anisotropy
+		cloud_effect.sea_level = sea_level
+
+
+## The WorldEnvironment's sky material (null, reported in _ready(), without one).
+func _get_sky_material() -> ShaderMaterial:
+	var environment := _world_environment.environment if _world_environment else null
+	return environment.sky.sky_material as ShaderMaterial if environment and environment.sky else null
 
 
 func _get_aerial_perspective_effect() -> AerialPerspectiveEffect:
@@ -896,6 +985,15 @@ func _get_aerial_perspective_effect() -> AerialPerspectiveEffect:
 		return null
 	for effect in _world_environment.compositor.compositor_effects:
 		if effect is AerialPerspectiveEffect:
+			return effect
+	return null
+
+
+func _get_cloud_effect() -> VolumetricCloudEffect:
+	if _world_environment == null or _world_environment.compositor == null:
+		return null
+	for effect in _world_environment.compositor.compositor_effects:
+		if effect is VolumetricCloudEffect:
 			return effect
 	return null
 
@@ -914,26 +1012,27 @@ func _update_light(light : DirectionalLight3D, direction : Vector3, energy : flo
 ## The sky material's lights. The environment's ambient light is the sky's radiance
 ## map as rendered (energy 1): the atmosphere and the clouds set its brightness.
 func _update_environment(sun_direction : Vector3, moon_direction : Vector3, sun_visibility : float, moon_visibility : float) -> void:
-	if _world_environment == null or _world_environment.environment == null:
+	var shader_material := _get_sky_material()
+	if shader_material == null:
 		return
-	var environment := _world_environment.environment
-	if environment.sky == null or not environment.sky.sky_material is ShaderMaterial:
-		return
-	var shader_material := environment.sky.sky_material as ShaderMaterial
 	shader_material.set_shader_parameter(&"sun_direction", sun_direction)
+	shader_material.set_shader_parameter(&"sun_disk_direction", _sun_true_direction)
+	shader_material.set_shader_parameter(&"moon_disk_direction", _moon_true_direction)
 	shader_material.set_shader_parameter(&"sun_color", _sun_color)
 	shader_material.set_shader_parameter(&"sun_irradiance", Vector3(_sun_irradiance.r, _sun_irradiance.g, _sun_irradiance.b))
-	shader_material.set_shader_parameter(&"sun_visibility", sun_visibility if render_bodies_in_sky else 0.0)
+	shader_material.set_shader_parameter(&"sun_visibility", sun_visibility)
 	shader_material.set_shader_parameter(&"radiance_sun_disk_strength", radiance_sun_disk_strength)
 	shader_material.set_shader_parameter(&"radiance_sun_halo_strength", radiance_sun_halo_strength)
 	shader_material.set_shader_parameter(&"moon_direction", moon_direction)
 	shader_material.set_shader_parameter(&"moon_color", _moon_color)
 	shader_material.set_shader_parameter(&"moon_irradiance", Vector3(_moon_irradiance.r, _moon_irradiance.g, _moon_irradiance.b))
-	shader_material.set_shader_parameter(&"moon_visibility", moon_visibility if render_bodies_in_sky else 0.0)
+	shader_material.set_shader_parameter(&"moon_visibility", moon_visibility)
 	shader_material.set_shader_parameter(&"moon_phase", _moon_phase)
-	# The lit part's radiance as a share of the full moon's (at most 1: the formula
-	# overshoots near new moon, where the lit share goes to 0).
-	shader_material.set_shader_parameter(&"moon_surface_brightness", minf(_moon_brightness / maxf(_moon_phase, 1e-6), 1.0))
+	# The measured brightness over the Lommel-Seeliger law's (the shader applies the law):
+	# the surface's own shadows dim it away from full. Capped: both go to 0 at new moon.
+	shader_material.set_shader_parameter(&"moon_surface_brightness", minf(_moon_brightness / _lommel_seeliger_phase(_moon_phase_angle), 2.0))
+	# The earth seen from the moon is full at new moon.
+	shader_material.set_shader_parameter(&"moon_earthshine", EARTHSHINE_FULL_EARTH * _lambert_sphere_phase(PI - _moon_phase_angle))
 	shader_material.set_shader_parameter(&"milky_way_basis", get_star_basis())
 	shader_material.set_shader_parameter(&"milky_way_scale", MILKY_WAY_UNIT * get_star_radiance_scale())
 	_radiance_observer_altitude = _get_atmosphere_observer_altitude()
@@ -1118,53 +1217,6 @@ func _update_starfield() -> void:
 	_starfield_material.set_shader_parameter(&"illuminance_scale", star_brightness * _exposure / get_illuminance_unit_lux() * _get_star_gain())
 	_starfield_material.set_shader_parameter(&"scintillation", _cloud_state.star_scintillation if _cloud_state else DEFAULT_STAR_SCINTILLATION)
 	_starfield_material.set_shader_parameter(&"time", fposmod(_elapsed_time, STAR_TIME_PERIOD))
-	_starfield_material.set_shader_parameter(&"planet_directions", _planet_directions)
-	_starfield_material.set_shader_parameter(&"planet_light", _planet_lux)
-	_starfield_material.set_shader_parameter(&"sea_level", sea_level)
-
-
-func _update_visual_colors(sun_visibility : float, moon_visibility : float) -> void:
-	if render_bodies_in_sky:
-		if _sun_visual:
-			_sun_visual.visible = false
-		if _moon_visual:
-			_moon_visual.visible = false
-		return
-	_set_visual_color(_sun_visual, _sun_color, sun_visibility)
-	_set_visual_color(_moon_visual, _moon_color, moon_visibility * _moon_brightness)
-
-
-func _set_visual_color(visual : MeshInstance3D, color : Color, visibility : float) -> void:
-	if visual == null:
-		return
-	visual.visible = visibility > 0.001
-	var shader_material := visual.material_override as ShaderMaterial
-	if shader_material:
-		shader_material.set_shader_parameter(&"body_color", color)
-		shader_material.set_shader_parameter(&"visibility", visibility)
-		return
-	var material := visual.material_override as StandardMaterial3D
-	if material:
-		material.albedo_color = Color(color.r, color.g, color.b, visibility)
-		material.emission = color
-		material.emission_energy_multiplier = visibility
-
-
-func _update_visual_positions() -> void:
-	var camera := _get_active_camera()
-	if camera == null:
-		return
-	var origin := camera.global_position if follow_active_camera else global_position
-	if not render_bodies_in_sky:
-		_position_body_visual(_sun_visual, origin, get_sun_direction())
-		_position_body_visual(_moon_visual, origin, get_moon_direction())
-
-
-func _position_body_visual(visual : MeshInstance3D, origin : Vector3, direction : Vector3) -> void:
-	if visual == null:
-		return
-	visual.global_position = origin + direction * celestial_visual_distance
-	visual.look_at(origin, _get_look_up(direction))
 
 
 func _get_solar_equatorial_coordinates() -> Vector2:
@@ -1196,6 +1248,7 @@ func _get_moon_state() -> Dictionary:
 		"direction": _equatorial_to_horizontal_direction(declination, hour_angle),
 		"phase": phase,
 		"brightness": _lunar_phase_brightness(PI - phase_angle),
+		"phase_angle": absf(_wrap_pi(PI - phase_angle)),
 	}
 
 
@@ -1301,13 +1354,6 @@ func _get_look_up(direction : Vector3) -> Vector3:
 	return Vector3.FORWARD if absf(direction.dot(Vector3.UP)) > 0.98 else Vector3.UP
 
 
-func _get_active_camera() -> Camera3D:
-	var viewport := get_viewport()
-	if viewport == null:
-		return null
-	return viewport.get_camera_3d()
-
-
 func _setup_clouds() -> void:
 	_release_clouds()
 	if clouds_enabled:
@@ -1321,11 +1367,15 @@ func _setup_clouds() -> void:
 		else:
 			if _cloud_state == null:
 				_cloud_state = cloud_preset.duplicate()
-			_cloud_renderer = CloudRenderer.new(device, cloud_cubemap_size, _atmosphere_renderer.sky_ambient_buffer)
+			_cloud_renderer = CloudRenderer.new(device, cloud_cubemap_size, _atmosphere_renderer.sky_ambient_buffer, _atmosphere_renderer.transmittance_lut)
 			if _cloud_renderer.has_failed():
 				push_error("SkySystem: the clouds' GPU resources failed; clouds are off: %s" % get_path())
 				_cloud_renderer.release()
 				_cloud_renderer = null
+	var cloud_effect := _get_cloud_effect()
+	if cloud_effect and _cloud_renderer:
+		cloud_effect.cloud_resources = _cloud_renderer.get_trace_resources()
+		cloud_effect.active = true
 	_push_cloud_material_parameters()
 	_update_sky()
 
@@ -1335,7 +1385,11 @@ func _release_clouds() -> void:
 		return
 	var renderer := _cloud_renderer
 	_cloud_renderer = null
-	# Unbind the cubemap before its texture is freed.
+	# Unbind the cubemaps and the trace resources before they are freed.
+	var cloud_effect := _get_cloud_effect()
+	if cloud_effect:
+		cloud_effect.active = false
+		cloud_effect.cloud_resources = []
 	_push_cloud_material_parameters()
 	renderer.release()
 
@@ -1374,24 +1428,20 @@ func _process_clouds(delta : float) -> void:
 	_cloud_wind_offset += _get_cloud_wind_velocity() * delta
 	_cloud_evolution_time += _cloud_state.evolution_speed * delta
 
-	# The brighter of the sun and the moon through the atmosphere down to the middle of
-	# the cloud layer: high clouds stay lit after the sea has lost the sun, and the moon
-	# takes over once the sun no longer reaches them.
-	var cloud_altitude := _cloud_state.base_altitude + 0.5 * _cloud_state.thickness
-	var light_direction := _sun_direction
-	var light_color := _get_atmosphere_transmittance(cloud_altitude, _sun_direction, true) * _get_sun_energy()
-	var moon_color := _get_atmosphere_transmittance(cloud_altitude, _moon_direction, true) * _get_moon_energy()
-	if _luminance(moon_color) > _luminance(light_color):
-		light_direction = _moon_direction
-		light_color = moon_color
-	light_color *= cloud_light_intensity * _exposure
+	# The atmosphere's key light (the sun, the moon once the sun is well down), above the
+	# atmosphere: the clouds dim it down to each of their points themselves, so far
+	# clouds toward the sun stay lit after the sea has lost it.
+	var sun_is_key := _sun_direction.y >= MOON_KEY_SUN_HEIGHT
+	var light_direction := _sun_direction if sun_is_key else _moon_direction
+	var light_color := Color.WHITE * ((_get_sun_energy() if sun_is_key else _get_moon_energy()) * cloud_light_intensity * _exposure)
 
 	_cloud_renderer.update_stride = cloud_update_stride
 	_cloud_renderer.view_steps = cloud_view_steps
 	_cloud_renderer.light_steps = cloud_light_steps
 	_cloud_renderer.max_distance = cloud_max_distance
-	_cloud_renderer.render(_get_cloud_camera_position(), _cloud_state, _cloud_wind_offset, _cloud_evolution_time,
-		light_direction, light_color, cloud_ambient_intensity)
+	var camera_position := _get_cloud_camera_position()
+	_cloud_renderer.render(Vector3(camera_position.x, camera_position.y - sea_level, camera_position.z), _cloud_state,
+		_cloud_wind_offset, _cloud_evolution_time, light_direction, light_color, _atmosphere_renderer.get_top_altitude(), _haze_wavelength_exponent, cloud_ambient_intensity)
 
 	# Re-sending the parameters once per full refresh also makes the sky
 	# re-render its radiance map, so ambient light and reflections follow the clouds.
@@ -1402,15 +1452,26 @@ func _process_clouds(delta : float) -> void:
 
 
 ## Cloud uniforms go through the RenderingServer so the runtime texture is never
-## stored in (and saved with) the sky or starfield material resources.
+## stored in (and saved with) the sky or starfield material resources. The sky shows
+## the clouds seen from the camera, the starfield those seen from the sea (for the
+## mirrored camera); with a VolumetricCloudEffect neither draws them over the camera's
+## own view.
 func _push_cloud_material_parameters() -> void:
+	var sky_material := _get_sky_material()
+	if sky_material == null or _starfield_material == null:
+		return
 	var enabled := _cloud_renderer != null
-	var texture_rid := _cloud_renderer.cubemap.get_rid() if enabled else RID()
-	for material : Material in [_world_environment.environment.sky.sky_material, _starfield_material]:
-		RenderingServer.material_set_param(material.get_rid(), &"clouds_enabled", enabled)
-		RenderingServer.material_set_param(material.get_rid(), &"cloud_cubemap", texture_rid)
+	var screen_clouds := enabled and _get_cloud_effect() != null
+	var sky_rid := sky_material.get_rid()
+	var starfield_rid := _starfield_material.get_rid()
+	RenderingServer.material_set_param(sky_rid, &"cloud_cubemap", _cloud_renderer.camera_cubemap.get_rid() if enabled else RID())
+	RenderingServer.material_set_param(starfield_rid, &"cloud_cubemap", _cloud_renderer.sea_cubemap.get_rid() if enabled else RID())
+	for material_rid in [sky_rid, starfield_rid]:
+		RenderingServer.material_set_param(material_rid, &"clouds_enabled", enabled)
+		RenderingServer.material_set_param(material_rid, &"screen_clouds", screen_clouds)
 	if enabled:
-		RenderingServer.material_set_param(_world_environment.environment.sky.sky_material.get_rid(), &"cloud_base_altitude", _cloud_state.base_altitude)
+		RenderingServer.material_set_param(sky_rid, &"cloud_base_altitude", _cloud_state.base_altitude)
+		RenderingServer.material_set_param(sky_rid, &"cloud_top_altitude", _cloud_state.base_altitude + _cloud_state.thickness)
 	_radiance_observer_altitude = _get_atmosphere_observer_altitude()
 
 
@@ -1434,10 +1495,10 @@ func _setup_atmosphere() -> void:
 	for i in volumes.size():
 		RenderingServer.global_shader_parameter_set(AtmosphereGlobals.VIEW_TEXTURES[i], volumes[i])
 		volume_rids.push_back(volumes[i].texture_rd_rid)
-	var effect := _get_aerial_perspective_effect()
-	if effect:
-		effect.view_textures = volume_rids
-		effect.max_distance = AtmosphereRenderer.MAX_DISTANCE
+	for effect in [_get_aerial_perspective_effect(), _get_cloud_effect()]:
+		if effect:
+			effect.view_textures = volume_rids
+			effect.max_distance = AtmosphereRenderer.MAX_DISTANCE
 	_update_sky()
 	# Consumers start reading once the volumes hold this frame's atmosphere.
 	_process_atmosphere()
@@ -1462,9 +1523,14 @@ func _release_atmosphere() -> void:
 	if effect:
 		effect.active = false
 		effect.view_textures = []
+	var cloud_effect := _get_cloud_effect()
+	if cloud_effect:
+		cloud_effect.view_textures = []
 	var renderer := _atmosphere_renderer
 	_atmosphere_renderer = null
 	_sky_irradiance = -1.0
+	# Nothing measures the clouds without the atmosphere's passes.
+	_cloud_light_target = Vector4.ONE
 	# Sky sources' consumers (the ocean) drop the sea-level volumes on this signal.
 	lighting_changed.emit()
 	renderer.release()
@@ -1475,16 +1541,17 @@ func _release_atmosphere() -> void:
 func _process_atmosphere() -> void:
 	var camera_position := _get_cloud_camera_position()
 	var observer_altitude := _get_atmosphere_observer_altitude()
-	var cloud_cubemap := _cloud_renderer.cubemap.texture_rd_rid if _cloud_renderer else RID()
-	_atmosphere_renderer.render(camera_position.y - sea_level, cloud_cubemap, _exposure)
+	var sea_clouds := _cloud_renderer.sea_cubemap.texture_rd_rid if _cloud_renderer else RID()
+	var camera_clouds := _cloud_renderer.camera_cubemap.texture_rd_rid if _cloud_renderer else RID()
+	_atmosphere_renderer.render(camera_position.y - sea_level, sea_clouds, camera_clouds, _exposure)
 	_read_camera_sky_light()
 	_atmosphere_observer = Vector4(camera_position.x, camera_position.y, camera_position.z, observer_altitude)
 	if _global_atmosphere_owner == self:
 		RenderingServer.global_shader_parameter_set(AtmosphereGlobals.OBSERVER, _atmosphere_observer)
-	var effect := _get_aerial_perspective_effect()
-	if effect:
-		effect.observer_position = camera_position
-		effect.observer_altitude = observer_altitude
+	for effect in [_get_aerial_perspective_effect(), _get_cloud_effect()]:
+		if effect:
+			effect.observer_position = camera_position
+			effect.observer_altitude = observer_altitude
 	if absf(observer_altitude - _radiance_observer_altitude) > maxf(2.0, RADIANCE_ALTITUDE_TOLERANCE * _radiance_observer_altitude):
 		_refresh_sky_radiance()
 
@@ -1497,22 +1564,27 @@ func _read_camera_sky_light() -> void:
 	_sky_light_read_pending = true
 	var renderer := _atmosphere_renderer
 	var exposure := _exposure
+	# Which body the atmosphere's key light was (_update_sky()).
+	var sun_is_key := _sun_direction.y >= MOON_KEY_SUN_HEIGHT
 	# The callback may run outside the main thread's frame logic; hand the data over deferred.
 	var on_read := func(data : PackedByteArray) -> void:
-		_on_camera_sky_light_read.call_deferred(renderer, exposure, data)
+		_on_camera_sky_light_read.call_deferred(renderer, exposure, sun_is_key, data)
 	var error := RenderingServer.get_rendering_device().buffer_get_data_async(renderer.camera_sky_light_buffer, on_read, 0, AtmosphereRenderer.SKY_LIGHT_SIZE)
 	if error != OK:
 		_sky_light_read_pending = false
 		push_error("SkySystem: reading the sky light back failed: %s" % error_string(error))
 
 
-func _on_camera_sky_light_read(renderer : AtmosphereRenderer, exposure : float, data : PackedByteArray) -> void:
+func _on_camera_sky_light_read(renderer : AtmosphereRenderer, exposure : float, sun_is_key : bool, data : PackedByteArray) -> void:
 	_sky_light_read_pending = false
 	# A readback from a renderer released since describes a sky that is gone.
 	if renderer != _atmosphere_renderer:
 		return
 	var floats := data.to_float32_array()
 	_sky_irradiance = Vector3(floats[8], floats[9], floats[10]).dot(LUMINANCE_WEIGHTS) / exposure
+	# Key and secondary light, to the camera (12, 13) and to the sea (14, 15).
+	var cloud_light := Vector4(floats[12], floats[13], floats[14], floats[15]).clamp(Vector4.ZERO, Vector4.ONE)
+	_cloud_light_target = cloud_light if sun_is_key else Vector4(cloud_light.y, cloud_light.x, cloud_light.w, cloud_light.z)
 
 
 ## Reads the camera's exposure and publishes it with the atmosphere.
@@ -1536,42 +1608,27 @@ func _get_atmosphere_observer_altitude() -> float:
 ## it change. Re-sending a sky parameter makes it render the radiance map again.
 func _refresh_sky_radiance() -> void:
 	_radiance_observer_altitude = _get_atmosphere_observer_altitude()
-	var material := _world_environment.environment.sky.sky_material
-	RenderingServer.material_set_param(material.get_rid(), &"sun_direction", _sun_direction)
-
-
-func _get_cloud_sun_light_scale() -> float:
-	return _cloud_state.sun_light_scale if _cloud_renderer else 1.0
+	var material := _get_sky_material()
+	if material:
+		RenderingServer.material_set_param(material.get_rid(), &"sun_direction", _sun_direction)
 
 
 ## The clouds use cloud_wind_speed / cloud_wind_direction while there is no valid source.
 func _resolve_cloud_wind_source() -> void:
-	_cloud_wind_source = null if cloud_wind_source_path.is_empty() else get_node_or_null(cloud_wind_source_path)
-	if _cloud_wind_source == null:
-		if not cloud_wind_source_path.is_empty():
-			push_error("SkySystem %s: cloud_wind_source_path %s not found; using cloud_wind_speed." % [get_path(), cloud_wind_source_path])
+	_cloud_wind_source = null
+	if cloud_wind_source_path.is_empty():
 		return
-	for value in [[&"get_wind_speed", &"wind_speed"], [&"get_wind_direction_degrees", &"wind_direction"]]:
-		if not _cloud_wind_source.has_method(value[0]) and _cloud_wind_source.get(value[1]) == null:
-			push_error("SkySystem %s: cloud wind source has neither %s() nor a %s property; using cloud_wind_speed." % [get_path(), value[0], value[1]])
-			_cloud_wind_source = null
-			return
+	var node := get_node_or_null(cloud_wind_source_path)
+	if WindSource.is_valid(node):
+		_cloud_wind_source = node
+	else:
+		push_error("SkySystem %s: cloud_wind_source_path %s is not a wind source (get_wind_speed() and get_wind_direction_degrees(), or wind_speed and wind_direction); the clouds use cloud_wind_speed." % [get_path(), cloud_wind_source_path])
 
 
 func _get_cloud_wind_velocity() -> Vector2:
-	var speed := cloud_wind_speed
-	var direction := cloud_wind_direction
-	if _cloud_wind_source:
-		speed = _read_wind_value(&"get_wind_speed", &"wind_speed") * cloud_wind_speed_multiplier
-		direction = _read_wind_value(&"get_wind_direction_degrees", &"wind_direction")
-	var radians := deg_to_rad(direction)
-	return Vector2(sin(radians), cos(radians)) * speed
-
-
-func _read_wind_value(method : StringName, property : StringName) -> float:
-	if _cloud_wind_source.has_method(method):
-		return float(_cloud_wind_source.call(method))
-	return float(_cloud_wind_source.get(property))
+	if is_instance_valid(_cloud_wind_source):
+		return WindSource.get_velocity(_cloud_wind_source) * cloud_wind_speed_multiplier
+	return WindSource.direction_to_vector(cloud_wind_direction) * cloud_wind_speed
 
 
 func _get_cloud_camera_position() -> Vector3:
@@ -1583,4 +1640,5 @@ func _get_cloud_camera_position() -> Vector3:
 func _get_render_camera() -> Camera3D:
 	if Engine.is_editor_hint():
 		return Engine.get_singleton(&"EditorInterface").get_editor_viewport_3d(0).get_camera_3d()
-	return _get_active_camera()
+	var viewport := get_viewport()
+	return viewport.get_camera_3d() if viewport else null

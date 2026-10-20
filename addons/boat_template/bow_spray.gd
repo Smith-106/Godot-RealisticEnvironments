@@ -69,7 +69,7 @@ const SLAM_JET_ELEVATION_MAX := 1.4
 signal slammed(impact_speed: float, position: Vector3)
 
 ## The water surface of this node's world, resolved in _ready (null: no spray).
-var water: WaterSurface
+var _water: WaterSurface
 var _particles: GPUParticles3D
 var _previous_position := Vector3.ZERO
 var _velocity := Vector3.ZERO
@@ -81,8 +81,8 @@ var _query_point := PackedVector3Array([Vector3.ZERO])
 
 
 func _ready() -> void:
-	water = WaterSurface.find(self)
-	if water == null:
+	_water = WaterSurface.find(self)
+	if _water == null:
 		push_error("BowSpray %s: no WaterSurface in this world (add an OceanSystem). Spray is disabled." % get_path())
 		set_physics_process(false)
 		return
@@ -90,8 +90,8 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
-	if water != null:
-		water.release_query(self)
+	if _water != null:
+		_water.release_query(self)
 
 
 func _physics_process(delta: float) -> void:
@@ -104,13 +104,13 @@ func _physics_process(delta: float) -> void:
 		return
 
 	_query_point[0] = stem
-	water.submit_query(self, _query_point)
-	var result := water.get_query_result(self)
+	_water.submit_query(self, _query_point)
+	var result := _water.get_query_result(self)
 	# The first readback arrives a few frames after the first submit.
 	if result == null:
 		return
 	var sample := result.samples[0]
-	var water_height := sample.extrapolated_height(water.get_query_age(result))
+	var water_height := sample.extrapolated_height(_water.get_query_age(result))
 	var depth := water_height - stem.y
 	var relative_velocity := _velocity - sample.surface_velocity
 	var surface_point := Vector3(stem.x, minf(stem.y, water_height), stem.z)
@@ -150,9 +150,9 @@ func _slam(point: Vector3, impact_speed: float) -> void:
 		var elevation := randf_range(SLAM_JET_ELEVATION_MIN, SLAM_JET_ELEVATION_MAX)
 		var direction := (side * cos(elevation) + Vector3.UP * sin(elevation) + forward * randf_range(-0.1, 0.5)).normalized()
 		_emit(point + side * randf_range(0.0, emission_half_width), inherited + direction * jet_speed * randf_range(0.35, 1.0))
-	if slam_ring_strength > 0.0 and water.can_add_impulses():
+	if slam_ring_strength > 0.0 and _water.can_add_impulses():
 		var rise := minf(slam_ring_strength * impact_speed * impact_speed / (2.0 * SLAM_GRAVITY), slam_ring_max_rise)
-		water.add_impulse(point, slam_ring_radius, rise)
+		_water.add_impulse(point, slam_ring_radius, rise)
 	slammed.emit(impact_speed, point)
 
 

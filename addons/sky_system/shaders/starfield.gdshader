@@ -30,8 +30,12 @@ uniform vec3 planet_light[5];
 // SkySystem.sea_level. Cameras below it (the ocean's mirrored reflection camera) draw no
 // planets: the water reflects them itself, as glints (SkySystem.get_planet_*()).
 uniform float sea_level = 0.0;
-// Clouds hide the stars; set by SkySystem like the sky shader's cloud uniforms.
+// Clouds hide the stars; set by SkySystem like the sky shader's cloud uniforms. The
+// cubemap is the clouds seen from the sea (CloudRenderer.sea_cubemap). With
+// screen_clouds, VolumetricCloudEffect draws the clouds over the camera's view, stars
+// included; only cameras below sea_level (the mirrored one) use the cubemap then.
 uniform bool clouds_enabled = false;
+uniform bool screen_clouds = false;
 uniform samplerCube cloud_cubemap : filter_linear;
 
 // Pre-exposed radiance at the footprint's centre.
@@ -58,6 +62,23 @@ float twinkle_noise(vec3 seed) {
 	return sum * 0.8164966;
 }
 
+/*
+ * A direction as seen through the air: lifted by the atmospheric refraction at its true
+ * elevation (Saemundsson 1986, standard air at the sea, about 34' at the horizon; as
+ * SkySystem._refracted()), faded out a few degrees below the horizon.
+ */
+vec3 refracted(vec3 direction) {
+	float horizontal = length(direction.xz);
+	if (horizontal < 1e-5) {
+		return direction;
+	}
+	float elevation = degrees(asin(clamp(direction.y, -1.0, 1.0)));
+	float clamped = max(elevation, -1.5);
+	float lift = max(1.02 / tan(radians(clamped + 10.3 / (clamped + 5.11))), 0.0) / 60.0 * smoothstep(-4.0, -1.5, elevation);
+	float apparent = radians(elevation + lift);
+	return vec3(direction.x / horizontal * cos(apparent), sin(apparent), direction.z / horizontal * cos(apparent));
+}
+
 // Relative air mass toward a direction of sine elevation y (Kasten and Young 1989).
 float air_mass(float y) {
 	float elevation = degrees(asin(clamp(y, 0.0, 1.0)));
@@ -67,7 +88,7 @@ float air_mass(float y) {
 void vertex() {
 	int planet = int(CUSTOM0.a + 0.5) - 1;
 	vec3 equatorial = planet >= 0 ? planet_directions[planet] : VERTEX;
-	vec3 direction = normalize(mat3(MODEL_MATRIX) * equatorial);
+	vec3 direction = refracted(normalize(mat3(MODEL_MATRIX) * equatorial));
 	vec3 radiance = (planet >= 0 ? planet_light[planet] : CUSTOM0.rgb) * illuminance_scale;
 	float horizon = atmosphere_enabled ? atmosphere_horizon_mu(atmosphere_observer.w) : 0.0;
 	if (direction.y < horizon || (planet >= 0 && CAMERA_POSITION_WORLD.y < sea_level)) {
@@ -79,7 +100,7 @@ void vertex() {
 			atmosphere_along(direction, -1.0, transmittance, inscatter);
 			radiance *= transmittance;
 		}
-		if (clouds_enabled) {
+		if (clouds_enabled && (!screen_clouds || CAMERA_POSITION_WORLD.y < sea_level)) {
 			radiance *= 1.0 - textureLod(cloud_cubemap, direction, 0.0).a;
 		}
 		// Twinkling grows with the air mass (Young 1967: variance ~ X^3) and turns
