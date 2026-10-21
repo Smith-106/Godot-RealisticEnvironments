@@ -6,7 +6,6 @@
 [ext_resource type="Script" uid="uid://ci8d431qqx5lx" path="res://addons/hitbox_damage_system/hitbox_health_manager.gd" id="4_health"]
 [ext_resource type="PackedScene" uid="uid://cs4tsoxha78ww" path="res://addons/hitbox_damage_system/default_projectile_hit_smoke.tscn" id="5_hit_smoke"]
 [ext_resource type="Script" uid="uid://dorhxd7wuq5cu" path="res://addons/ocean_system/hull_water_footprint.gd" id="7_footprint"]
-[ext_resource type="Script" uid="uid://bf7btsx0wim05" path="res://addons/boat_template/bow_spray.gd" id="8_bow_spray"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_template"]
 size = Vector3(2, 1, 5)
@@ -47,9 +46,5 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)
 
 [node name="FirstPersonSeat" type="Marker3D" parent="CameraTargets" unique_id=812544978]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -1)
-
-[node name="BowSpray" type="Node3D" parent="." unique_id=177942471]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -2.5)
-script = ExtResource("8_bow_spray")
 
 [connection signal="group_destroyed" from="Hitboxes" to="BuoyantBody" method="_on_hitbox_group_destroyed"]

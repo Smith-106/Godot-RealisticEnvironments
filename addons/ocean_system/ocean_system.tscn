@@ -7,7 +7,6 @@
 
 [sub_resource type="Resource" id="Resource_spectrum"]
 script = ExtResource("3_spectrum")
-displacement_scale = 2.0
 
 [sub_resource type="Resource" id="Resource_primary_swell"]
 script = ExtResource("2_params")

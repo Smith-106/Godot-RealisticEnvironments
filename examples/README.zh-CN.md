@@ -33,7 +33,7 @@
    **Generate All Probes**。
 4. `HullWaterFootprint`：`bake_source_paths` → `Model`，然后 **Bake Profile**
    （保存为 `simple_boat_hull_profile.tres`）。
-5. 把 `BowSpray` 移到船艏柱的水线处，把 `CameraTargets` 移到船上。
+5. 把 `CameraTargets` 移到船上。
 
 `boat.tscn` 为它驾驶的船打开了 `player_controlled`。W A S D 动作由 Boat Template
 插件添加。

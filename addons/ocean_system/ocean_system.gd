@@ -61,6 +61,12 @@ const CASCADE_BAND_MIN_TEXELS := 4.0
 ## waves longer than a tile cannot be drawn, and with a shorter tile a sizeable share of
 ## the sea's energy (all of it beyond the peak's long side) is missing.
 const _LARGEST_TILE_PEAK_WAVELENGTHS := 1.5
+## Own-wave simulations (_create_own_wave_sim()): absorbing border width and the
+## margin between it and the hulls (cells), and the largest grid (longer hulls are
+## cut off at its border).
+const OWN_WAVE_SPONGE_CELLS := 12.0
+const OWN_WAVE_MARGIN_CELLS := 8.0
+const OWN_WAVE_MAX_GRID_SIZE := 256
 ## Speed of the surface water's mean drift as a share of the wind speed (wind drift and
 ## Stokes drift together, about 3 %, Wu 1975): it carries the foam downwind.
 const _FOAM_DRIFT_WIND_SHARE := 0.03
@@ -377,7 +383,7 @@ const _FOAM_DRIFT_WIND_SHARE := 0.03
 		interaction_foam_decay = value
 		_apply_interaction_settings()
 ## Wave slope (rise over run) below which simulated waves make no foam.
-@export_range(0.0, 2.0, 0.01) var interaction_foam_slope_threshold := 0.15 :
+@export_range(0.0, 2.0, 0.01) var interaction_foam_slope_threshold := 0.1 :
 	set(value):
 		interaction_foam_slope_threshold = value
 		_apply_interaction_settings()
@@ -473,10 +479,13 @@ var _sky_source_polled := false
 ## True while the sky source gives the camera's atmosphere (get_atmosphere_view_volumes()),
 ## whose observer is read every frame.
 var _aerial_perspective_enabled := false
-## Instance ids of the bodies that carry a footprint pushing water (_makes_waves()),
-## built once per physics tick or frame (_wave_making_bodies_key).
-var _wave_making_bodies := {}
-var _wave_making_bodies_key := -1
+## Each wave-making body's own waves: a small simulation forced by its hulls alone,
+## at the interaction simulation's cells and steps, following the body
+## (_step_own_waves()). Its queries take them out of the interaction waves, so every
+## body floats on the same waves of everything else. Slot k (OceanSurfaceQueries
+## .OWN_WAVE_SLOTS) holds the simulation of body _own_wave_bodies[k], or null.
+var _own_wave_sims : Array[WaterInteractionSim] = []
+var _own_wave_bodies := PackedInt64Array()
 ## Last camera exposure sent to the water material (_update_scene_exposure()).
 var _scene_exposure := 1.0
 ## Set by the sky source's lighting_changed signal.
@@ -526,7 +535,7 @@ func _init() -> void:
 # Registered on enter (before any _ready) so consumers find the surface in their own _ready.
 func _enter_tree() -> void:
 	if _surface_queries == null and RenderingServer.get_rendering_device() != null:
-		_surface_queries = OceanSurfaceQueries.new(RenderingServer.get_rendering_device(), _makes_waves)
+		_surface_queries = OceanSurfaceQueries.new(RenderingServer.get_rendering_device())
 	if _surface_queries != null:
 		WaterSurface.register(get_world_3d(), _surface_queries)
 
@@ -878,6 +887,7 @@ func _setup_interaction() -> void:
 		return
 	var previous := _interaction
 	_interaction = null
+	_release_own_waves()
 	# The simulation follows the game camera and does not run in the editor.
 	if interaction_enabled and not Engine.is_editor_hint():
 		if interaction_grid_size not in [256, 512, 1024] or interaction_cell_size <= 0.0:
@@ -900,19 +910,26 @@ func _setup_interaction() -> void:
 	_push_interaction_shader_parameters()
 
 func _apply_interaction_settings() -> void:
-	# Tunables are copied into the simulation when it exists (see _setup_interaction).
+	# Tunables are copied into the simulations when they exist (see _setup_interaction).
 	if _interaction == null:
 		return
-	_interaction.damping = interaction_damping
-	_interaction.viscosity = interaction_viscosity
-	_interaction.gravity_scale = interaction_gravity_scale
+	_apply_interaction_settings_to(_interaction)
 	_interaction.sponge_cells = interaction_sponge_cells
-	_interaction.sponge_damping = interaction_sponge_damping
-	_interaction.foam_grow = interaction_foam_grow
-	_interaction.foam_decay = interaction_foam_decay
-	_interaction.foam_slope_threshold = interaction_foam_slope_threshold
-	_interaction.foam_bow_rate = interaction_foam_bow_rate
+	for sim in _own_wave_sims:
+		if sim != null:
+			_apply_interaction_settings_to(sim)
 	_set_water_shader_parameter(&'interaction_window', _get_interaction_window())
+
+## The wave dynamics every interaction simulation shares (the border is each one's own).
+func _apply_interaction_settings_to(sim : WaterInteractionSim) -> void:
+	sim.damping = interaction_damping
+	sim.viscosity = interaction_viscosity
+	sim.gravity_scale = interaction_gravity_scale
+	sim.sponge_damping = interaction_sponge_damping
+	sim.foam_grow = interaction_foam_grow
+	sim.foam_decay = interaction_foam_decay
+	sim.foam_slope_threshold = interaction_foam_slope_threshold
+	sim.foam_bow_rate = interaction_foam_bow_rate
 
 func _push_interaction_shader_parameters() -> void:
 	_set_water_shader_parameter(&'interaction_enabled', _interaction != null)
@@ -941,7 +958,8 @@ func _step_interaction(delta : float) -> void:
 	# The window follows the active camera; without one there is nothing to center on.
 	if camera == null:
 		return
-	var hull_data := _hulls.pack_interaction_hulls(get_tree(), camera.global_position, _interaction.get_half_extent() * sqrt(2.0))
+	var bodies : Array[PhysicsBody3D] = []
+	var hull_data := _hulls.pack_interaction_hulls(get_tree(), camera.global_position, _interaction.get_half_extent() * sqrt(2.0), bodies)
 	var hull_profiles_rd := RenderingServer.texture_get_rd_texture(_hulls.profiles_texture.get_rid()) if _hulls.profiles_texture != null else RID()
 	@warning_ignore("integer_division")
 	_interaction.step(
@@ -956,23 +974,91 @@ func _step_interaction(delta : float) -> void:
 		_wave_generator.descriptors[&'displacement_map_b'].rid,
 		hull_profiles_rd
 	)
+	_step_own_waves(delta, hull_data, bodies, hull_profiles_rd)
 	_set_water_shader_parameter(&'interaction_window', _get_interaction_window())
 
-## Whether body carries a footprint that pushes water. Every query owner asks every
-## tick, so the bodies are collected once per physics tick (or frame, outside physics).
-func _makes_waves(body : PhysicsBody3D) -> bool:
-	if body == null or _interaction == null:
-		return false
-	var key := Engine.get_physics_frames() if Engine.is_in_physics_frame() else -1 - Engine.get_process_frames()
-	if key != _wave_making_bodies_key:
-		_wave_making_bodies_key = key
-		_wave_making_bodies.clear()
-		for node in get_tree().get_nodes_in_group(&"ocean_hull"):
-			var footprint := node as HullWaterFootprint
-			var footprint_body := OceanSurfaceQueries.find_physics_body(footprint)
-			if OceanHulls.pushes_water(footprint) and footprint_body != null:
-				_wave_making_bodies[footprint_body.get_instance_id()] = true
-	return _wave_making_bodies.has(body.get_instance_id())
+## Steps every wave-making body's own-wave simulation with its records of hull_data
+## (bodies holds each record's body): one per body among them, created when it starts
+## forcing the interaction simulation (both then start from its hull appearing, so
+## they stay alike) and released when it stops.
+func _step_own_waves(delta : float, hull_data : PackedFloat32Array, bodies : Array[PhysicsBody3D], hull_profiles_rd : RID) -> void:
+	var records := {}  # body id -> PackedFloat32Array of its SimHull records
+	var reaches := {}  # body id -> Vector3 (center x, center z, radius) of its hulls
+	for i in bodies.size():
+		if bodies[i] == null:
+			continue
+		var id := bodies[i].get_instance_id()
+		var record := hull_data.slice(i * WaterInteractionSim.FLOATS_PER_HULL, (i + 1) * WaterInteractionSim.FLOATS_PER_HULL)
+		# SimHull's fourth vec4: bounding sphere (center x, center z, radius, center y).
+		var sphere := Vector3(record[12], record[13], record[14])
+		records[id] = records.get(id, PackedFloat32Array()) + record
+		# A body with several hulls: around the first one's center, reaching all of them.
+		var reach : Vector3 = reaches.get(id, sphere)
+		reaches[id] = Vector3(reach.x, reach.y, maxf(reach.z, Vector2(sphere.x - reach.x, sphere.y - reach.y).length() + sphere.z))
+	var released := false
+	for slot in _own_wave_sims.size():
+		if _own_wave_sims[slot] != null and not records.has(_own_wave_bodies[slot]):
+			_own_wave_sims[slot].release()
+			_own_wave_sims[slot] = null
+			_own_wave_bodies[slot] = 0
+			released = true
+	if released:
+		# Query uniform sets that referenced the freed textures are gone with them.
+		_surface_queries.clear_uniform_set_cache()
+	var slots := {}
+	for slot in _own_wave_sims.size():
+		if _own_wave_sims[slot] != null:
+			slots[_own_wave_bodies[slot]] = slot
+	for id : int in records:
+		var reach : Vector3 = reaches[id]
+		if not slots.has(id):
+			var slot := _own_wave_bodies.find(0)
+			if slot < 0:
+				continue # More bodies than slots: the extra ones feel their own waves too.
+			var sim := _create_own_wave_sim(reach.z)
+			if sim == null:
+				continue
+			_own_wave_sims[slot] = sim
+			_own_wave_bodies[slot] = id
+			slots[id] = slot
+			_surface_queries.clear_uniform_set_cache()
+		var hulls : PackedFloat32Array = records[id]
+		@warning_ignore("integer_division")
+		_own_wave_sims[slots[id]].step(delta, Vector3(reach.x, 0.0, reach.y), hulls, hulls.size() / WaterInteractionSim.FLOATS_PER_HULL,
+			_cascade_data, cascades.size(), water_level,
+			_wave_generator.descriptors[&'displacement_map_a'].rid, _wave_generator.descriptors[&'displacement_map_b'].rid, hull_profiles_rd)
+	_surface_queries.set_own_waves(_own_wave_sims, slots)
+
+## An own-wave simulation for hulls within radius (m) of its center: the interaction
+## simulation's cells and settings on the smallest grid that holds them with a margin
+## inside its absorbing border; null (reported) if its GPU resources fail.
+func _create_own_wave_sim(radius : float) -> WaterInteractionSim:
+	var cells := 2.0 * radius / interaction_cell_size + 2.0 * (OWN_WAVE_SPONGE_CELLS + OWN_WAVE_MARGIN_CELLS)
+	var size := 64
+	while size < cells and size < OWN_WAVE_MAX_GRID_SIZE:
+		size *= 2
+	# Created after the interaction simulation started, its hulls arrive in cells with
+	# a history there: start from p = 0 too, so both radiate the same arrival.
+	var sim := WaterInteractionSim.new(RenderingServer.get_rendering_device(), size, interaction_cell_size, _interaction.step_count > 1)
+	if sim.has_failed():
+		push_error("OceanSystem %s: an own-wave simulation's GPU resources failed; that hull feels its own waves." % get_path())
+		sim.release()
+		return null
+	_apply_interaction_settings_to(sim)
+	sim.sponge_cells = OWN_WAVE_SPONGE_CELLS
+	return sim
+
+func _release_own_waves() -> void:
+	for sim in _own_wave_sims:
+		if sim != null:
+			sim.release()
+	_own_wave_sims.resize(OceanSurfaceQueries.OWN_WAVE_SLOTS)
+	_own_wave_sims.fill(null)
+	_own_wave_bodies.resize(OceanSurfaceQueries.OWN_WAVE_SLOTS)
+	_own_wave_bodies.fill(0)
+	if _surface_queries != null:
+		_surface_queries.clear_uniform_set_cache()
+		_surface_queries.set_own_waves(_own_wave_sims, {})
 
 ## The sky source's lighting and its optional extras (clouds, stars, planets,
 ## atmosphere), each falling back to the manual values or to none.
@@ -1243,6 +1329,9 @@ func _notification(what: int) -> void:
 		if _interaction != null:
 			_interaction_texture.texture_rd_rid = RID()
 			_interaction.release()
+		for sim in _own_wave_sims:
+			if sim != null:
+				sim.release()
 		# Null when the ocean was disabled for lack of a RenderingDevice.
 		if _surface_queries != null:
 			_surface_queries.retire()

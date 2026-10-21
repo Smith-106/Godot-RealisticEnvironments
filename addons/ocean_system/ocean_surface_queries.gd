@@ -20,11 +20,19 @@ const BYTES_PER_CASCADE := FLOATS_PER_CASCADE * 4
 const BYTES_PER_SAMPLE := 48
 const FLOATS_PER_SAMPLE := 12
 const NORMAL_SAMPLE_DISTANCE := 0.25
+## Own-wave simulations a dispatch can take out of the interaction waves (one per
+## wave-making body: OWN_WAVE_SLOTS in surface_query.glsl).
+const OWN_WAVE_SLOTS := WaterInteractionSim.MAX_HULLS
+## A point's mode (surface_query.glsl): the interaction waves masked under hulls, for
+## bodies that make no waves; k >= 0 instead takes own-wave simulation k out of them.
+const MODE_INTERACTION := -1
 
 class QuerySlot:
 	var capacity := 0
 	var point_buffer := RID()
+	var mode_buffer := RID()
 	var cascade_buffer := RID()
+	var own_window_buffer := RID()
 	var sample_buffer := RID()
 	## "current_rid:previous_rid" -> uniform set RID.
 	var uniform_sets := {}
@@ -40,11 +48,12 @@ var skipped_dispatch_count := 0
 ## The ocean's interaction simulation, or null while it is off: queries add its
 ## waves, impulses go to it.
 var interaction : WaterInteractionSim
+## Own-wave simulations by slot (null where free) and the slot of each body's
+## (body instance id -> slot), set by OceanSystem every simulation step.
+var _own_waves : Array[WaterInteractionSim] = []
+var _own_wave_slots := {}
 
 var _device : RenderingDevice
-## Callable(body : PhysicsBody3D) -> bool: whether body carries a hull that pushes
-## water in the interaction simulation (its queries leave those waves out).
-var _is_wave_making_body : Callable
 ## The ocean clock (s), advanced once per frame (advance_clock()), and the physics
 ## frame, interpolation fraction and physics step at that moment.
 var _clock := 0.0
@@ -54,12 +63,13 @@ var _physics_step := 0.0
 var _shader : RID
 var _pipeline : RID
 var _slots : Array[QuerySlot] = []
-var _queued := {}   # owner_id -> [PackedVector3Array points, bool include interaction]
+var _queued := {}   # owner_id -> [PackedVector3Array points, body instance id or 0]
 var _owners := {}   # owner_id -> true, for owners that have not been released
 var _results := {}  # owner_id -> WaterSurfaceQueryResult
 var _retired := false
-## Bound in place of the interaction render texture while the simulation is off.
+## Bound in place of the interaction render and rate textures while the simulation is off.
 var _no_interaction_texture : RID
+var _no_interaction_rate_texture : RID
 var _displacement_sampler : RID
 
 
@@ -69,9 +79,8 @@ static func create_displacement_sampler_state() -> RDSamplerState:
 	return RenderingContext.linear_sampler_state(RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT)
 
 
-func _init(device : RenderingDevice, is_wave_making_body : Callable) -> void:
+func _init(device : RenderingDevice) -> void:
 	_device = device
-	_is_wave_making_body = is_wave_making_body
 	var shader_file : RDShaderFile = load(SHADER_PATH)
 	var spirv := shader_file.get_spirv()
 	if spirv.compile_error_compute.is_empty():
@@ -88,13 +97,15 @@ func _init(device : RenderingDevice, is_wave_making_body : Callable) -> void:
 	var empty_texel := PackedByteArray()
 	empty_texel.resize(8)
 	_no_interaction_texture = _device.texture_create(texture_format, RDTextureView.new(), [empty_texel])
+	texture_format.format = RenderingDevice.DATA_FORMAT_R16_SFLOAT
+	_no_interaction_rate_texture = _device.texture_create(texture_format, RDTextureView.new(), [PackedByteArray([0, 0])])
 	_displacement_sampler = _device.sampler_create(create_displacement_sampler_state())
 
 
-## Heights include the interaction simulation's waves, except for points on a
-## body that makes waves itself: the simulation is one summed field, so such a
-## body cannot tell its own waves from others', and read back after the query
-## delay its own waves act as a lagging spring that drives it.
+## Heights and velocities include the interaction simulation's waves. A body that
+## makes waves itself feels them without its own (its own-wave simulation's): it
+## feels its own radiation through its buoyancy's damping and added mass, and read
+## back after the query delay its own waves would act as a lagging spring.
 func submit_query(query_owner : Object, points : PackedVector3Array, body : PhysicsBody3D = null) -> void:
 	if _retired:
 		push_error("Surface query submitted after the ocean was freed.")
@@ -106,7 +117,7 @@ func submit_query(query_owner : Object, points : PackedVector3Array, body : Phys
 		body = find_physics_body(query_owner)
 	var owner_id := query_owner.get_instance_id()
 	_owners[owner_id] = true
-	_queued[owner_id] = [points, body == null or not _is_wave_making_body.call(body)]
+	_queued[owner_id] = [points, body.get_instance_id() if body != null else 0]
 
 
 ## Latest completed result for query_owner, or null before its first one arrives.
@@ -159,6 +170,13 @@ func advance_clock(clock : float, physics_step : float) -> void:
 	_physics_step = physics_step
 
 
+## The own-wave simulations by slot (OWN_WAVE_SLOTS, null where free) and each
+## body's slot (body instance id -> slot).
+func set_own_waves(sims : Array[WaterInteractionSim], slots : Dictionary) -> void:
+	_own_waves = sims
+	_own_wave_slots = slots
+
+
 ## node itself or its nearest PhysicsBody3D ancestor, or null.
 static func find_physics_body(node : Node) -> PhysicsBody3D:
 	while node != null and not node is PhysicsBody3D:
@@ -184,27 +202,46 @@ func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedB
 		skipped_dispatch_count += 1
 		return
 
-	# Owners whose heights add the interaction simulation first: the shader adds it
-	# to the points before interaction_point_count.
 	var points := PackedVector3Array()
+	var modes := PackedInt32Array()
 	var requests : Array[Dictionary] = []
-	var interaction_enabled := interaction != null
-	var interaction_point_count := 0
-	for with_interaction in [true, false]:
-		for owner_id in _queued:
-			if _queued[owner_id][1] != with_interaction:
-				continue
-			var owner_points : PackedVector3Array = _queued[owner_id][0]
-			requests.push_back({"owner_id": owner_id, "offset": points.size(), "count": owner_points.size()})
-			points.append_array(owner_points)
-		if with_interaction and interaction_enabled:
-			interaction_point_count = points.size()
+	for owner_id in _queued:
+		var owner_points : PackedVector3Array = _queued[owner_id][0]
+		requests.push_back({"owner_id": owner_id, "offset": points.size(), "count": owner_points.size()})
+		points.append_array(owner_points)
+		var mode_values := PackedInt32Array()
+		mode_values.resize(owner_points.size())
+		mode_values.fill(_own_wave_slots.get(_queued[owner_id][1], MODE_INTERACTION))
+		modes.append_array(mode_values)
 	_queued.clear()
+
+	var interaction_enabled := interaction != null
+	# Each own-wave simulation's window: center x, z and its fade by Chebyshev
+	# distance, ending where its absorbing border begins.
+	var own_windows := PackedFloat32Array()
+	own_windows.resize(OWN_WAVE_SLOTS * 4)
+	var renders : Array[RID] = [interaction.render_texture if interaction_enabled else _no_interaction_texture]
+	var rates : Array[RID] = [interaction.rate_texture if interaction_enabled else _no_interaction_rate_texture]
+	for slot_index in OWN_WAVE_SLOTS:
+		var sim : WaterInteractionSim = _own_waves[slot_index] if interaction_enabled and slot_index < _own_waves.size() else null
+		renders.push_back(sim.render_texture if sim != null else _no_interaction_texture)
+		rates.push_back(sim.rate_texture if sim != null else _no_interaction_rate_texture)
+		if sim != null:
+			var center := sim.get_window_center()
+			var border := sim.sponge_cells * sim.cell_size
+			own_windows[4 * slot_index] = center.x
+			own_windows[4 * slot_index + 1] = center.y
+			own_windows[4 * slot_index + 2] = sim.get_half_extent() - 2.0 * border
+			own_windows[4 * slot_index + 3] = sim.get_half_extent() - border
 
 	_ensure_slot_capacity(slot, points.size(), cascade_data.size())
 	var point_data := points.to_byte_array()
 	_device.buffer_update(slot.point_buffer, 0, point_data.size(), point_data)
+	var mode_data := modes.to_byte_array()
+	_device.buffer_update(slot.mode_buffer, 0, mode_data.size(), mode_data)
 	_device.buffer_update(slot.cascade_buffer, 0, cascade_data.size(), cascade_data)
+	var window_data := own_windows.to_byte_array()
+	_device.buffer_update(slot.own_window_buffer, 0, window_data.size(), window_data)
 
 	var push_constant := RenderingContext.create_push_constant([
 		points.size(),
@@ -216,12 +253,10 @@ func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedB
 		interaction_cell_size,
 		interaction_window.z,
 		interaction_window.w,
-		interaction_point_count,
 	])
-	var interaction_texture := interaction.render_texture if interaction_enabled else _no_interaction_texture
 	var compute_list := _device.compute_list_begin()
 	_device.compute_list_bind_compute_pipeline(compute_list, _pipeline)
-	_device.compute_list_bind_uniform_set(compute_list, _get_uniform_set(slot, displacement_a, displacement_b, interaction_texture), 0)
+	_device.compute_list_bind_uniform_set(compute_list, _get_uniform_set(slot, displacement_a, displacement_b, renders, rates), 0)
 	_device.compute_list_set_push_constant(compute_list, push_constant, push_constant.size())
 	_device.compute_list_dispatch(compute_list, ceili(float(points.size()) / float(WORKGROUP_SIZE)), 1, 1)
 	_device.compute_list_end()
@@ -247,6 +282,7 @@ func retire() -> void:
 	for slot in _slots:
 		_free_slot_buffers(slot)
 	_device.free_rid(_no_interaction_texture)
+	_device.free_rid(_no_interaction_rate_texture)
 	_device.free_rid(_displacement_sampler)
 	if _shader.is_valid():
 		_device.free_rid(_shader)
@@ -293,7 +329,9 @@ func _ensure_slot_capacity(slot : QuerySlot, point_count : int, cascade_bytes : 
 		capacity *= 2
 	slot.capacity = capacity
 	slot.point_buffer = _device.storage_buffer_create(capacity * BYTES_PER_POINT)
+	slot.mode_buffer = _device.storage_buffer_create(capacity * 4)
 	slot.cascade_buffer = _device.storage_buffer_create(cascade_bytes)
+	slot.own_window_buffer = _device.storage_buffer_create(OWN_WAVE_SLOTS * 16)
 	slot.sample_buffer = _device.storage_buffer_create(capacity * BYTES_PER_SAMPLE)
 
 
@@ -302,23 +340,43 @@ func _free_slot_buffers(slot : QuerySlot) -> void:
 		return
 	# Uniform sets depend on these buffers and are freed with them.
 	_device.free_rid(slot.point_buffer)
+	_device.free_rid(slot.mode_buffer)
 	_device.free_rid(slot.cascade_buffer)
+	_device.free_rid(slot.own_window_buffer)
 	_device.free_rid(slot.sample_buffer)
 	slot.uniform_sets.clear()
 	slot.capacity = 0
 
 
-func _get_uniform_set(slot : QuerySlot, displacement_a : RID, displacement_b : RID, interaction_texture : RID) -> RID:
-	var key := "%d:%d:%d" % [displacement_a.get_id(), displacement_b.get_id(), interaction_texture.get_id()]
+## renders and rates: the interaction simulation's textures, then each own-wave slot's.
+func _get_uniform_set(slot : QuerySlot, displacement_a : RID, displacement_b : RID, renders : Array[RID], rates : Array[RID]) -> RID:
+	var ids := PackedStringArray([str(displacement_a.get_id()), str(displacement_b.get_id())])
+	for texture in renders + rates:
+		ids.push_back(str(texture.get_id()))
+	var key := ":".join(ids)
 	if slot.uniform_sets.has(key):
 		return slot.uniform_sets[key]
+	var own_render := RDUniform.new()
+	own_render.binding = 9
+	own_render.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	var own_rate := RDUniform.new()
+	own_rate.binding = 10
+	own_rate.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	for slot_index in OWN_WAVE_SLOTS:
+		own_render.add_id(renders[slot_index + 1])
+		own_rate.add_id(rates[slot_index + 1])
 	var uniforms : Array[RDUniform] = [
 		RenderingContext.buffer_uniform(0, slot.point_buffer),
 		RenderingContext.buffer_uniform(1, slot.cascade_buffer),
 		RenderingContext.buffer_uniform(2, slot.sample_buffer),
 		RenderingContext.sampled_uniform(3, _displacement_sampler, displacement_a),
 		RenderingContext.sampled_uniform(4, _displacement_sampler, displacement_b),
-		RenderingContext.image_uniform(5, interaction_texture),
+		RenderingContext.image_uniform(5, renders[0]),
+		RenderingContext.image_uniform(6, rates[0]),
+		RenderingContext.buffer_uniform(7, slot.mode_buffer),
+		RenderingContext.buffer_uniform(8, slot.own_window_buffer),
+		own_render,
+		own_rate,
 	]
 	var uniform_set := _device.uniform_set_create(uniforms, _shader, 0)
 	slot.uniform_sets[key] = uniform_set

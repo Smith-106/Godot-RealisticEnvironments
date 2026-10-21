@@ -216,8 +216,9 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `1 − transmittance` (same transmittance). Keep `depth_draw_always`,
   `cast_shadow` off and `mat_water.tres` `render_priority` below every other
   transparent material. Caustics only in the water (`caustic_light()`).
-- `WaveSpectrum.displacement_scale` 1 = physical JONSWAP height (demo uses
-  2). `whitecap` thresholds include it; retune them together. Foam is coverage averaged by
+- `WaveSpectrum.displacement_scale` 1 = physical JONSWAP height (the demo uses
+  1; higher makes waves steeper than water allows and over-stiff boats capsize).
+  `whitecap` thresholds include it (default 0.8 for 1); retune them together. Foam is coverage averaged by
   mips: no distance fades. `foam_detail.png` must stay uniformly distributed
   (regenerate with `generate_foam_detail.py`).
 - Surface queries are async: `submit_query` every tick, `get_query_result`
@@ -242,10 +243,18 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `cloud_screen_common.glslinc` → `cloud_trace.glsl`, `cloud_reconstruct.glsl`,
   `cloud_composite.glsl` (which also includes `atmosphere_common.glslinc`).
 - Interaction sim (`WaterInteractionSim`, runtime only) simulates `η = h + p`.
-  Render texture `(h, η, foam, hull coverage)`. Queries add `η · (1 −
-  coverage)`, except for owners on a wave-making body, which read FFT waves
-  only (own waves fed back make it oscillate). Don't add a geometric own-wave
-  mask. Steps per physics tick or at `interaction_steps_per_second`.
+  Render texture `(h, η, foam, hull coverage)`, rate texture `dη/dt`. Queries
+  add `η · (1 − coverage)` to the height and its rate to the surface velocity
+  (bodies move with a wake's water). A wave-making body instead reads `η` minus
+  its own waves (unmasked): `OceanSystem` runs one small own-wave
+  `WaterInteractionSim` per such body (≤ `OceanSurfaceQueries.OWN_WAVE_SLOTS`),
+  forced by its hulls alone on the same cells and steps, following it. Its own
+  waves fed back would make it oscillate, and its own radiation is already its
+  buoyancy's damping and added mass. Keep the own-wave sims' dynamics and
+  forcing identical to the main sim's. Don't add a geometric own-wave mask.
+  Steep simulated waves break (`iwave_step.glsl`: damping above the Stokes
+  slope 0.44 of the visible `h`, measured only between open-water cells, since
+  a hull edge is a step, not a crest); foam comes from that slope too. Steps per physics tick or at `interaction_steps_per_second`.
   `interaction_grid_size` is a power of two ≤ 1024 (exact FFT of `g·|k|`).
 - `HullProfile` images are RGBA16F; changing channels means re-baking all
   profiles (one texture array format).

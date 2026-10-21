@@ -20,8 +20,9 @@ class_name WaveCascade extends Resource
 @export_group("Foam")
 ## Foam forms where the Jacobian of the drawn surface (WaveSpectrum.displacement_scale
 ## included) drops below this value: 1 is flat, lower is compressed into a crest, 0
-## and below folds over. Higher values put foam on gentler crests.
-@export_range(-1.0, 1.5, 0.01) var whitecap := 0.5
+## and below folds over. Higher values put foam on gentler crests. 0.8 gives about the
+## whitecaps of a real sea (WaveSpectrum.displacement_scale 1): scattered at 10 m/s.
+@export_range(-1.0, 1.5, 0.01) var whitecap := 0.8
 ## Foam coverage added per second for each unit the Jacobian is below whitecap.
 ## Higher values whiten a crest faster.
 @export_range(0.0, 100.0, 0.1, "or_greater") var foam_generation := 10.0

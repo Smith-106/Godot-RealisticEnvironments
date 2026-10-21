@@ -36,7 +36,8 @@ Requires `core` and a `RenderingDevice` (Forward+). Without one
   the sun's highlight, and the scene (screen-space or planar).
 - **Wakes and splashes.** An iWave simulation runs on a window around the
   camera (by default 512 × 512 cells of 0.5 m). Hulls (`HullWaterFootprint`)
-  push water in it, which makes Kelvin wakes, bow waves and wake foam.
+  push water in it, which makes Kelvin wakes, bow waves and wake foam. Waves
+  steeper than water can hold break: they lose their excess energy and foam.
   `add_impulse()` adds splash rings. Water inside nearby hulls is cut out.
 - **Water queries.** The ocean registers a `WaterSurface` (see `core`). All
   queries in a frame go to the GPU in one dispatch. They sample the same
@@ -62,7 +63,7 @@ The sea lies at `water_level`. The node's own transform is ignored.
 | Group | Contents |
 | --- | --- |
 | `water_level` | Height of the still water. |
-| Waves | `spectrum`: wind (used without a wind source), `fetch_length` (the sea stops growing once fully developed), `water_depth`, `swell`, `spread`, `detail`, `displacement_scale` (1 = physical height; the demo uses 2), and how fast the sea follows changes. Save one as a `.tres` to reuse a sea state. `cascades` (at most 8): `tile_length`, plus foam (`whitecap`, `foam_generation`, `foam_lifetime`). Use tile lengths that don't divide each other, the largest at least 1.5 times the peak wavelength (the ocean warns otherwise). Retune `whitecap` after changing `displacement_scale`. |
+| Waves | `spectrum`: wind (used without a wind source), `fetch_length` (the sea stops growing once fully developed), `water_depth`, `swell`, `spread`, `detail`, `displacement_scale` (1 = physical height, as the demo uses), and how fast the sea follows changes. Save one as a `.tres` to reuse a sea state. `cascades` (at most 8): `tile_length`, plus foam (`whitecap`, `foam_generation`, `foam_lifetime`). Use tile lengths that don't divide each other, the largest at least 1.5 times the peak wavelength (the ocean warns otherwise). Retune `whitecap` after changing `displacement_scale`. |
 | Water | `water_absorption`, `water_scattering`, `water_scattering_anisotropy`: the only source of the water's colour. |
 | Surface | `clear_roughness`, `short_wave_slope_scale` (wind ripples too small to simulate), `normal_scale` (1 = physical slopes). |
 | Foam | `foam_color`, `foam_intensity`, `foam_roughness`, the foam pattern texture and its tile size. |
@@ -93,9 +94,11 @@ nearest hulls get cutouts, and only the 32 nearest make wakes.
 ### Water queries and splashes
 
 Use `WaterSurface.find(node)` from `core` (its README has the example), never
-`OceanSystem`. Bodies with their own `HullWaterFootprint` read only the FFT
-waves, not the wakes they make themselves. Up to 64 splashes per simulation
-step are accepted.
+`OceanSystem`. Every body feels the same waves: the swell plus every wake and
+splash, heights and the water's motion. A body with its own `HullWaterFootprint`
+feels all of them but its own waves: a small simulation forced by its hulls alone
+takes them out (its own waves act on it only as its buoyancy's radiation damping
+and added mass). Up to 64 splashes per simulation step are accepted.
 
 ### Sky source
 

@@ -29,7 +29,8 @@
   天空（连同云、星星、行星和大气）、太阳高光和场景（屏幕空间或平面反射）。
 - **尾迹和水花。** 一个 iWave 模拟在相机周围的窗口中运行（默认 512 × 512 个
   0.5 米的格子）。船体（`HullWaterFootprint`）在其中推动水，形成开尔文尾迹、艏波
-  和尾迹泡沫。`add_impulse()` 产生一圈圈水花波纹。附近船体内部的水会被挖空。
+  和尾迹泡沫。比水所能承受的更陡的波会破碎：失去多余的能量并产生泡沫。
+  `add_impulse()` 产生一圈圈水花波纹。附近船体内部的水会被挖空。
 - **水面查询。** 海洋注册一个 `WaterSurface`（见 `core`）。一帧中的所有查询在一次
   GPU 派发中完成。它们采样的就是画出来的水面（包括尾迹），结果异步回读。
 
@@ -52,7 +53,7 @@
 | 分组 | 内容 |
 | --- | --- |
 | `water_level` | 静水面的高度。 |
-| Waves | `spectrum`：风（没有风源时使用）、`fetch_length`（风区长度；海况充分成长后不再增长）、`water_depth`、`swell`、`spread`、`detail`、`displacement_scale`（1 = 物理浪高；演示场景用 2），以及海面跟随变化的快慢。可以把它另存为 `.tres` 来复用一种海况。`cascades`（最多 8 个）：`tile_length`，以及泡沫设置（`whitecap`、`foam_generation`、`foam_lifetime`）。平铺长度之间不要互为整数倍，最大的至少为峰值波长的 1.5 倍（否则海洋会发出警告）。修改 `displacement_scale` 后要重新调整 `whitecap`。 |
+| Waves | `spectrum`：风（没有风源时使用）、`fetch_length`（风区长度；海况充分成长后不再增长）、`water_depth`、`swell`、`spread`、`detail`、`displacement_scale`（1 = 物理浪高，演示场景也用 1），以及海面跟随变化的快慢。可以把它另存为 `.tres` 来复用一种海况。`cascades`（最多 8 个）：`tile_length`，以及泡沫设置（`whitecap`、`foam_generation`、`foam_lifetime`）。平铺长度之间不要互为整数倍，最大的至少为峰值波长的 1.5 倍（否则海洋会发出警告）。修改 `displacement_scale` 后要重新调整 `whitecap`。 |
 | Water | `water_absorption`、`water_scattering`、`water_scattering_anisotropy`：水的颜色只由它们决定。 |
 | Surface | `clear_roughness`、`short_wave_slope_scale`（小到无法模拟的风生涟漪）、`normal_scale`（1 = 物理斜率）。 |
 | Foam | `foam_color`、`foam_intensity`、`foam_roughness`、泡沫纹理及其平铺尺寸。 |
@@ -81,8 +82,10 @@ uniform（1–15），可以单独显示某一项着色。
 ### 水面查询和水花
 
 使用 `core` 中的 `WaterSurface.find(node)`（示例见它的 README），不要直接访问
-`OceanSystem`。带有自己 `HullWaterFootprint` 的物体只读取 FFT 海浪，不读取自己激起的
-尾迹。每个模拟步最多接受 64 个水花。
+`OceanSystem`。所有物体感受到的是同一片海：涌浪加上所有尾迹和水花，包括水面高度和水的
+运动。带有自己 `HullWaterFootprint` 的物体感受除自身波浪以外的一切：一个只由它的船体
+驱动的小型模拟把它自己的波浪减掉（自身波浪只以浮力中的辐射阻尼和附加质量作用于它）。
+每个模拟步最多接受 64 个水花。
 
 ### 天空源
 

@@ -28,7 +28,7 @@ own. They connect through small contracts instead of each other's types.
 | [`buoyancy_system`](addons/buoyancy_system/README.md) | Floats rigid bodies with probes that sample the water. Also contact events and sinking. |
 | [`hitbox_damage_system`](addons/hitbox_damage_system/README.md) | Projectile hitboxes and health per group (e.g. hull, mast). |
 | [`ocean_environment`](addons/ocean_environment/README.md) | Wind, sky, ocean and exposure in one ready-wired scene. |
-| [`boat_template`](addons/boat_template/README.md) | A ready-wired boat: driving, buoyancy, sinking, health, wake and spray. |
+| [`boat_template`](addons/boat_template/README.md) | A ready-wired boat: driving, buoyancy, sinking, health and wake. |
 
 ```
 WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---> ExposureController
@@ -38,7 +38,7 @@ WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---
                           v
       WaterSurface (core): async height queries, splashes
                           ^
-      BuoyantBody, BowSpray: submit points every physics tick
+      BuoyantBody: submits points every physics tick
 ```
 
 - The ocean and the sky render with compute shaders on the GPU each frame:

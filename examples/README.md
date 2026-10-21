@@ -38,8 +38,7 @@ flat side up, so it rocks onto an edge, as a real one does.
    **Generate All Probes**.
 4. `HullWaterFootprint`: `bake_source_paths` → `Model`, then **Bake Profile**
    (saved as `simple_boat_hull_profile.tres`).
-5. `BowSpray` was moved to the stem at the waterline, and `CameraTargets` onto
-   the boat.
+5. `CameraTargets` was moved onto the boat.
 
 `boat.tscn` turns on `player_controlled` for the boat it drives. The Boat
 Template plugin adds the W A S D actions.

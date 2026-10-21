@@ -15,8 +15,8 @@
  * turns its motion into the bow crest and divergent waves.
  *
  * Also writes hull coverage (1 inside a hull's waterline and up to one edge
- * softness beyond it, fading out by two) and packs eta_n into the complex
- * spectrum texture for the FFT that follows.
+ * softness beyond it, fading out by two), whether the cell is inside a waterline,
+ * and packs eta_n into the complex spectrum texture for the FFT that follows.
  */
 
 #include "iwave_common.glslinc"
@@ -50,7 +50,8 @@ struct SimHull {
 	vec4 angular_velocity; // world angular velocity (rad/s), unused
 };
 
-// x = pressure head p (m), y = hull coverage, z = bow-wave rise outside hulls (m, foam source).
+// x = pressure head p (m), y = hull coverage, z = bow-wave rise outside hulls (m, foam source),
+// w = 1 inside a hull's waterline, else 0.
 layout(rgba32f, set = 0, binding = 0) restrict writeonly uniform image2D pressure;
 layout(rg32f, set = 0, binding = 1) restrict writeonly uniform image2D spectrum;
 layout(rgba32f, set = 0, binding = 2) restrict readonly uniform image2D state;
@@ -71,6 +72,7 @@ void main() {
 	float pressure_head = 0.0;
 	float coverage = 0.0;
 	float bow_rise_outside = 0.0;
+	float inside_waterline = 0.0;
 	bool has_surface = false;
 	float surface_y = 0.0;
 	for (uint i = 0U; i < hull_count; ++i) {
@@ -105,6 +107,9 @@ void main() {
 		// it there). It includes a band outside the waterline, where buoyancy
 		// probes on the hull edge sit and the hull's own bow wave is strongest.
 		coverage = max(coverage, 1.0 - smoothstep(edge_softness, 2.0 * edge_softness, -inside_distance));
+		if (inside_distance > 0.0) {
+			inside_waterline = 1.0;
+		}
 
 		// Bow wave: stagnation rise where the waterline wall moves into the water.
 		float bow_strength = hull.wake.z;
@@ -143,6 +148,6 @@ void main() {
 		pressure_head += hull.wake.x * draft * taper;
 	}
 
-	imageStore(pressure, texel, vec4(pressure_head, coverage, bow_rise_outside, 0.0));
+	imageStore(pressure, texel, vec4(pressure_head, coverage, bow_rise_outside, inside_waterline));
 	imageStore(spectrum, texel, vec4(imageLoad(state, texel).x, 0.0, 0.0, 0.0));
 }

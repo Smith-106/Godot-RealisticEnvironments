@@ -21,6 +21,12 @@ const EPSILON := 0.0001
 const RASTER_PER_COLUMN := 6
 ## Height bands of each column's area_profile.
 const PROFILE_BANDS := 8
+## Roll radius of gyration as a share of the beam, for the report's roll period when
+## the body's inertia is computed by the engine (most hulls: 0.35-0.45).
+const ROLL_GYRATION_SHARE_OF_BEAM := 0.35
+## Metacentric height across, as a share of the beam, above which the report warns
+## that the body is too stiff.
+const MAX_STIFF_GM_SHARE_OF_BEAM := 0.5
 ## Water density (kg/m³) of the report without a BuoyantBody on the body.
 const DEFAULT_WATER_DENSITY := 1025.0
 
@@ -394,6 +400,9 @@ func _get_configuration_warnings() -> PackedStringArray:
 	var gm : Vector2 = h["metacentric_height"]
 	if gm.x <= 0.0 or gm.y <= 0.0:
 		warnings.push_back("Unstable upright: its metacentric height is %.2f m across and %.2f m along, so it rolls over and floats tilted or on its side (as a light cube or a log does). For a hull that should float upright, lower the body's center_of_mass (custom mode) or widen the hull." % [gm.x, gm.y])
+	# Only for hulls wider than tall: a ballasted spar (a buoy) is stiff by design.
+	elif gm.x > MAX_STIFF_GM_SHARE_OF_BEAM * h["beam"] and h["hull_height"] < h["beam"]:
+		warnings.push_back("Very stiff: its metacentric height across is %.2f m, %.2f x its beam (ships about 0.05-0.3, small open boats up to about 0.45), so it rolls in %.1f s and snaps to every wave. Raise the body's center_of_mass (custom mode) to where its load really is: cargo, rig, crew." % [gm.x, gm.x / h["beam"], h["roll_period"]])
 	if absf(h["heel_degrees"]) > 2.0 or absf(h["trim_degrees"]) > 3.0:
 		var center : Vector3 = h["buoyancy_center"]
 		warnings.push_back("Floats heeled %.1f and trimmed %.1f degrees: its centre of mass is off the hull's centre of buoyancy. To float level, set the body's center_of_mass (custom mode) to x = %.2f, z = %.2f." % [h["heel_degrees"], h["trim_degrees"], center.x, center.z])
@@ -1079,16 +1088,30 @@ func _get_hydrostatics() -> Dictionary:
 		flotation += Vector2(positions[p].x, positions[p].z) * section
 	buoyancy_center /= maxf(volume, EPSILON)
 	flotation /= maxf(area, EPSILON)
-	# The waterplane's second moments about its centre (each column a square of its area).
+	# The waterplane's second moments about its centre (each column a square of its
+	# area), and its beam (across the body's x axis).
 	var inertia := Vector2.ZERO
+	var beam_extent := Vector2(INF, -INF)
 	for p in probes.size():
 		var section := BuoyancyProbeNode.area_at(probes[p].area_profile, probes[p].height, waterline - positions[p].y)
 		var offset := Vector2(positions[p].x, positions[p].z) - flotation
 		inertia += section * (offset * offset + Vector2.ONE * section / 12.0)
+		if section > 0.0:
+			var half_width := 0.5 * sqrt(section)
+			beam_extent = Vector2(minf(beam_extent.x, positions[p].x - half_width), maxf(beam_extent.y, positions[p].x + half_width))
+	var beam := maxf(beam_extent.y - beam_extent.x, EPSILON)
 	var center_of_mass := body.center_of_mass if body.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM else Vector3.ZERO
 	# Metacentric heights GM = KB + BM - KG, across (roll) and along (pitch).
 	var metacentric := Vector2.ONE * (buoyancy_center.y - center_of_mass.y) + inertia / maxf(volume, EPSILON)
+	# Natural roll period 2π·k / √(g·GM): k the roll radius of gyration, from the body's
+	# inertia when it is set, else about 0.35 of the beam as for most hulls.
+	var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity"))
+	var roll_inertia := body.inertia.z if body.inertia.z > 0.0 else 0.0
+	var gyration := sqrt(roll_inertia / body.mass) if roll_inertia > 0.0 else ROLL_GYRATION_SHARE_OF_BEAM * beam
 	result.merge({
+		"beam": beam,
+		"roll_period": TAU * gyration / sqrt(gravity * metacentric.x) if metacentric.x > 0.0 else INF,
+		"roll_inertia_estimated": roll_inertia <= 0.0,
 		"waterline": waterline,
 		"waterline_local": waterline - (to_body * global_position).y,
 		"draft": waterline - bottom,
@@ -1118,7 +1141,11 @@ func get_hydrostatics_report() -> String:
 	if not h.has("waterline"):
 		return "Sinks: the hull displaces at most %.0f kg of water, less than the body's %.0f kg." % [h["capacity"], h["mass"]]
 	var gm : Vector2 = h["metacentric_height"]
-	return "Floats with its waterline at local y = %.3f m: draft %.2f m, freeboard %.2f m, reserve buoyancy %.1f x its mass, metacentric height %.2f m across and %.2f m along, heel %.1f, trim %.1f degrees." % [h["waterline_local"], h["draft"], h["freeboard"], h["capacity"] / h["mass"], gm.x, gm.y, h["heel_degrees"], h["trim_degrees"]]
+	# The beam-based inertia estimate holds for hulls, not for tall bodies (a spar buoy).
+	var roll := ""
+	if not h["roll_inertia_estimated"] or h["hull_height"] < h["beam"]:
+		roll = ", roll period %.1f s%s" % [h["roll_period"], " (inertia estimated)" if h["roll_inertia_estimated"] else ""]
+	return "Floats with its waterline at local y = %.3f m: draft %.2f m, freeboard %.2f m, reserve buoyancy %.1f x its mass, metacentric height %.2f m across (%.2f x the beam) and %.2f m along%s, heel %.1f, trim %.1f degrees." % [h["waterline_local"], h["draft"], h["freeboard"], h["capacity"] / h["mass"], gm.x, gm.x / h["beam"], gm.y, roll, h["heel_degrees"], h["trim_degrees"]]
 
 
 func _find_rigid_body() -> RigidBody3D:

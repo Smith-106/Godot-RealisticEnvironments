@@ -3,8 +3,7 @@
 **English** · [简体中文](README.zh-CN.md)
 
 `boat.tscn` is a boat with all the systems already wired: driving, buoyancy and
-sinking, hit health, hull cutout and wake, bow spray, and camera
-anchors. To make a boat, create an **inherited scene** from it.
+sinking, hit health, hull cutout and wake, and camera anchors. To make a boat, create an **inherited scene** from it.
 
 Requires `core`, `ocean_system`, `sky_system` (the spray is hazed by its
 atmosphere), `buoyancy_system` and `hitbox_damage_system`. When enabled, the
@@ -21,8 +20,7 @@ Boat (RigidBody3D, FloatingBoat)   drive input, model animation
 │  └─ GeneratedProbes         empty: generate probes for each boat
 ├─ Hitboxes                   HitboxHealthManager (one "hull" group, 100 HP)
 ├─ HullWaterFootprint         cutout and wake: bake a profile for each boat
-├─ CameraTargets/ThirdPersonFocus, FirstPersonSeat
-└─ BowSpray                   stem spray and slam splashes
+└─ CameraTargets/ThirdPersonFocus, FirstPersonSeat
 ```
 
 - **`FloatingBoat`** (the root) pushes the boat forward and turns it while
@@ -33,10 +31,8 @@ Boat (RigidBody3D, FloatingBoat)   drive input, model animation
   that are not player-controlled still float, take damage, sink and make wakes.
 - Buoyancy, health and the wake come from the other addons' nodes (see their
   READMEs). Destroying the `hull` group sinks the boat.
-- **`BowSpray`** reads the water at the stem. While the stem cuts through the
-  water it throws sheets of droplets. When the bow slams down into a wave it
-  shoots jets of spray, adds a splash ring to the water and emits
-  `slammed(impact_speed, position)`.
+- **`BowSpray`** (`bow_spray.gd`, stem spray and slam splashes) is in the addon
+  but not in the template for now.
 
 ## How to use
 
@@ -52,9 +48,7 @@ Boat (RigidBody3D, FloatingBoat)   drive input, model animation
 5. Add `ProjectileHitbox` areas under `Hitboxes`, and list their groups in
    `group_max_health`. Add a group to `BuoyantBody.sink_on_destroyed_groups`
    if losing it should sink the boat.
-6. Move `CameraTargets/*` onto the deck, and `BowSpray` to the stem just below
-   the waterline. Set `emission_half_width` to about half the bow's width, and
-   raise `particle_size` for large ships.
+6. Move `CameraTargets/*` onto the deck.
 7. Optional: `animation_player_path` and `autoplay_animation` loop a model
    animation (e.g. sails).
 8. Turn on `player_controlled` on the boat the player drives.

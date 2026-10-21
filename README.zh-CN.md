@@ -27,7 +27,7 @@
 | [`buoyancy_system`](addons/buoyancy_system/README.zh-CN.md) | 用采样水面的探针让刚体漂浮；还有接触事件和沉没。 |
 | [`hitbox_damage_system`](addons/hitbox_damage_system/README.zh-CN.md) | 投射物受击区和按分组的生命值（例如船体、桅杆）。 |
 | [`ocean_environment`](addons/ocean_environment/README.zh-CN.md) | 把风、天空、海洋和曝光放在一个接好线的场景里。 |
-| [`boat_template`](addons/boat_template/README.zh-CN.md) | 接好线的船：驾驶、浮力、沉没、生命值、尾迹和浪花。 |
+| [`boat_template`](addons/boat_template/README.zh-CN.md) | 接好线的船：驾驶、浮力、沉没、生命值和尾迹。 |
 
 ```
 WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---> ExposureController
@@ -37,7 +37,7 @@ WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---
                           v
       WaterSurface (core): async height queries, splashes
                           ^
-      BuoyantBody, BowSpray: submit points every physics tick
+      BuoyantBody: submits points every physics tick
 ```
 
 - 风（`WindSystem`）驱动海浪和云的漂移；天空（`SkySystem`）为海洋提供太阳、天空、云和

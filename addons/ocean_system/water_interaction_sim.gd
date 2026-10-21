@@ -12,7 +12,7 @@ extends RefCounted
 ##   2. FFT -> multiply by g|k| (exact deep-water dispersion) -> inverse FFT
 ##   3. step: time integration, viscosity, absorbing border, foam, render texture
 ## render_texture (rgba16f: h, eta, foam, hull coverage) is sampled by the water
-## material and the surface query shader.
+## material and the surface query shader, rate_texture (eta's rate) by the latter.
 
 const SHADER_DIR := 'res://addons/ocean_system/shaders/compute/'
 const WORKGROUP_SIZE := 16
@@ -36,10 +36,15 @@ var grid_size : int
 var cell_size : float
 ## rgba16f: x = visible offset h, y = eta (h + p), z = foam, w = hull coverage.
 var render_texture : RID
+## r16f: the rate (m/s) eta changed at over the last step, the simulated waves'
+## vertical surface velocity outside hulls.
+var rate_texture : RID
 ## Integer cell coordinate of the window's first cell.
 var window_origin := Vector2i.ZERO
 ## Impulses dropped because MAX_IMPULSES were already queued for a step.
 var dropped_impulse_count := 0
+## Steps taken so far.
+var step_count := 0
 
 var _context : RenderingContext
 var _device : RenderingDevice
@@ -71,7 +76,9 @@ var _pending_impulses := PackedVector4Array()
 
 
 ## OceanSystem validates size and meters_per_cell; check has_failed() afterwards.
-func _init(device : RenderingDevice, size : int, meters_per_cell : float) -> void:
+## Without pressure_history the cells start with none, so hulls already in them
+## radiate nothing; with it they start from p = 0, so they radiate as if just arrived.
+func _init(device : RenderingDevice, size : int, meters_per_cell : float, pressure_history := false) -> void:
 	assert(size >= 64 and size <= 1024 and (size & (size - 1)) == 0, "Interaction grid size must be a power of two in 64..1024.")
 	assert(meters_per_cell > 0.0, "Interaction cell size must be positive.")
 	grid_size = size
@@ -88,17 +95,22 @@ func _init(device : RenderingDevice, size : int, meters_per_cell : float) -> voi
 	var storage := RenderingDevice.TEXTURE_USAGE_STORAGE_BIT
 	var empty_state := PackedFloat32Array()
 	empty_state.resize(size * size * 4)
-	for i in range(2, empty_state.size(), 4):
-		# Fresh cells have no pressure history (IWAVE_NO_PRESSURE in iwave_common.glslinc).
-		empty_state[i] = -1.0e30
-		empty_state[i + 1] = -1.0e30
+	if not pressure_history:
+		for i in range(2, empty_state.size(), 4):
+			# Fresh cells have no pressure history (IWAVE_NO_PRESSURE in iwave_common.glslinc).
+			empty_state[i] = -1.0e30
+			empty_state[i + 1] = -1.0e30
 	for i in 2:
 		_states.push_back(_context.create_texture(dims, RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, storage, 0, [empty_state.to_byte_array()]).rid)
 	_pressure = _context.create_texture(dims, RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, storage).rid
 	_spectrum = _context.create_texture(dims, RenderingDevice.DATA_FORMAT_R32G32_SFLOAT, storage).rid
 	var empty_render := PackedByteArray()
 	empty_render.resize(size * size * 8)
-	render_texture = _context.create_texture(dims, RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, storage | RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT, 0, [empty_render]).rid
+	# Copyable: debugging tools read the wave field back (texture_get_data()).
+	render_texture = _context.create_texture(dims, RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, storage | RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT, 0, [empty_render]).rid
+	var empty_rate := PackedByteArray()
+	empty_rate.resize(size * size * 2)
+	rate_texture = _context.create_texture(dims, RenderingDevice.DATA_FORMAT_R16_SFLOAT, storage, 0, [empty_rate]).rid
 
 	_hull_buffer = _context.create_storage_buffer(MAX_HULLS * FLOATS_PER_HULL * 4).rid
 	_cascade_buffer = _context.create_storage_buffer(OceanSystem.MAX_CASCADES * OceanSurfaceQueries.BYTES_PER_CASCADE).rid
@@ -124,6 +136,7 @@ func _init(device : RenderingDevice, size : int, meters_per_cell : float) -> voi
 			RenderingContext.image_uniform(2, _pressure),
 			RenderingContext.image_uniform(3, _spectrum),
 			RenderingContext.image_uniform(4, render_texture),
+			RenderingContext.image_uniform(5, rate_texture),
 		]))
 	_fft_set = _create_set('iwave_fft', [RenderingContext.image_uniform(0, _spectrum)])
 	_operator_set = _create_set('iwave_operator', [RenderingContext.image_uniform(0, _spectrum)])
@@ -208,6 +221,7 @@ func step(dt : float, camera_position : Vector3, hull_data : PackedFloat32Array,
 	_device.compute_list_add_barrier(compute_list)
 	_current = 1 - _current
 	_device.compute_list_end()
+	step_count += 1
 	_pending_impulses.clear()
 
 

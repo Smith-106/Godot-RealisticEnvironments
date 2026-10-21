@@ -97,8 +97,9 @@ func get_profile_layer(profile : HullProfile) -> int:
 
 ## SimHull records (iwave_pressure.glsl, WaterInteractionSim.FLOATS_PER_HULL each) of up
 ## to WaterInteractionSim.MAX_HULLS wake-enabled hulls in tree within reach (m,
-## horizontally) of camera_position, nearest first.
-func pack_interaction_hulls(tree : SceneTree, camera_position : Vector3, reach : float) -> PackedFloat32Array:
+## horizontally) of camera_position, nearest first. bodies receives each record's
+## PhysicsBody3D (null for a footprint on none).
+func pack_interaction_hulls(tree : SceneTree, camera_position : Vector3, reach : float, bodies : Array[PhysicsBody3D]) -> PackedFloat32Array:
 	var candidates : Array[Dictionary] = []
 	for node in tree.get_nodes_in_group(&"ocean_hull"):
 		var footprint := node as HullWaterFootprint
@@ -111,8 +112,10 @@ func pack_interaction_hulls(tree : SceneTree, camera_position : Vector3, reach :
 	candidates.sort_custom(func(a : Dictionary, b : Dictionary) -> bool: return a["distance"] < b["distance"])
 
 	var data := PackedFloat32Array()
+	bodies.clear()
 	for i in mini(candidates.size(), WaterInteractionSim.MAX_HULLS):
 		var footprint : HullWaterFootprint = candidates[i]["footprint"]
+		bodies.push_back(OceanSurfaceQueries.find_physics_body(footprint))
 		var sphere : Vector4 = candidates[i]["sphere"]
 		var profile := footprint.profile
 		var center := Vector3(sphere.x, sphere.y, sphere.z)
