@@ -18,6 +18,9 @@ const SPECTRUM_SLOT_COUNT := WaveCascadeState.SLOT_COUNT
 ## Mip levels mip_chain.glsl builds per dispatch (a 16 x 16 workgroup halves a 32 x 32
 ## tile five times).
 const MIP_LEVELS_PER_DISPATCH := 5
+## Spectra transformed per slot (fft_compute.glsl, transpose.glsl): displacement and
+## its derivatives, packed in pairs into complex fields (spectrum_modulate.glsl).
+const SPECTRA_PER_SLOT := 4
 
 var map_size : int
 ## Check context.failed after init_gpu().
@@ -79,7 +82,7 @@ func init_gpu(size : int, num_cascades : int) -> void:
 	descriptors[&'spectrum'] = context.create_texture(dims, RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT, spectrum_layer_capacity)
 	descriptors[&'butterfly_factors'] = context.create_storage_buffer(num_fft_stages*map_size * 4 * 4)         # Size: (#FFT stages * map size * sizeof(vec4))
 	# One region per spectrum slot, not per layer: cascades are transformed one after another.
-	descriptors[&'fft_buffer'] = context.create_storage_buffer(SPECTRUM_SLOT_COUNT * map_size*map_size * 4*2 * 2 * 4) # Size: (slots * map size^2 * 4 FFTs * 2 temp buffers (for Stockham FFT) * sizeof(vec2))
+	descriptors[&'fft_buffer'] = context.create_storage_buffer(SPECTRUM_SLOT_COUNT * map_size*map_size * SPECTRA_PER_SLOT * 2 * 8) # Size: (slots * map size^2 * spectra * 2 temp buffers (for Stockham FFT) * sizeof(vec2))
 	output_descriptors.clear()
 	unpack_sets.clear()
 	mip_sets.clear()
@@ -89,7 +92,7 @@ func init_gpu(size : int, num_cascades : int) -> void:
 		var normal_map := context.create_texture(dims, RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, output_usage, spectrum_layer_capacity, [], mip_count)
 		# Start from zero: a cascade's first update reads the other output's foam,
 		# and until its second update the other output (sampled, with weight 0, by
-		# the interaction simulation and surface queries) was never written.
+		# the surface queries) was never written.
 		# Uninitialized memory can hold NaN, which nothing recovers from.
 		context.device.texture_clear(displacement_map.rid, Color(0, 0, 0, 0), 0, mip_count, 0, spectrum_layer_capacity)
 		context.device.texture_clear(normal_map.rid, Color(0, 0, 0, 0), 0, mip_count, 0, spectrum_layer_capacity)
@@ -144,8 +147,8 @@ func init_gpu(size : int, num_cascades : int) -> void:
 	pipelines[&'spectrum_compute'] = context.create_pipeline([groups_16, groups_16, 1], [spectrum_compute_set], spectrum_compute_shader)
 	pipelines[&'spectrum_modulate'] = context.create_pipeline([groups_16, groups_16, 1], [spectrum_modulate_set, fft_buffer_set], spectrum_modulate_shader)
 	pipelines[&'fft_butterfly'] = context.create_pipeline([butterfly_groups, num_fft_stages, 1], [fft_butterfly_set], fft_butterfly_shader)
-	pipelines[&'fft_compute'] = context.create_pipeline([1, map_size, 4], [fft_compute_set], fft_compute_shader)
-	pipelines[&'transpose'] = context.create_pipeline([groups_32, groups_32, 4], [transpose_set], transpose_shader)
+	pipelines[&'fft_compute'] = context.create_pipeline([1, map_size, SPECTRA_PER_SLOT], [fft_compute_set], fft_compute_shader)
+	pipelines[&'transpose'] = context.create_pipeline([groups_32, groups_32, SPECTRA_PER_SLOT], [transpose_set], transpose_shader)
 	pipelines[&'fft_unpack'] = context.create_pipeline([groups_16, groups_16, 1], [unpack_sets[0][0], fft_buffer_set], fft_unpack_shader)
 	var mip_pipelines : Array[Callable] = []
 	for step in mip_steps:
@@ -189,12 +192,13 @@ func _update_spectrum_slot(compute_list : int, cascade_index : int, slot : int, 
 	context.compute_list_add_barrier(compute_list)
 
 	## --- WAVE SPECTRA INVERSE FOURIER TRANSFORM ---
-	var fft_push_constant := RenderingContext.create_push_constant([slot])
+	var fft_push_constant := RenderingContext.create_push_constant([slot, SPECTRA_PER_SLOT, 1.0])
+	var transpose_push_constant := RenderingContext.create_push_constant([slot, SPECTRA_PER_SLOT])
 	# Note: We need not do a second transpose after computing FFT on rows since rotating the wave by
 	#       PI/2 doesn't affect it visually.
 	pipelines[&'fft_compute'].call(context, compute_list, fft_push_constant)
 	context.compute_list_add_barrier(compute_list)
-	pipelines[&'transpose'].call(context, compute_list, fft_push_constant)
+	pipelines[&'transpose'].call(context, compute_list, transpose_push_constant)
 	context.compute_list_add_barrier(compute_list)
 	pipelines[&'fft_compute'].call(context, compute_list, fft_push_constant)
 	context.compute_list_add_barrier(compute_list)

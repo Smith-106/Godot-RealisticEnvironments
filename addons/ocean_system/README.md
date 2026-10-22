@@ -3,8 +3,8 @@
 **English** · [简体中文](README.zh-CN.md)
 
 An open ocean for Godot 4.8 Forward+. It has wind-driven FFT waves out to a
-curved horizon, physically based water shading, foam and reflections. Hulls
-make wakes, and anything that floats can query the water height on the GPU.
+curved horizon, physically based water shading, foam and reflections, and the
+wakes boats make. Gameplay code can query the water height on the GPU.
 
 Requires `core` and a `RenderingDevice` (Forward+). Without one
 (Compatibility renderer, headless) the ocean reports an error and stays off.
@@ -34,13 +34,26 @@ Requires `core` and a `RenderingDevice` (Forward+). Without one
   caustics and foam where waves compress. One rough-surface Fresnel weights
   every reflection: the sky with its clouds, stars, planets and atmosphere,
   the sun's highlight, and the scene (screen-space or planar).
-- **Wakes and splashes.** An iWave simulation runs on a window around the
-  camera (by default 512 × 512 cells of 0.5 m). Hulls (`HullWaterFootprint`)
-  push water in it, which makes Kelvin wakes, bow waves and wake foam.
-  `add_impulse()` adds splash rings. Water inside nearby hulls is cut out.
 - **Water queries.** The ocean registers a `WaterSurface` (see `core`). All
   queries in a frame go to the GPU in one dispatch. They sample the same
-  surface that is drawn, wakes included, and are read back asynchronously.
+  surface that is drawn and are read back asynchronously.
+- **Interactive waves.** Hulls report themselves to the `WaterSurface`
+  (`BuoyantBody` does), and a wave simulation around the camera draws the
+  waves their motion makes: the Kelvin wake (a V of about 19.5° at any speed),
+  the bow wave and the rings of a bobbing hull. A hull makes waves only by
+  moving relative to the water, so floating with the swell makes none. Every
+  wave travels at its real speed: the simulation moves each Fourier mode
+  exactly, by the finite-depth dispersion relation, once per physics tick.
+  The waves are only drawn: water queries leave them out, so they never push
+  bodies (one-way, so nothing can build up).
+- **Wake foam.** Hulls churn up foam on the same window: around the waterline
+  and in a trail behind them, denser the faster they move through the water
+  (not the deeper they sit), plus foam where wake crests grow steep. It drifts
+  with the surface drift and fades over about 8 s, and it is drawn as the
+  whitecaps are (lace, roughness, light), so `foam_intensity` scales it too.
+- **Open hulls.** The water skips pixels a `WaterMask` lid marks in the
+  stencil buffer (see `core`), so it does not show inside open boats. Every
+  water shader tier has the `stencil_mode` line; add it to a custom one.
 
 The sea lies at `water_level`. The node's own transform is ignored.
 
@@ -62,40 +75,29 @@ The sea lies at `water_level`. The node's own transform is ignored.
 | Group | Contents |
 | --- | --- |
 | `water_level` | Height of the still water. |
-| Waves | `spectrum`: wind (used without a wind source), `fetch_length` (the sea stops growing once fully developed), `water_depth`, `swell`, `spread`, `detail`, `displacement_scale` (1 = physical height; the demo uses 2), and how fast the sea follows changes. Save one as a `.tres` to reuse a sea state. `cascades` (at most 8): `tile_length`, plus foam (`whitecap`, `foam_generation`, `foam_lifetime`). Use tile lengths that don't divide each other, the largest at least 1.5 times the peak wavelength (the ocean warns otherwise). Retune `whitecap` after changing `displacement_scale`. |
+| Waves | `spectrum`: wind (used without a wind source), `fetch_length` (the sea stops growing once fully developed), `water_depth`, `swell`, `spread`, `detail`, `displacement_scale` (1 = physical height, as the demo uses), and how fast the sea follows changes. Save one as a `.tres` to reuse a sea state. `cascades` (at most 8): `tile_length`, plus foam (`whitecap`, `foam_generation`, `foam_lifetime`). Use tile lengths that don't divide each other, the largest at least 1.5 times the peak wavelength (the ocean warns otherwise). Retune `whitecap` after changing `displacement_scale`. |
 | Water | `water_absorption`, `water_scattering`, `water_scattering_anisotropy`: the only source of the water's colour. |
 | Surface | `clear_roughness`, `short_wave_slope_scale` (wind ripples too small to simulate), `normal_scale` (1 = physical slopes). |
 | Foam | `foam_color`, `foam_intensity`, `foam_roughness`, the foam pattern texture and its tile size. |
 | Sky | `sky_source_path`, reflection strength and F0, the sun's highlight; **Manual Sky** values for when there is no sky source. |
 | Reflections | `reflection_mode`: `SKY_ONLY`, `SCREEN_SPACE` or `PLANAR` (default), plus the planar reflection's resolution and clipping. Render layer 20 (`reflection_water_layer`) is reserved for the water. |
-| Hull Cutouts | `hull_cutout_distance`. |
-| Interaction | The wake simulation: on/off, grid, cell size, step rate, damping and foam. |
+| Interactive Waves | `interaction_map_size` (Off, 256, 512 or 1024 cells) and `interaction_cell_size` (default 0.25 m): together the window around the camera where hulls make waves (512 × 0.25 m = 128 m). The window is centred on the camera (turning the camera changes nothing) and fades out at its edge. |
 | Quality | `shader_quality` (`LOW`, `MEDIUM`, `HIGH`), `simulation_map_size` (128–1024), `max_wave_phase_step`, `fragment_cascade_limit`, `use_bicubic_normals`, `mesh_base_cell_size`. |
 | Material | `water_material`: the template the ocean copies. The ocean renders with a private duplicate. |
 
 From code: `get_wind_speed()` and `get_wind_direction_degrees()` give the wind
 the waves follow. `get_water_material()` returns the material actually used. To
-show single shading terms, set its `water_debug_view` uniform (1–15) at
-runtime.
+show single shading terms, set its `water_debug_view` uniform (1–18) at
+runtime; 16 and 17 show the interactive waves' height and slopes, 18 their
+foam.
 
-### Ships: cutouts and wakes
-
-1. Add a `HullWaterFootprint` to the ship, rigidly attached (usually a direct
-   child of the body; the boat template has one).
-2. Set `bake_source_paths` to the hull meshes only (no masts or rigging).
-3. Save the scene, press **Bake Profile**, and save again.
-
-The baked `HullProfile` hides the water inside the hull and lets the hull
-push water. Tune the wakes in the **Wake** group. If waves cresting a low
-gunwale show water inside the boat, raise `cutout_height_offset`. Only the 8
-nearest hulls get cutouts, and only the 32 nearest make wakes.
-
-### Water queries and splashes
+### Water queries
 
 Use `WaterSurface.find(node)` from `core` (its README has the example), never
-`OceanSystem`. Bodies with their own `HullWaterFootprint` read only the FFT
-waves, not the wakes they make themselves. Up to 64 splashes per simulation
-step are accepted.
+`OceanSystem`. Results give the height, normal, displacement and velocity of
+the drawn surface. `get_surface_drift()` is the drift that moves the foam
+downwind, 3 % of the wind speed; `buoyancy_system` carries floating bodies
+with it.
 
 ### Sky source
 
@@ -122,9 +124,10 @@ frame.
 - Below the water the camera sees through the water (its colour and haze, light
   shafts from the waves) and the surface from under it (Snell's window, total
   internal reflection). The camera counts as underwater by the wave height at its
-  position, so a lens half in the water shows one or the other. Hull cutouts seen
-  from below can show the sky through a hull's waterline footprint.
+  position, so a lens half in the water shows one or the other.
 - One ocean per world, with one depth for the whole sea (no shores).
-- Only the drawing is curved. Queries, buoyancy and the wake simulation treat
-  the sea as flat.
-- Wakes exist only inside the simulation window around the camera.
+- Hulls make waves only inside the window around the camera (about 64 m each
+  way by default), at most 16 at once (the nearest). A battleship's long wake
+  needs a coarser second window, which is not there yet.
+- Only the drawing is curved. Queries and reflections treat the sea as flat.
+- No splashes yet.

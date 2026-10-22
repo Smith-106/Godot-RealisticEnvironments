@@ -8,32 +8,29 @@
 | 场景 | 内容 | 操作 |
 | --- | --- | --- |
 | `ocean_only.tscn` | 拿来即用的环境：天空、云、风和海浪。 | 按住鼠标右键环顾；W A S D 飞行，Q / E 下降 / 上升，Shift 加速，滚轮调整速度。 |
-| `floating_objects.tscn` | 靠探针浮力漂浮的箱子和木桶。 | 同上。 |
-| `boat.tscn` | 一艘可驾驶的船，带尾迹、船头浪花和船体挖空，另有两个箱子。 | W A S D 驾驶；按住鼠标右键环绕，滚轮缩放。 |
+| `floating_objects.tscn` | 箱子和木桶随波起伏、顺风漂移。 | 同上。 |
+| `boat.tscn` | 船只模板的船和两个箱子。 | W A S D 驾驶；按住鼠标右键环绕，滚轮缩放。 |
 
 要修改时间、天气或海浪，选中 `OceanEnvironment`，右键打开 **子节点可编辑**，然后编辑
 `SkySystem`、`WindSystem` 或 `Ocean`。
 
 ## 制作方法
 
-**漂浮物。** `crate.tscn` 和 `barrel.tscn` 都是一个 `RigidBody3D`（质量、网格、碰撞
-形状），带有 `BuoyantBody` 和 `BuoyancyProbeVolume`。探针体积的 `source_paths` 指向
-网格，探针由 **Generate All Probes** 根据网格烘焙，并随场景保存。物体排开的水与它自身
-一样重时达到平衡：250 千克、1 立方米的箱子有四分之一浸在水中。这么轻的立方体平面朝上
-并不稳定，所以会像真实的箱子一样翻到一条棱上。
+**漂浮物。** `crate.tscn` 和 `barrel.tscn` 都是一个 `RigidBody3D`（质量、网格、
+碰撞形状），带一个 `BuoyantBody` 子节点。它的 `draft` 就是它们的吃水深度：250 千克的
+箱子为 0.25 米，侧躺的 40 千克木桶为 0.13 米。作为漂浮杂物，它们沿纵向和横向的阻力
+相同。
 
 **船。** `simple_boat.tscn` 是 `addons/boat_template/boat.tscn` 的继承场景：
 
 1. `Model` 是 `assets/simple_hull.obj`，由 `tools/make_example_hull.py` 生成
    （船头朝 −Z）。
-2. 根节点设置 `mass`、`center_of_mass`（位于船体浮心上方，由探针体积的警告给出）以及
-   驾驶参数。`CollisionShape3D`
-   使用由网格生成的凸形状。
-3. `BuoyancyProbeVolume`：`source_paths` → `Model`，然后
-   **Generate All Probes**。
-4. `HullWaterFootprint`：`bake_source_paths` → `Model`，然后 **Bake Profile**
-   （保存为 `simple_boat_hull_profile.tres`）。
-5. 把 `BowSpray` 移到船艏柱的水线处，把 `CameraTargets` 移到船上。
+2. 根节点设置 `mass`、`center_of_mass` 以及驾驶参数，`propulsion_position` 位于
+   船尾板水线以下。`CollisionShape3D` 使用由网格生成的凸形状，`BuoyantBody` 让船体
+   吃水 0.255 米。
+3. 把 `CameraTargets` 移到船上。
+4. `WaterMask` 位于 0.3 米高处，在船舷上沿稍下方；对 `Model` 点击 **Fit to Hull** 生成了
+   它的盖子（`assets/simple_hull_water_mask.tres`），所以船内不会显示水面。
 
 `boat.tscn` 为它驾驶的船打开了 `player_controlled`。W A S D 动作由 Boat Template
 插件添加。

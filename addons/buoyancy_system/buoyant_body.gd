@@ -1,641 +1,535 @@
 @tool
 class_name BuoyantBody
 extends Node
-## Floats a parent RigidBody3D on the water surface of its world (WaterSurface.find(),
-## e.g. an OceanSystem) from its physical probes, columns of its hull baked by a
-## BuoyancyProbeVolume: every force comes from their measured shape and the water,
-## so a hull floats, trims, rolls and slows as its geometry and mass make it. FX probes
-## are queried in the same batch but never apply forces. With sinking enabled it
-## also sinks the body when it rolls over, floods (all sinking probes deep under
-## water) or loses a hitbox group.
+## Floats its parent RigidBody3D on the water (WaterSurface.find()). Made to look
+## right, not to be exact: see addons/buoyancy_system/README.md.
 ##
-## Probe data is cached when volumes are collected and whenever a volume reports
-## probes_changed. Probes must stay rigid relative to the body: each tick only
-## transforms their cached body-space positions.
+## Probes on the hull's waterline plane, spread over the outline of the body's
+## collision shapes, sample the water every physics tick. Each lifts its share of
+## the body's weight, more the deeper it is. The shares balance about the centre of
+## mass, so in calm water the body rests level with the hull's lowest point draft
+## below the surface, whatever its mass and centre of mass. The lift never acts
+## below the centre of mass: a high centre of mass cannot capsize the body, while a
+## low one (ballast) steadies it further. Damping and drag act relative to the
+## moving water, so the body rides the waves and drifts with the surface drift. Bow
+## along -Z.
+##
+## Every tick the body also reports its hull to the water (WaterSurface.submit_disturbance()):
+## its footprint, how deep it sits and the water's motion under it, so the water draws
+## the waves its motion makes (wake_strength). The body reads only the water
+## simulation's waves, never waves bodies stir up, so nothing it does can feed back
+## into it.
 
-## Emitted when a probe becomes wet (its state's entered is true).
-signal probe_entered_water(state: BuoyancyProbeState)
-## Emitted when a probe becomes dry (its state's exited is true).
-signal probe_exited_water(state: BuoyancyProbeState)
-## Emitted once when the body starts sinking. reason is &"roll", &"draft",
-## &"hitbox_group_destroyed" or the one passed to start_sinking(); data holds its details.
-signal sinking_started(reason: StringName, data: Dictionary)
-
-## Physics seconds the body is held frozen waiting for its first water sample
-## before it is released anyway (and the missing sample reported).
+## Seconds the body is held frozen waiting for its first water sample; after that it
+## is released anyway, with an error.
 const FIRST_SAMPLE_TIMEOUT := 5.0
-## Pressure drag coefficient of a hull face meeting the water head-on (a flat plate);
-## a face at an angle meets it with the velocity's normal part only, so a fine bow
-## has little drag and a flat side much.
-const PRESSURE_DRAG_COEFFICIENT := 1.0
-## Kinematic viscosity (m²/s) of seawater at 15 °C, for the skin friction's Reynolds number.
-const WATER_VISCOSITY := 1.19e-6
-## Reynolds number below which the skin friction keeps the ITTC line's value there
-## (the line is fitted for turbulent flow along a hull).
-const MIN_REYNOLDS_NUMBER := 1.0e5
-## Depth, as a share of a column's width, over which its added mass grows in as it
-## gets wet (a flat section's heave added mass barely depends on its draft).
-const ADDED_MASS_WETTING_SHARE := 0.25
+## Most probes per side, for probe_grid and the automatic grid.
+const MAX_PROBES_PER_SIDE := 16
+## Probes the automatic grid aims for over the hull's footprint.
+const _AUTO_PROBE_COUNT := 16.0
+## Largest natural frequency (rad/s) times the physics step that floats smoothly:
+## stiffer floating (a tiny draft, a light and wide hull) jitters.
+const _MAX_FREQUENCY_STEP := 0.5
+## Smallest share of the weight (relative to an even share) a probe keeps when the
+## shares balance about a centre of mass near the footprint's edge.
+const _MIN_PROBE_SHARE := 0.05
+const _DEBUG_DRY_COLOR := Color(0.6, 0.6, 0.6)
+const _DEBUG_WET_COLOR := Color(0.2, 0.8, 1.0)
+const _DEBUG_PROBE_SIZE := 0.1
+## Test points per side for the footprint's area share (_build_hull()).
+const _AREA_SAMPLES := 24
+## Superellipse exponent n -> the share of its bounding box |u|^n + |v|^n <= 1 fills
+## (Gamma(1 + 1/n)^2 / Gamma(1 + 2/n)): the footprint the water gets from the hull's.
+const _FOOTPRINT_EXPONENTS := [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 6.0, 10.0, 16.0]
+const _FOOTPRINT_AREA_SHARES := [0.5, 0.6068, 0.6845, 0.742, 0.7854, 0.8452, 0.8833, 0.927, 0.9638, 0.9857, 0.9941]
 
-## Optional rigid body target. Leave empty to use the parent or nearest ancestor RigidBody3D.
-@export var rigid_body_path : NodePath :
+## What _build_hull() finds out about the body's collision shapes.
+class Hull:
+	## Probe positions (body space) on the waterline plane, over the shapes' outline.
+	var probes := PackedVector3Array()
+	## Lowest and highest point (body y) of the shapes.
+	var bottom := INF
+	var top := -INF
+	## Corners (body x, z) of the shapes' footprint seen from above, and the share of
+	## that rectangle the footprint fills.
+	var low := Vector2(INF, INF)
+	var high := Vector2(-INF, -INF)
+	var area_share := 1.0
+	## Shapes that cannot float ("name (class)").
+	var unsupported := PackedStringArray()
+
+## How deep (m) the hull's lowest point sits below calm water at rest, whatever the
+## body's mass. It also sets the bobbing: about 2 pi sqrt(draft / g) seconds per
+## bob (1.1 s for 0.3 m, 6 s for a battleship's 9 m).
+@export_range(0.01, 20.0, 0.01, "or_greater", "suffix:m") var draft := 0.3 :
 	set(value):
-		rigid_body_path = value
+		draft = value
 		update_configuration_warnings()
-## Automatically includes child BuoyancyProbeVolume nodes in addition to explicit paths.
-@export var auto_collect_child_volumes := true
-## Explicit probe volumes used by this buoyant body.
-@export var probe_volume_paths : Array[NodePath] = []
-## Fluid density in kg/m^3. Seawater is usually around 1025, fresh water 1000.
-@export_range(1.0, 2000.0, 1.0, "or_greater") var water_density := 1025.0 :
+## Probes across the beam (x) and along the length (y). 0 picks a count from the
+## hull's proportions (about 16 probes in all). More probes follow the waves under a
+## long hull more closely.
+@export var probe_grid := Vector2i.ZERO :
 	set(value):
-		water_density = value
-		_probe_cache_dirty = true
-## Damping of each column's bobbing while it crosses the surface, as a fraction of
-## critical damping (from its waterplane stiffness and its share of the mass): the
-## energy a floating body radiates as waves, which the drag (quadratic in speed) misses
-## in small, slow motion. Damps heave, pitch and roll; ships are around 0.1-0.3.
-@export_range(0.0, 2.0, 0.01, "or_greater") var wave_damping_ratio := 0.2
-## Applies the forces and samples the water. Off: the body is left to physics alone and
-## its probe states stop updating.
-@export var apply_forces := true
+		probe_grid = value
+		update_configuration_warnings()
+## Damping of bobbing and rocking relative to the water's own up-and-down motion:
+## 0 bobs on and on, 1 settles without overshooting.
+@export_range(0.0, 2.0, 0.01) var damping_ratio := 0.4
 
-@export_group("Sinking")
-## Enables roll, draft and damage-triggered sinking. start_sinking() works either way.
-@export var sinking_enabled := false
-## Starts sinking when absolute roll reaches this angle. Set 0 to disable roll sinking.
-@export_range(0.0, 180.0, 0.1, "degrees") var max_roll_degrees := 70.0
-## Physical probes that must all be flooded (at least sink_submersion_threshold of
-## their column under water) to start sinking. Each must be an enabled physical
-## probe of this body. Empty disables it.
-@export var sinking_probe_paths : Array[NodePath] = []
-## Share of a sinking probe's column under water that counts as flooded: about 0.9
-## with the deck awash.
-@export_range(0.0, 1.0, 0.01) var sink_submersion_threshold := 0.9
-## Hitbox groups whose destruction starts sinking, reported through
-## _on_hitbox_group_destroyed (connect a damage system's signal to it).
-@export var sink_on_destroyed_groups : Array[StringName] = [&"hull"]
-## The buoyancy is multiplied by this once sinking starts.
-@export_range(0.0, 1.0, 0.01) var sink_buoyancy_multiplier := 0.3
-## Seconds after sinking starts before delete_root_path is freed. 0 frees immediately.
-@export_range(0.0, 60.0, 0.01, "or_greater") var delete_delay := 5.0
-## Node freed after delete_delay. Empty frees the rigid body.
-@export var delete_root_path : NodePath
+@export_group("Drag")
+## How quickly (1/s) the water takes away speed along the hull (relative to the
+## water) while the hull is in it. Low: a hull glides.
+@export_range(0.0, 10.0, 0.01, "or_greater", "suffix:1/s") var forward_drag := 0.2
+## How quickly (1/s) the water takes away sideways speed (relative to the water).
+## Higher than forward_drag gives keel grip: the hull goes where it points.
+@export_range(0.0, 10.0, 0.01, "or_greater", "suffix:1/s") var sideways_drag := 2.0
 
-## The body the forces act on (resolved in _ready).
-var rigid_body : RigidBody3D
-## The water surface of this body's world (resolved in _ready); null disables buoyancy.
+@export_group("Waves")
+## Scales the waves and foam the body makes as it moves through the water: wake, bow
+## wave, rings and the foam its speed churns up (drawn by the ocean's interactive waves,
+## never felt). 0 makes none.
+@export_range(0.0, 4.0, 0.01, "or_greater") var wake_strength := 1.0
+
+@export_group("Debug")
+## Draws the probes and the water above or below each.
+@export var debug_enabled := false :
+	set(value):
+		debug_enabled = value
+		if _debug_instance != null:
+			_debug_instance.visible = debug_enabled
+
+var _body : RigidBody3D
 var _water : WaterSurface
-## The probe volumes in use (see refresh_volumes()).
-var probe_volumes : Array[BuoyancyProbeVolume] = []
-## True while the body is held frozen waiting for its first water sample.
-var _awaiting_first_sample := false
-var _gravity := 9.8
-## Physics time (s) this node has run: the clock of probe states and events.
-var _physics_time := 0.0
-
-# Probe cache. Force (physical) probes come first in every per-point array,
-# contact probes after them.
-var _probe_cache_dirty := true
-var _force_states : Array[BuoyancyProbeState] = []
-var _contact_states : Array[BuoyancyProbeState] = []
-var _states_by_probe := {}
-var _body_offsets := PackedVector3Array()
+## Probe positions in the body's space, on its waterline plane.
+var _probes := PackedVector3Array()
+## Each probe's share of the weight relative to an even share (mean 1), balanced
+## about the centre of mass on the first tick (_balance_probes()).
+var _probe_shares := PackedFloat32Array()
+## Lowest and highest point (body y) of the collision shapes.
+var _hull_bottom := 0.0
+var _hull_top := 0.0
+## World positions of the probes this tick (submitted as the query).
 var _points := PackedVector3Array()
-# Per physical probe: its column's height, area_profile, full volume, its share of
-# the body's mass, its width (for tilted columns) and its heave added mass (kg).
-var _column_heights := PackedFloat32Array()
-var _profiles : Array[PackedFloat32Array] = []
-var _full_volumes := PackedFloat32Array()
-var _volume_shares := PackedFloat32Array()
-var _column_widths := PackedFloat32Array()
-var _added_masses := PackedFloat32Array()
-## Every column's side panels, flattened (column i owns panels _panel_starts[i] to
-## _panel_starts[i + 1] - 1): outward normal (body space) and length (m).
-var _panel_starts := PackedInt32Array()
-var _panel_normals := PackedVector3Array()
-var _panel_lengths := PackedFloat32Array()
-## Length (m) of the hull along the body's forward axis, for the skin friction.
-var _hull_length := 1.0
-## The hull's draft (m, its deepest column's wet length) and wetted lateral area
-## (m², each column's wet length times its width) of the last tick, for the hull lift.
-var _draft := 0.0
-var _lateral_area := 0.0
-## Water vertical velocity and acceleration at each physical probe, from the
-## last two results (for the added mass), and the clock of the last one.
-var _water_velocity_y := PackedFloat32Array()
-var _water_acceleration_y := PackedFloat32Array()
-var _water_sample_time := -INF
-## Water clock (WaterSurface.get_clock()) when the probe set last changed. Results dispatched before
-## then answer the old point set.
-var _probe_set_time := -INF
-var _sinking_probes : Array[Node] = []
-var _is_sinking := false
-## sink_buoyancy_multiplier once sinking, else 1.
-var _sink_scale := 1.0
+## Per probe this tick: the water height (world y) over it and the surface slope
+## (dy/dx, dy/dz) there.
+var _water_heights := PackedFloat32Array()
+var _water_slopes := PackedVector2Array()
+var _has_sample := false
+var _wet_probe_count := 0
+## True while the body is frozen waiting for its first sample.
+var _holding := false
+var _hold_time := 0.0
+var _stability_checked := false
+## The hull's footprint as the water gets it (body x, z centre; half length and half
+## beam; superellipse exponent), and the report reused every tick.
+var _footprint_center := Vector2.ZERO
+var _footprint_half_extents := Vector2.ONE
+var _footprint_exponent := 2.0
+var _disturbance := WaterDisturbance.new()
+var _debug_instance : MeshInstance3D
+var _debug_mesh : ImmediateMesh
 
 
 func _ready() -> void:
 	if Engine.is_editor_hint():
 		set_physics_process(false)
 		return
-	rigid_body = _resolve_rigid_body()
-	_water = WaterSurface.find(self)
-	if rigid_body == null or _water == null:
-		if _water == null:
-			push_error("BuoyantBody %s: no WaterSurface in this world (add an OceanSystem). Buoyancy is disabled." % get_path())
+	var parent := get_parent()
+	if not parent is RigidBody3D:
+		push_error("BuoyantBody %s: its parent must be a RigidBody3D; buoyancy is off." % get_path())
 		set_physics_process(false)
 		return
-	_gravity = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
-	_collect_volumes()
-	if probe_volumes.is_empty():
-		push_error("BuoyantBody found no probe volumes: %s" % get_path())
-	_rebuild_probe_cache()
-	for path in sinking_probe_paths:
-		var probe := get_node_or_null(path)
-		if not probe is BuoyancyProbeNode or not _states_by_probe.has(probe.get_instance_id()):
-			push_error("BuoyantBody %s: sinking probe %s is not an enabled physical probe of this body; ignored." % [get_path(), path])
-			continue
-		_sinking_probes.push_back(probe)
-	# The first surface query result arrives several frames after the first submit,
-	# and much later in physics time when startup frames hitch. Hold the body still
-	# until then instead of letting it free-fall through the water.
-	if apply_forces and not rigid_body.freeze:
-		_awaiting_first_sample = true
-		rigid_body.freeze = true
+	_body = parent
+	var hull := _build_hull(_body)
+	if not hull.unsupported.is_empty():
+		push_error("BuoyantBody %s: ignoring collision shapes that cannot float: %s." % [get_path(), ", ".join(hull.unsupported)])
+	if hull.probes.is_empty():
+		push_error("BuoyantBody %s: no collision shapes to float on; buoyancy is off." % get_path())
+		set_physics_process(false)
+		return
+	_probes = hull.probes
+	_hull_bottom = hull.bottom
+	_hull_top = hull.top
+	_footprint_center = (hull.low + hull.high) * 0.5
+	# Bow along -Z: the length runs along z, the beam along x.
+	var half_size := (hull.high - hull.low) * 0.5
+	_footprint_half_extents = Vector2(half_size.y, half_size.x)
+	_footprint_exponent = _exponent_for_area_share(hull.area_share)
+	_water = WaterSurface.find(self)
+	if _water == null:
+		push_error("BuoyantBody %s: no water in this world (add an OceanSystem); buoyancy is off." % get_path())
+		set_physics_process(false)
+		return
+	_points.resize(_probes.size())
+	_water_heights.resize(_probes.size())
+	_water_slopes.resize(_probes.size())
+	if not _body.freeze:
+		_body.freeze = true
+		_holding = true
+	_create_debug_instance()
 
 
 func _exit_tree() -> void:
 	if _water != null:
 		_water.release_query(self)
+		_water.release_disturbance(self)
 
 
 func _physics_process(delta : float) -> void:
-	_physics_time += delta
-	if not apply_forces:
-		_end_first_sample_hold()
-		return
-	if _probe_cache_dirty:
-		_rebuild_probe_cache()
-	# Every volume and probe is disabled: nothing to float, and no sample to wait for.
-	if _points.is_empty():
-		_end_first_sample_hold()
-		return
-
-	var body_transform := rigid_body.global_transform
-	_submit_points(body_transform)
+	if _probe_shares.is_empty():
+		_balance_probes()
+	var body_transform := _body.global_transform
+	for i in _probes.size():
+		_points[i] = body_transform * _probes[i]
+	_water.submit_query(self, _points)
 	var result := _water.get_query_result(self)
-	# The first readback arrives a few frames after the first submit.
-	if result == null or result.dispatch_time <= _probe_set_time:
-		if _awaiting_first_sample and _physics_time > FIRST_SAMPLE_TIMEOUT:
-			push_error("BuoyantBody %s: no water sample after %d s (does the ocean have wave cascades?); released without buoyancy." % [get_path(), FIRST_SAMPLE_TIMEOUT])
-			_end_first_sample_hold()
+	if result == null:
+		if _holding:
+			_hold_time += delta
+			if _hold_time > FIRST_SAMPLE_TIMEOUT:
+				push_error("BuoyantBody %s: no water sample after %d s (does the ocean run?); released without buoyancy." % [get_path(), FIRST_SAMPLE_TIMEOUT])
+				_release()
 		return
-	if result.samples.size() != _points.size():
-		push_error("BuoyantBody %s: query result has %d samples for %d probes; tick skipped." % [get_path(), result.samples.size(), _points.size()])
+	if result.samples.size() != _probes.size():
+		push_error("BuoyantBody %s: %d water samples for %d probes; tick skipped." % [get_path(), result.samples.size(), _probes.size()])
 		return
-	_end_first_sample_hold()
-	var elapsed := _water.get_query_age(result)
-	_update_water_acceleration(result)
-	var body_basis := body_transform.basis.orthonormalized()
-	var body_up := body_basis.y
-	var mass := rigid_body.mass
-	var linear_velocity := rigid_body.linear_velocity
-	var angular_velocity := rigid_body.angular_velocity
-	var body_state := PhysicsServer3D.body_get_direct_state(rigid_body.get_rid())
-	# Probe forces are summed into one force and one torque about the center of mass
-	# (what apply_force() at each probe adds up to), sent with two calls per tick.
-	var center_of_mass := body_state.center_of_mass
-	# Columns rise from their probes along the body's up axis and turn with it: a
-	# capsized body displaces what it does upright, from its other end.
-	var column_tilt := sqrt(maxf(1.0 - body_up.y * body_up.y, 0.0))
-	var weight_per_volume := water_density * _gravity * _sink_scale
-	# Hull lift (slender-body theory): a hull moving at a small drift angle is a wing of
-	# aspect ratio 2·draft / length, whose side force (π/2)·ρ·T²·U·v grows with the
-	# side speed v at forward speed U, shared by the columns by their lateral area.
-	var right := body_basis.x
-	var forward := -body_basis.z
-	var lift_per_area := 0.5 * PI * water_density * _draft * _draft / _lateral_area if _lateral_area > 0.0 else 0.0
-	var draft := 0.0
-	var lateral_area := 0.0
-
-	var total_external_force := Vector3.ZERO
-	var total_torque := Vector3.ZERO
-	var added_mass := 0.0
-	var added_mass_water_force := 0.0
-	for i in _force_states.size():
-		var sample := result.samples[i]
-		var water_height := sample.extrapolated_height(elapsed)
-		var bottom := _points[i]
-		var column_height := _column_heights[i]
-		var column_width := _column_widths[i]
-		var column_center := bottom + body_up * (column_height * 0.5)
-		# A tilted column is a prism of its own width, so the submerged share stays
-		# smooth all the way to a horizontal column.
-		var vertical_extent := column_height * absf(body_up.y) + column_width * column_tilt
-		var submersion := clampf((water_height - column_center.y) / vertical_extent + 0.5, 0.0, 1.0)
-		var applied_force := Vector3.ZERO
-		if submersion > 0.0:
-			# The submerged part: wet from the lower end, the bottom unless capsized.
-			var profile := _profiles[i]
-			var wet_length := submersion * column_height
-			var wet := BuoyancyProbeNode.volume_below(profile, column_height, wet_length)
-			var waterline_height := wet_length
-			if body_up.y < 0.0:
-				var dry := BuoyancyProbeNode.volume_below(profile, column_height, column_height - wet_length)
-				wet = Vector2(_full_volumes[i] - dry.x, BuoyancyProbeNode.volume_below(profile, column_height, column_height).y - dry.y)
-				waterline_height = column_height - wet_length
-			var probe_mass := mass * _volume_shares[i]
-			# Buoyancy acts at the centroid of the water the column displaces.
-			var force_point := bottom + body_up * (wet.y / wet.x if wet.x > 0.0 else waterline_height)
-			# linear_velocity is the center of mass's, so the lever arm is from there.
-			var arm := force_point - body_transform.origin - center_of_mass
-			var relative_velocity := linear_velocity + angular_velocity.cross(arm) - sample.surface_velocity
-			var buoyancy_force := Vector3.UP * (weight_per_volume * wet.x)
-
-			# Water resistance, each part as a rate on the column's share of the mass
-			# (_stable_drag_rate()). Pressure drag: the faces moving into the water push
-			# it aside, ½·ρ·C_p·area·u² against them, u the velocity along their outward
-			# normal. The bottom (the submerged part's plan, which meets the water fully
-			# once a column width deep) along the body's axis, then the sides.
-			var drag_per_area := 0.5 * water_density / probe_mass
-			var plan_area := wet.x / maxf(wet_length, 1e-4)
-			var end_area := plan_area * minf(wet_length / column_width, 1.0)
-			var up_speed := relative_velocity.dot(body_up)
-			var drag_acceleration := -body_up * up_speed * _stable_drag_rate(drag_per_area * PRESSURE_DRAG_COEFFICIENT * end_area * absf(up_speed), delta)
-			var side_area := 0.0
-			for panel in range(_panel_starts[i], _panel_starts[i + 1]):
-				var normal := body_basis * _panel_normals[panel]
-				var area := _panel_lengths[panel] * wet_length
-				side_area += area
-				var speed := relative_velocity.dot(normal)
-				if speed > 0.0:
-					drag_acceleration -= normal * speed * _stable_drag_rate(drag_per_area * PRESSURE_DRAG_COEFFICIENT * area * speed, delta)
-			draft = maxf(draft, wet_length)
-			lateral_area += wet_length * column_width
-			if lift_per_area > 0.0:
-				var side_speed := relative_velocity.dot(right)
-				drag_acceleration -= right * side_speed * _stable_drag_rate(lift_per_area * wet_length * column_width * absf(relative_velocity.dot(forward)) / probe_mass, delta)
-			# Skin friction along the hull (ITTC 1957), on the wetted sides and bottom.
-			var along := relative_velocity - body_up * up_speed
-			var along_speed := along.length()
-			if along_speed > 1e-4:
-				drag_acceleration -= along * _stable_drag_rate(drag_per_area * _friction_coefficient(along_speed) * (side_area + plan_area) * along_speed, delta)
-			# Wave-making damping while the column crosses the surface (where its
-			# waterplane gives it a stiffness k): c = 2·ζ·√(k·m).
-			var waterplane_area := BuoyancyProbeNode.area_at(profile, column_height, waterline_height)
-			if submersion < 1.0 and wave_damping_ratio > 0.0 and waterplane_area > 0.0:
-				var stiffness := weight_per_volume * waterplane_area
-				drag_acceleration.y -= relative_velocity.y * _stable_drag_rate(2.0 * wave_damping_ratio * sqrt(stiffness / probe_mass), delta)
-			applied_force = buoyancy_force + drag_acceleration * probe_mass
-			total_external_force += applied_force
-			total_torque += arm.cross(applied_force)
-			var probe_added_mass := _added_masses[i] * minf(wet_length / (ADDED_MASS_WETTING_SHARE * column_width), 1.0)
-			added_mass += probe_added_mass
-			added_mass_water_force += probe_added_mass * _water_acceleration_y[i]
-		_update_state(_force_states[i], bottom, sample, water_height, applied_force, submersion, _physics_time)
-
-	_draft = draft
-	_lateral_area = lateral_area
-	# Added mass in heave: (m + M_a)·a = F + m·g + M_a·a_water. The engine only
-	# knows m, so add the force that gives that acceleration. It comes from this
-	# tick's forces, not from measured accelerations, so it cannot feed back and
-	# go unstable however large M_a gets.
-	if added_mass > 0.0:
-		var net_vertical_force := total_external_force.y + mass * body_state.total_gravity.y
-		total_external_force.y += (mass * added_mass_water_force - added_mass * net_vertical_force) / (mass + added_mass)
-
-	if total_external_force != Vector3.ZERO:
-		rigid_body.apply_central_force(total_external_force)
-		rigid_body.apply_torque(total_torque)
-
-	var force_count := _force_states.size()
-	for j in _contact_states.size():
-		var sample := result.samples[force_count + j]
-		_update_state(_contact_states[j], _points[force_count + j], sample, sample.extrapolated_height(elapsed), Vector3.ZERO, 0.0, _physics_time)
-
-	_update_volume_debug(body_transform.origin + center_of_mass, body_state.total_gravity * mass, total_external_force)
-	if sinking_enabled and not _is_sinking:
-		_check_sinking()
-
-
-## Lowers buoyancy, emits sinking_started and frees delete_root_path after
-## delete_delay. Only the first call has an effect.
-func start_sinking(reason : StringName = &"manual", data : Dictionary = {}) -> void:
-	if _is_sinking:
-		return
-	_is_sinking = true
-	_sink_scale = sink_buoyancy_multiplier
-	sinking_started.emit(reason, data)
-	var delete_root : Node = rigid_body
-	if not delete_root_path.is_empty():
-		delete_root = get_node_or_null(delete_root_path)
-		if delete_root == null:
-			push_error("BuoyantBody %s: delete_root_path %s not found; freeing the rigid body instead." % [get_path(), delete_root_path])
-			delete_root = rigid_body
-	if delete_delay <= 0.0:
-		delete_root.queue_free()
-	else:
-		get_tree().create_timer(delete_delay).timeout.connect(delete_root.queue_free)
-
-
-## Whether start_sinking() has run.
-func is_sinking() -> bool:
-	return _is_sinking
-
-
-func _on_hitbox_group_destroyed(hitbox_group : StringName, hit_data : Dictionary) -> void:
-	if sinking_enabled and sink_on_destroyed_groups.has(hitbox_group):
-		start_sinking(&"hitbox_group_destroyed", {"hitbox_group": hitbox_group, "hit_data": hit_data})
-
-
-## Re-collects probe volumes (after adding or removing volumes at runtime).
-func refresh_volumes() -> void:
-	_collect_volumes()
-
-
-## Every enabled probe's state, or only those with the given tag. States that
-## have not been sampled yet have has_sample == false.
-func get_probe_states(tag_filter := "") -> Array[BuoyancyProbeState]:
-	if _probe_cache_dirty:
-		_rebuild_probe_cache()
-	var states : Array[BuoyancyProbeState] = []
-	for group in [_force_states, _contact_states]:
-		for state : BuoyancyProbeState in group:
-			if tag_filter == "" or state.tag == tag_filter:
-				states.push_back(state)
-	return states
-
-
-## States of the probes that are under water, optionally only those with tag_filter.
-func get_wet_probe_states(tag_filter := "") -> Array[BuoyancyProbeState]:
-	var states : Array[BuoyancyProbeState] = []
-	for state in get_probe_states(tag_filter):
-		if state.is_wet:
-			states.push_back(state)
-	return states
-
-
-## State of one probe node, or null if it is not an enabled probe of this body.
-func get_probe_state(probe : Node) -> BuoyancyProbeState:
-	if _probe_cache_dirty:
-		_rebuild_probe_cache()
-	return _states_by_probe.get(probe.get_instance_id())
-
-
-## Estimates the water's vertical acceleration at each physical probe from the
-## surface velocity of the last two results (once per new result).
-func _update_water_acceleration(result : WaterSurfaceQueryResult) -> void:
-	if result.dispatch_time == _water_sample_time:
-		return
-	var interval := result.dispatch_time - _water_sample_time
-	for i in _force_states.size():
-		var velocity_y := result.samples[i].surface_velocity.y
-		# The first result (also after the probe set changed) has no predecessor;
-		# the cap keeps a stalled readback from spiking it.
-		var acceleration := (velocity_y - _water_velocity_y[i]) / interval if is_finite(_water_sample_time) and interval > 0.0 else 0.0
-		_water_acceleration_y[i] = clampf(acceleration, -2.0 * _gravity, 2.0 * _gravity)
-		_water_velocity_y[i] = velocity_y
-	_water_sample_time = result.dispatch_time
-
-
-## The heave added mass (kg) of each column: the body's waterplane at rest (for its
-## mass) as a flat plate on the surface, of the ellipse of its length and area, whose
-## added mass is (2/3)·π·ρ·a·b² / E(k) for semi-axes a ≥ b (exact in 3D, at high
-## frequency), E the complete elliptic integral of the second kind with
-## k² = 1 - b²/a²; shared by the columns by their waterplane area.
-func _update_added_masses() -> void:
-	var count := _force_states.size()
-	_added_masses.resize(count)
-	_added_masses.fill(0.0)
-	var bottoms := PackedFloat32Array()
-	for i in count:
-		bottoms.push_back(_body_offsets[i].y)
-	var waterline := BuoyancyProbeNode.find_waterline(bottoms, _column_heights, _profiles, rigid_body.mass / water_density)
-	if not is_finite(waterline):
-		return
-	var area := 0.0
-	var extent := Vector2(INF, -INF)
-	for i in count:
-		_added_masses[i] = BuoyancyProbeNode.area_at(_profiles[i], _column_heights[i], waterline - bottoms[i])
-		if _added_masses[i] > 0.0:
-			area += _added_masses[i]
-			extent = Vector2(minf(extent.x, _body_offsets[i].z - 0.5 * _column_widths[i]), maxf(extent.y, _body_offsets[i].z + 0.5 * _column_widths[i]))
-	if area <= 0.0:
-		return
-	var a := 0.5 * (extent.y - extent.x)
-	var b := area / (PI * a)
-	if b > a:
-		var swap := a
-		a = b
-		b = swap
-	var k_squared := 1.0 - b * b / (a * a)
-	var elliptic := 0.0
-	const STEPS := 32
-	for step in STEPS:
-		elliptic += sqrt(1.0 - k_squared * pow(sin((step + 0.5) / STEPS * 0.5 * PI), 2.0))
-	elliptic *= 0.5 * PI / STEPS
-	var added_mass := 2.0 / 3.0 * PI * water_density * a * b * b / elliptic
-	for i in count:
-		_added_masses[i] *= added_mass / area
-
-
-## Skin friction coefficient of the hull at speed (m/s) along it: the ITTC 1957
-## correlation line, 0.075 / (log10 Re - 2)², Re from the hull's length.
-func _friction_coefficient(speed : float) -> float:
-	var reynolds := maxf(speed * _hull_length / WATER_VISCOSITY, MIN_REYNOLDS_NUMBER)
-	var log_reynolds := log(reynolds) / log(10.0) - 2.0
-	return 0.075 / (log_reynolds * log_reynolds)
-
-
-## Drag rate (1/s) that removes over one tick of delta what rate would remove
-## continuously: never more than the relative velocity, so even strong drag
-## cannot overshoot and oscillate.
-static func _stable_drag_rate(rate : float, delta : float) -> float:
-	return (1.0 - exp(-rate * delta)) / delta if delta > 0.0 else rate
-
-
-## Releases the body held frozen until the first water sample (see _ready()).
-func _end_first_sample_hold() -> void:
-	if _awaiting_first_sample:
-		_awaiting_first_sample = false
-		rigid_body.freeze = false
+	if _holding:
+		_release()
+	_read_water(result)
+	_report_hull(result)
+	if not _body.freeze:
+		_apply_forces(result)
+		if not _stability_checked:
+			_check_stability()
+			_stability_checked = true
+	if debug_enabled:
+		_draw_debug()
 
 
 func _get_configuration_warnings() -> PackedStringArray:
 	var warnings := PackedStringArray()
-	var body : Node = get_node_or_null(rigid_body_path) if not rigid_body_path.is_empty() else _find_parent_rigid_body()
-	if not body is RigidBody3D:
-		warnings.push_back("Needs a RigidBody3D to float: make it a descendant of one, or set rigid_body_path.")
-	elif probe_volume_paths.is_empty() and not (auto_collect_child_volumes and not body.find_children("*", "BuoyancyProbeVolume", true, false).is_empty()):
-		warnings.push_back("No BuoyancyProbeVolume under the body (or in probe_volume_paths): nothing makes it float.")
+	var parent := get_parent()
+	if not parent is RigidBody3D:
+		warnings.push_back("BuoyantBody must be a child of the RigidBody3D it floats.")
+		return warnings
+	var body : RigidBody3D = parent
+	if body.freeze:
+		warnings.push_back("The RigidBody3D is frozen (freeze), so it does not float.")
+	var hull := _build_hull(body)
+	if not hull.unsupported.is_empty():
+		warnings.push_back("These collision shapes cannot float and are ignored: %s." % ", ".join(hull.unsupported))
+	if hull.probes.is_empty():
+		warnings.push_back("The RigidBody3D has no collision shapes to float on (box, sphere, capsule, cylinder, convex or concave polygon).")
+	else:
+		if draft >= hull.top - hull.bottom:
+			warnings.push_back("draft (%.2f m) is at least the hull's height (%.2f m): the body floats with its top under water." % [draft, hull.top - hull.bottom])
+		var center := Vector2(body.center_of_mass.x, body.center_of_mass.z)
+		if body.center_of_mass_mode == RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM and (center.clamp(hull.low, hull.high) != center):
+			warnings.push_back("center_of_mass lies outside the hull's footprint seen from above: the body cannot float level.")
+	var gravity : float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
+	var max_frequency := _MAX_FREQUENCY_STEP * Engine.physics_ticks_per_second
+	if sqrt(gravity / draft) > max_frequency:
+		warnings.push_back("draft below %.3f m bobs faster than %d physics ticks per second can follow, and jitters: raise draft or the tick rate." % [gravity / (max_frequency * max_frequency), Engine.physics_ticks_per_second])
 	return warnings
 
 
-## Null (reported) when the configured body is missing or not a RigidBody3D.
-func _resolve_rigid_body() -> RigidBody3D:
-	if not rigid_body_path.is_empty():
-		var target := get_node_or_null(rigid_body_path)
-		if not target is RigidBody3D:
-			push_error("BuoyantBody %s: rigid_body_path %s is not a RigidBody3D. Buoyancy is disabled." % [get_path(), rigid_body_path])
-			return null
-		return target as RigidBody3D
-	var ancestor := _find_parent_rigid_body()
-	if ancestor == null:
-		push_error("BuoyantBody %s: rigid_body_path is empty and no ancestor is a RigidBody3D. Buoyancy is disabled." % get_path())
-	return ancestor
+## Whether any probe is in the water this tick (false before the first sample).
+func is_in_water() -> bool:
+	return _wet_probe_count > 0
 
 
-func _find_parent_rigid_body() -> RigidBody3D:
-	var node := get_parent()
-	while node != null:
-		if node is RigidBody3D:
-			return node
-		node = node.get_parent()
-	return null
-
-
-func _collect_volumes() -> void:
-	for volume in probe_volumes:
-		if volume.probes_changed.is_connected(_on_probes_changed):
-			volume.probes_changed.disconnect(_on_probes_changed)
-	probe_volumes.clear()
-	for path in probe_volume_paths:
-		var node := get_node_or_null(path)
-		if not node is BuoyancyProbeVolume:
-			push_error("BuoyantBody %s: probe_volume_paths entry %s is not a BuoyancyProbeVolume; ignored." % [get_path(), path])
-			continue
-		if not probe_volumes.has(node):
-			probe_volumes.push_back(node)
-	if auto_collect_child_volumes:
-		_collect_probe_volume_descendants(rigid_body)
-	for volume in probe_volumes:
-		volume.probes_changed.connect(_on_probes_changed)
-	_probe_cache_dirty = true
-
-
-func _collect_probe_volume_descendants(node : Node) -> void:
-	for child in node.get_children():
-		if child is BuoyancyProbeVolume and not probe_volumes.has(child):
-			probe_volumes.push_back(child)
-		_collect_probe_volume_descendants(child)
-
-
-func _on_probes_changed() -> void:
-	_probe_cache_dirty = true
-
-
-func _rebuild_probe_cache() -> void:
-	_probe_cache_dirty = false
-	_force_states.clear()
-	_contact_states.clear()
-	for volume in probe_volumes:
-		_force_states.append_array(volume.get_physical_probe_states())
-		_contact_states.append_array(volume.get_contact_probe_states())
-
-	var force_count := _force_states.size()
-	var point_count := force_count + _contact_states.size()
-	var to_body := rigid_body.global_transform.affine_inverse()
-	_body_offsets.resize(point_count)
-	_points.resize(point_count)
-	_column_heights.resize(force_count)
-	_profiles.resize(force_count)
-	_full_volumes.resize(force_count)
-	_volume_shares.resize(force_count)
-	_column_widths.resize(force_count)
-	_panel_starts.resize(force_count + 1)
-	_panel_normals.clear()
-	_panel_lengths.clear()
-	_water_velocity_y.resize(force_count)
-	_water_acceleration_y.resize(force_count)
-	_water_acceleration_y.fill(0.0)
-	_water_sample_time = -INF
-	_states_by_probe.clear()
-	var total_volume := 0.0
-	var forward_extent := Vector2(INF, -INF)
-	for i in force_count:
-		var probe := _force_states[i].probe as BuoyancyProbeNode
-		_body_offsets[i] = to_body * probe.global_position
-		_column_heights[i] = probe.height
-		_profiles[i] = probe.area_profile
-		_full_volumes[i] = BuoyancyProbeNode.volume_below(probe.area_profile, probe.height, probe.height).x
-		var largest_area := 0.0
-		for area in probe.area_profile:
-			largest_area = maxf(largest_area, area)
-		_column_widths[i] = sqrt(maxf(largest_area, 1e-6))
-		# The panels' normals in the body's frame, level with its up axis.
-		var to_body_basis := to_body.basis * probe.global_basis
-		_panel_starts[i] = _panel_normals.size()
-		for panel in probe.side_panels:
-			var length := panel.length()
-			if length > 1e-5:
-				var normal := to_body_basis * Vector3(panel.x, 0.0, panel.y)
-				_panel_normals.push_back(Vector3(normal.x, 0.0, normal.z).normalized())
-				_panel_lengths.push_back(length)
-		var forward_position := -_body_offsets[i].z
-		forward_extent = Vector2(minf(forward_extent.x, forward_position - 0.5 * _column_widths[i]), maxf(forward_extent.y, forward_position + 0.5 * _column_widths[i]))
-		_states_by_probe[probe.get_instance_id()] = _force_states[i]
-		total_volume += _full_volumes[i]
-	_panel_starts[force_count] = _panel_normals.size()
-	_hull_length = maxf(forward_extent.y - forward_extent.x, 0.1) if force_count > 0 else 1.0
-	for i in force_count:
-		_volume_shares[i] = _full_volumes[i] / total_volume
-	_update_added_masses()
-	for j in _contact_states.size():
-		var probe := _contact_states[j].probe
-		_body_offsets[force_count + j] = to_body * probe.global_position
-		_states_by_probe[probe.get_instance_id()] = _contact_states[j]
-	# Replace any queued submission of the old probe set, so every dispatch after
-	# this moment answers the new one.
-	_probe_set_time = _water.get_clock()
-	if point_count == 0:
-		_water.release_query(self)
-	else:
-		_submit_points(rigid_body.global_transform)
-
-
-func _submit_points(body_transform : Transform3D) -> void:
+## Depth (m) of global_point below the water surface this tick, negative above it:
+## from the nearest probe's sample and the surface slope there. -INF before the
+## first sample.
+func get_point_depth(global_point : Vector3) -> float:
+	if not _has_sample:
+		return -INF
+	var nearest := 0
+	var nearest_distance := INF
 	for i in _points.size():
-		_points[i] = body_transform * _body_offsets[i]
-	_water.submit_query(self, _points, rigid_body)
+		var distance := Vector2(global_point.x - _points[i].x, global_point.z - _points[i].z).length_squared()
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest = i
+	var offset := Vector2(global_point.x - _points[nearest].x, global_point.z - _points[nearest].z)
+	return _water_heights[nearest] + _water_slopes[nearest].dot(offset) - global_point.y
 
 
-func _update_state(state : BuoyancyProbeState, position : Vector3, sample : WaterSurfaceSample, water_height : float, applied_force : Vector3, submersion : float, now : float) -> void:
-	state.update(position, sample, water_height, applied_force, submersion, now)
-	if state.entered:
-		probe_entered_water.emit(state)
-	elif state.exited:
-		probe_exited_water.emit(state)
+func _release() -> void:
+	_holding = false
+	_body.freeze = false
 
 
-func _check_sinking() -> void:
-	var roll_degrees := _get_abs_roll_degrees()
-	if max_roll_degrees > 0.0 and roll_degrees >= max_roll_degrees:
-		start_sinking(&"roll", {"roll_degrees": roll_degrees})
+## Shares the weight among the probes so that their lift centres under the centre of
+## mass: probe i lifts 1 + g . d_i even shares, with d_i its offset (x, z) from the
+## probes' centre and g chosen to move that centre onto the centre of mass.
+func _balance_probes() -> void:
+	var state := PhysicsServer3D.body_get_direct_state(_body.get_rid())
+	var center_of_mass := Vector2(state.center_of_mass_local.x, state.center_of_mass_local.z)
+	var count := _probes.size()
+	var mean := Vector2.ZERO
+	for probe in _probes:
+		mean += Vector2(probe.x, probe.z)
+	mean /= count
+	# Second moments of the offsets, slightly regularised for probes in one row.
+	var xx := 0.0
+	var xz := 0.0
+	var zz := 0.0
+	for probe in _probes:
+		var d := Vector2(probe.x, probe.z) - mean
+		xx += d.x * d.x
+		xz += d.x * d.y
+		zz += d.y * d.y
+	var epsilon := (xx + zz) * 1e-4 + 1e-9
+	xx += epsilon
+	zz += epsilon
+	var target := (center_of_mass - mean) * count
+	var determinant := xx * zz - xz * xz
+	var gradient := Vector2(zz * target.x - xz * target.y, xx * target.y - xz * target.x) / determinant
+	_probe_shares.resize(count)
+	var total := 0.0
+	var clamped := false
+	for i in count:
+		var share := 1.0 + gradient.dot(Vector2(_probes[i].x, _probes[i].z) - mean)
+		if share < _MIN_PROBE_SHARE:
+			share = _MIN_PROBE_SHARE
+			clamped = true
+		_probe_shares[i] = share
+		total += share
+	for i in count:
+		_probe_shares[i] *= count / total
+	if clamped:
+		push_error("BuoyantBody %s: the centre of mass lies at or beyond the edge of the hull's footprint; the body floats tilted." % get_path())
+
+
+## The water over each probe now: the sample extrapolated to this tick, and moved by
+## the surface slope from where it was queried to where the probe is.
+func _read_water(result : WaterSurfaceQueryResult) -> void:
+	var age := _water.get_query_age(result)
+	_wet_probe_count = 0
+	for i in _probes.size():
+		var sample := result.samples[i]
+		var normal := sample.normal
+		var slope := Vector2(-normal.x, -normal.z) / maxf(normal.y, 0.1)
+		var moved := Vector2(_points[i].x - result.points[i].x, _points[i].z - result.points[i].z)
+		_water_heights[i] = sample.extrapolated_height(age) + slope.dot(moved)
+		_water_slopes[i] = slope
+		if _water_heights[i] - _points[i].y > -draft:
+			_wet_probe_count += 1
+	_has_sample = true
+
+
+## Tells the water where the hull is, how deep it sits below the surface around it
+## (its waterline plane's mean depth plus draft) and how the water under it moves, so
+## the water draws the waves its motion relative to the water makes.
+func _report_hull(result : WaterSurfaceQueryResult) -> void:
+	if wake_strength <= 0.0:
+		_water.release_disturbance(self)
 		return
-	if _sinking_probes.is_empty():
-		return
-	var least_submersion := INF
-	for probe in _sinking_probes:
-		var state := get_probe_state(probe)
-		# A disabled probe has no state and cannot be flooded.
-		if state == null or state.submersion < sink_submersion_threshold:
+	var body_transform := _body.global_transform
+	var forward := -body_transform.basis.z
+	forward.y = 0.0
+	var depth := 0.0
+	var water_velocity := Vector3.ZERO
+	for i in _probes.size():
+		depth += _probe_shares[i] * (_water_heights[i] - _points[i].y)
+		water_velocity += _probe_shares[i] * result.samples[i].surface_velocity
+	var count := float(_probes.size())
+	water_velocity = water_velocity / count + _water.get_surface_drift()
+	water_velocity.y = 0.0
+	_disturbance.position = body_transform * Vector3(_footprint_center.x, _probes[0].y, _footprint_center.y)
+	_disturbance.forward = forward.normalized() if forward.length_squared() > 1e-6 else Vector3.FORWARD
+	_disturbance.half_extents = _footprint_half_extents
+	_disturbance.shape_exponent = _footprint_exponent
+	_disturbance.depth = clampf(draft + depth / count, 0.0, _hull_top - _hull_bottom)
+	_disturbance.water_velocity = water_velocity
+	_disturbance.wave_strength = wake_strength
+	_water.submit_disturbance(self, _disturbance)
+
+
+## The superellipse exponent whose shape fills share of its bounding box.
+func _exponent_for_area_share(share : float) -> float:
+	for i in range(1, _FOOTPRINT_AREA_SHARES.size()):
+		if share <= _FOOTPRINT_AREA_SHARES[i]:
+			var t := inverse_lerp(_FOOTPRINT_AREA_SHARES[i - 1], _FOOTPRINT_AREA_SHARES[i], share)
+			return lerpf(_FOOTPRINT_EXPONENTS[i - 1], _FOOTPRINT_EXPONENTS[i], clampf(t, 0.0, 1.0))
+	return _FOOTPRINT_EXPONENTS[-1]
+
+
+func _apply_forces(result : WaterSurfaceQueryResult) -> void:
+	var state := PhysicsServer3D.body_get_direct_state(_body.get_rid())
+	var gravity := state.total_gravity.length()
+	var probe_count := float(_probes.size())
+	var probe_mass := _body.mass / probe_count
+	var probe_weight := probe_mass * gravity
+	var max_lift := (_hull_top - _hull_bottom) / draft
+	# Critical damping of a probe's share of the mass on its share of the stiffness
+	# (weight / draft), times damping_ratio.
+	var probe_damping := 2.0 * damping_ratio * probe_mass * sqrt(gravity / draft)
+	var drift := _water.get_surface_drift()
+	var center_of_mass := _body.global_position + state.center_of_mass
+	var linear_velocity := state.linear_velocity
+	var angular_velocity := state.angular_velocity
+	var body_up := _body.global_transform.basis.y.normalized()
+	var forward := -_body.global_transform.basis.z
+	forward.y = 0.0
+	forward = forward.normalized() if forward.length_squared() > 1e-6 else Vector3.FORWARD
+	var right := forward.cross(Vector3.UP)
+	var total_force := Vector3.ZERO
+	var total_torque := Vector3.ZERO
+	for i in _probes.size():
+		var point := _points[i]
+		var depth := _water_heights[i] - point.y
+		var wet := clampf(1.0 + depth / draft, 0.0, 1.0)
+		if wet <= 0.0:
+			continue
+		var sample := result.samples[i]
+		var share := _probe_shares[i]
+		var arm := point - center_of_mass
+		var velocity := linear_velocity + angular_velocity.cross(arm)
+		# How fast the surface rises past the probe as it moves over the slope.
+		var surface_rate := sample.height_rate() + _water_slopes[i].dot(Vector2(velocity.x, velocity.z))
+		var lift := Vector3.UP * (share * probe_weight * minf(1.0 + depth / draft, max_lift))
+		# The lift acts no lower than the centre of mass: lift below it swings to
+		# the raised side as the body heels and would capsize a tall hull.
+		var lift_arm := arm - body_up * minf(arm.dot(body_up), 0.0)
+		var force := Vector3.UP * (-share * probe_damping * wet * (velocity.y - surface_rate))
+		var relative := velocity - sample.surface_velocity - drift
+		force -= (forward * (forward_drag * relative.dot(forward)) + right * (sideways_drag * relative.dot(right))) * (share * probe_mass * wet)
+		total_force += force + lift
+		total_torque += arm.cross(force) + lift_arm.cross(lift)
+	_body.apply_central_force(total_force)
+	_body.apply_torque(total_torque)
+
+
+## Reports a body that bobs, rolls or pitches faster than the physics step follows
+## (it then jitters): its draft is tiny or it is light and wide for its inertia.
+func _check_stability() -> void:
+	var state := PhysicsServer3D.body_get_direct_state(_body.get_rid())
+	var gravity := state.total_gravity.length()
+	var max_frequency := _MAX_FREQUENCY_STEP / get_physics_process_delta_time()
+	var heave := sqrt(gravity / draft)
+	if heave > max_frequency:
+		push_error("BuoyantBody %s: a draft of %.3f m bobs too fast for the physics tick rate and jitters; raise draft." % [get_path(), draft])
+	# Rocking stiffness about each horizontal axis: every probe resists with
+	# (weight share / draft) times the square of its vertical lever.
+	var stiffness_per_probe := _body.mass * gravity / (_probes.size() * draft)
+	var center_of_mass := _body.global_position + state.center_of_mass
+	for axis : Vector3 in [_body.global_transform.basis.x.normalized(), _body.global_transform.basis.z.normalized()]:
+		var stiffness := 0.0
+		for i in _points.size():
+			var lever := axis.cross(_points[i] - center_of_mass).y
+			stiffness += stiffness_per_probe * _probe_shares[i] * lever * lever
+		var inverse_inertia := axis.dot(state.inverse_inertia_tensor * axis)
+		if sqrt(stiffness * inverse_inertia) > max_frequency:
+			push_error("BuoyantBody %s: the body rocks too fast for the physics tick rate and jitters; give it more inertia or a larger draft." % get_path())
 			return
-		least_submersion = minf(least_submersion, state.submersion)
-	start_sinking(&"draft", {"probe_count": _sinking_probes.size(), "least_submersion": least_submersion})
 
 
-func _get_abs_roll_degrees() -> float:
-	var basis := rigid_body.global_transform.basis.orthonormalized()
-	var roll_axis := basis.z
-	var target_up := Vector3.UP - roll_axis * Vector3.UP.dot(roll_axis)
-	# Bow pointing straight up or down: roll is undefined.
-	if target_up.length_squared() <= 0.0001:
-		return 0.0
-	return absf(rad_to_deg(basis.y.signed_angle_to(target_up.normalized(), roll_axis)))
+## The probes (body space, on the waterline plane draft above the hull's lowest
+## point) over the outline of body's collision shapes, seen from above.
+func _build_hull(body : RigidBody3D) -> Hull:
+	var hull := Hull.new()
+	var outlines : Array[PackedVector2Array] = []
+	var triangles := PackedVector2Array()
+	for child in body.get_children():
+		if not child is CollisionShape3D:
+			continue
+		var shape_node : CollisionShape3D = child
+		if shape_node.disabled or shape_node.shape == null:
+			continue
+		var shape := shape_node.shape
+		var vertices := PackedVector3Array()
+		var concave := shape is ConcavePolygonShape3D
+		if concave:
+			var polygon : ConcavePolygonShape3D = shape
+			vertices = polygon.get_faces()
+		elif shape is BoxShape3D or shape is SphereShape3D or shape is CapsuleShape3D or shape is CylinderShape3D or shape is ConvexPolygonShape3D:
+			# Each is convex, so its outline from above is the convex hull of its
+			# points; the debug mesh's vertices lie on its surface and include them.
+			var mesh := shape.get_debug_mesh()
+			for surface in mesh.get_surface_count():
+				vertices.append_array(mesh.surface_get_arrays(surface)[Mesh.ARRAY_VERTEX])
+		else:
+			hull.unsupported.push_back("%s (%s)" % [shape_node.name, shape.get_class()])
+			continue
+		var footprint := PackedVector2Array()
+		for vertex in vertices:
+			var point := shape_node.transform * vertex
+			hull.bottom = minf(hull.bottom, point.y)
+			hull.top = maxf(hull.top, point.y)
+			var flat := Vector2(point.x, point.z)
+			hull.low = hull.low.min(flat)
+			hull.high = hull.high.max(flat)
+			footprint.push_back(flat)
+		if concave:
+			triangles.append_array(footprint)
+		else:
+			var outline := Geometry2D.convex_hull(footprint)
+			if outline.size() >= 4:
+				outlines.push_back(outline)
+	if hull.bottom < hull.top:
+		var size := hull.high - hull.low
+		var grid := probe_grid
+		var spacing := sqrt(maxf(size.x * size.y, 1e-6) / _AUTO_PROBE_COUNT)
+		if grid.x <= 0:
+			grid.x = roundi(size.x / spacing)
+		if grid.y <= 0:
+			grid.y = roundi(size.y / spacing)
+		grid = grid.clamp(Vector2i(2, 2), Vector2i(MAX_PROBES_PER_SIDE, MAX_PROBES_PER_SIDE))
+		var waterline := hull.bottom + draft
+		for j in grid.y:
+			for i in grid.x:
+				var flat := hull.low + size * Vector2((i + 0.5) / grid.x, (j + 0.5) / grid.y)
+				if _is_inside(flat, outlines, triangles):
+					hull.probes.push_back(Vector3(flat.x, waterline, flat.y))
+		var inside := 0
+		for j in _AREA_SAMPLES:
+			for i in _AREA_SAMPLES:
+				if _is_inside(hull.low + size * Vector2((i + 0.5) / _AREA_SAMPLES, (j + 0.5) / _AREA_SAMPLES), outlines, triangles):
+					inside += 1
+		hull.area_share = float(inside) / (_AREA_SAMPLES * _AREA_SAMPLES)
+	return hull
 
 
-func _update_volume_debug(center_of_mass_world : Vector3, gravity_force : Vector3, total_external_force : Vector3) -> void:
-	for volume in probe_volumes:
-		if volume.debug_enabled:
-			volume.set_debug_body_state(center_of_mass_world, gravity_force, total_external_force)
+func _is_inside(point : Vector2, outlines : Array[PackedVector2Array], triangles : PackedVector2Array) -> bool:
+	for outline in outlines:
+		if Geometry2D.is_point_in_polygon(point, outline):
+			return true
+	for i in range(0, triangles.size(), 3):
+		if Geometry2D.point_is_inside_triangle(point, triangles[i], triangles[i + 1], triangles[i + 2]):
+			return true
+	return false
+
+
+func _create_debug_instance() -> void:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.no_depth_test = true
+	material.vertex_color_use_as_albedo = true
+	_debug_mesh = ImmediateMesh.new()
+	_debug_instance = MeshInstance3D.new()
+	_debug_instance.name = "BuoyancyDebug"
+	_debug_instance.mesh = _debug_mesh
+	_debug_instance.material_override = material
+	_debug_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_debug_instance.extra_cull_margin = 10000.0
+	_debug_instance.visible = debug_enabled
+	# A Node parent gives no transform: the lines are drawn in world space.
+	add_child(_debug_instance, false, INTERNAL_MODE_BACK)
+
+
+## Each probe as a cross, and a line from it to the water over it (blue when wet).
+func _draw_debug() -> void:
+	_debug_mesh.clear_surfaces()
+	_debug_mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+	for i in _points.size():
+		var point := _points[i]
+		var water := Vector3(point.x, _water_heights[i], point.z)
+		_debug_mesh.surface_set_color(_DEBUG_WET_COLOR if water.y - point.y > -draft else _DEBUG_DRY_COLOR)
+		for axis : Vector3 in [Vector3.RIGHT, Vector3.FORWARD]:
+			_debug_mesh.surface_add_vertex(point - axis * _DEBUG_PROBE_SIZE)
+			_debug_mesh.surface_add_vertex(point + axis * _DEBUG_PROBE_SIZE)
+		_debug_mesh.surface_add_vertex(point)
+		_debug_mesh.surface_add_vertex(water)
+	_debug_mesh.surface_end()

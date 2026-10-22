@@ -10,7 +10,6 @@ extends Node3D
 @onready var buoy_distance_label : BuoyDistanceLabel = $Buoy/RigidBody3D/DistanceLabel
 
 var player_boat : FloatingBoat
-var buoyant_body : BuoyantBody
 
 func _init() -> void:
 	if Engine.is_editor_hint(): return
@@ -25,7 +24,7 @@ func _ready() -> void:
 	if buoy_distance_label != null:
 		buoy_distance_label.set_target(player_boat)
 	compass_hud.setup(player_boat, wind_system)
-	debug_panel.setup(water, wind_system, sky_system, buoyant_body, player_boat)
+	debug_panel.setup(water, wind_system, sky_system, player_boat)
 
 
 func _process(_delta : float) -> void:
@@ -55,8 +54,6 @@ func _configure_player_boat() -> void:
 
 	for boat in _get_boats():
 		boat.player_controlled = boat == player_boat
-
-	buoyant_body = player_boat.get_node_or_null("BuoyantBody") as BuoyantBody
 
 	var first_person_anchor := player_boat.get_node_or_null("CameraTargets/FirstPersonSeat") as Node3D
 	var third_person_focus := player_boat.get_node_or_null("CameraTargets/ThirdPersonFocus") as Node3D

@@ -1,4 +1,4 @@
 @tool
 extends EditorPlugin
-## Enables the Buoyancy System addon. Runtime nodes are available through
-## class_name and can be added as normal node scripts.
+## Enables the Buoyancy System addon. BuoyantBody is available through class_name;
+## it needs core and a water simulation that registers a WaterSurface.

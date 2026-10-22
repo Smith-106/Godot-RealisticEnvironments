@@ -39,4 +39,4 @@ OceanEnvironment        sea_level for the whole environment
 - 脚本可以通过 `wind`、`sky`、`ocean` 和 `exposure` 访问各系统，例如
   `$OceanEnvironment.sky.time_of_day = 0.75`。
 
-要让物体漂浮，见 `buoyancy_system`；要一艘现成的船，见 `boat_template`。
+要一艘现成的船，见 `boat_template`。

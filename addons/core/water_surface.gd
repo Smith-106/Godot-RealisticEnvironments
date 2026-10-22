@@ -1,9 +1,8 @@
 @abstract
 class_name WaterSurface
 extends RefCounted
-## The contract between a water simulation (OceanSystem) and what floats on it or
-## disturbs it (buoyancy, spray, splashes). Consumers depend on this class only,
-## never on the simulation's own types.
+## The contract between a water simulation (OceanSystem) and what samples its
+## surface. Consumers depend on this class only, never on the simulation's own types.
 ##
 ## A simulation registers its surface for the World3D it renders in; consumers
 ## look it up with [method find]. One surface per world.
@@ -12,6 +11,10 @@ extends RefCounted
 ## completed result (null until the first one arrives, a few frames later) and
 ## extrapolate its heights by [method get_query_age]. Release the owner when it
 ## stops querying (e.g. in _exit_tree).
+##
+## Hulls report themselves with [method submit_disturbance] every physics tick, and
+## the water draws the waves they make. Those waves are only drawn: query results
+## leave them out, so nothing a body does to the water can push it back.
 
 ## World3D instance id -> WaterSurface.
 static var _surfaces := {}
@@ -44,10 +47,8 @@ static func find(node : Node) -> WaterSurface:
 
 
 ## Queues points for the next query dispatch; the latest submission per owner
-## wins. body is the physics body the points belong to; it defaults to
-## query_owner's nearest PhysicsBody3D (itself or an ancestor). Surfaces may
-## leave out waves a body makes itself, which would otherwise drive it.
-@abstract func submit_query(query_owner : Object, points : PackedVector3Array, body : PhysicsBody3D = null) -> void
+## wins.
+@abstract func submit_query(query_owner : Object, points : PackedVector3Array) -> void
 
 ## The latest completed query for query_owner, or null before the first one.
 ## Its points may differ from the most recent submission.
@@ -65,12 +66,16 @@ static func find(node : Node) -> WaterSurface:
 ## a result dispatched at or before a moment read here predates it.
 @abstract func get_clock() -> float
 
-## Whether add_impulse() has an effect (e.g. the simulation of waves around the
-## camera is running).
-@abstract func can_add_impulses() -> bool
+## Mean horizontal velocity (m/s, world space, y = 0) of the surface water on top of
+## the waves' own motion: the wind and wave drift that carries foam and floating
+## things downwind. Zero for still water.
+@abstract func get_surface_drift() -> Vector3
 
-## Queues a splash: raises the surface at world_position by a Gaussian of radius
-## meters and amplitude meters (negative lowers it), at rest; it then spreads as
-## a ring of waves. Independent of the simulation's step length. Ignored when
-## can_add_impulses() is false.
-@abstract func add_impulse(world_position : Vector3, radius : float, amplitude : float) -> void
+## Reports disturbance_owner's hull for this physics tick; the latest report per owner
+## wins. The water draws the waves the hull's motion relative to the water makes. The
+## values are copied, so one WaterDisturbance can be reused every tick. Water without
+## interactive waves ignores it.
+@abstract func submit_disturbance(disturbance_owner : Object, disturbance : WaterDisturbance) -> void
+
+## Forgets disturbance_owner's hull. Call from the owner's _exit_tree.
+@abstract func release_disturbance(disturbance_owner : Object) -> void

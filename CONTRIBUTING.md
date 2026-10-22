@@ -7,7 +7,7 @@ and coding agents alike), and each addon's `README.md` explains how to use it.
 ## Scope
 
 The open-source addons are `core`, `ocean_system`, `sky_system`,
-`wind_system`, `exposure_system`, `buoyancy_system`, `hitbox_damage_system`,
+`wind_system`, `exposure_system`, `hitbox_damage_system`,
 `ocean_environment` and `boat_template`, plus `examples/`. The projectile
 weapons (`projectile_launcher_system`), the armed `floating_boat_template` and
 `demo/` are the development sandbox: changes there are kept to what the
@@ -47,9 +47,8 @@ Please include:
    (and `AGENTS.md` if a rule changes) in the same change, and add a line to
    `CHANGELOG.md` under *Unreleased*.
 
-Generated files (`addons/sky_system/stars/*`, `examples/assets/simple_hull.*`,
-baked hull profiles and buoyancy probes) are regenerated with their tools or
-editor buttons, never edited by hand.
+Generated files (`addons/sky_system/stars/*`, `examples/assets/simple_hull.*`)
+are regenerated with their tools, never edited by hand.
 
 By contributing you agree that your contribution is licensed under the
 project's MIT license (`LICENSE`).

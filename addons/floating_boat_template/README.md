@@ -7,9 +7,8 @@ boats (`demo/rowboat.tscn` with a bow swivel gun, `demo/floating_box.tscn`
 with four cannons) inherit it. Everything else is documented in
 `addons/boat_template/README.md`.
 
-`Weapons` sits at child index 4, between `Hitboxes` and `HullWaterFootprint`,
-where it was before the template was split; the demo scenes' `index`
-attributes depend on that order.
+`Weapons` sits at child index 2, between `Hitboxes` and `CameraTargets`; the
+demo scenes' `index` attributes depend on that order.
 
 Arming a boat: instance `projectile_launcher.tscn` anywhere under it (e.g. at
 each gun). `Weapons` collects every launcher under the body, and aims and fires

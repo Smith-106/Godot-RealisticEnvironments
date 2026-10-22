@@ -18,7 +18,7 @@
 
   随后它发出信号、生成命中效果并释放投射物。管理器所属物体自己发射的投射物会被忽略。
 - 某个分组的生命值降到 0 时，管理器发出一次 `group_destroyed`。任何节点都可以响应它，
-  例如让 `BuoyantBody` 把船沉掉。
+  例如让船沉没或移除它。
 
 ## 使用方法
 
@@ -34,8 +34,7 @@ Ship (RigidBody3D)
 2. 在它下面添加带碰撞形状和 `hitbox_group` 的 `ProjectileHitbox` 区域。把每个区域的
    `collision_mask` 设为包含投射物所在的物理层（演示场景中受击区在第 3 层
    "Hitbox"，投射物在第 2 层 "Projectile"）。
-3. 把 `group_destroyed` 连接到需要响应的节点。要让船沉没，就连接到
-   `BuoyantBody._on_hitbox_group_destroyed`。
+3. 把 `group_destroyed` 连接到需要响应的节点。
 
 受击区会向它上方最近的管理器报告，或向 `manager_path` 指定的管理器报告。找不到管理器
 时，它会在编辑器中给出警告。

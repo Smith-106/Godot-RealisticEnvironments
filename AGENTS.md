@@ -17,7 +17,7 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   (`_get_configuration_warnings()`, refreshed by `update_configuration_warnings()`
   in the relevant setters): missing sources/paths, missing sky globals,
   `sea_level` ≠ `water_level`, camera far planes short of the horizon, missing
-  probes, hull profiles or input actions. Runtime-only nodes are `@tool` and
+  input actions. Runtime-only nodes are `@tool` and
   return early from `_ready` in the editor with processing off.
 - `docs/*-plan.md` are completed design records (their *Deferred verification*
   lists are still open).
@@ -26,10 +26,9 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
 - Public API = exported properties, signals, constants, enums and methods
   without a leading `_`, each with a `##` doc comment. Everything else is
   internal: `_` members, and the helper classes (`WaveGenerator`,
-  `WaveCascadeState`, `OceanLodGrid`, `OceanHulls`, `OceanSurfaceQueries`,
-  `WaterInteractionSim`, `AtmosphereRenderer`, `CloudRenderer`, the
-  compositor effects). Don't expose runtime state as public vars.
-- Resources (`WaveSpectrum`, `WaveCascade`, `CloudPreset`, `HullProfile`) hold
+  `WaveCascadeState`, `OceanLodGrid`, `OceanSurfaceQueries`,
+  `AtmosphereRenderer`, `CloudRenderer`, the compositor effects). Don't expose runtime state as public vars.
+- Resources (`WaveSpectrum`, `WaveCascade`, `CloudPreset`) hold
   settings only, never simulation state, so one can be shared.
 - Another system is referenced by a `*_source_path` / `*_path` NodePath; an
   empty path means "use own values" (no separate enable flag). Read it through
@@ -74,32 +73,29 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   script has a committed `.gd.uid`; move it with the script, commit new ones.
 - `addons/boat_template/boat.tscn` is the open-source boat.
   `addons/floating_boat_template/floating_boat.tscn` (dev only) inherits it and
-  adds `Weapons` at child index 4 (between `Hitboxes` and
-  `HullWaterFootprint`). `demo/rowboat.tscn` and `demo/floating_box.tscn`
-  inherit that and override nodes by path with matching `index` attributes:
-  renaming/reordering template nodes breaks them, `sinking_probe_paths` and
-  `demo/main.gd`.
-- Buoyancy probes and hull profiles are generated in the editor and saved;
-  runtime generation is refused. The template has neither. Physical probes are
-  hull columns baked from the mesh (`area_profile`, `side_panels`): every force
-  follows from them, the body's mass and centre of mass, so fix floating by
-  mass / `center_of_mass` / the mesh (the volume's warnings say how), never by
-  force multipliers. Changing the probe data or the bake means re-baking every
-  scene (`tools/bake_buoyancy_probes.gd`).
+  adds `Weapons` at child index 2 (between `Hitboxes` and `CameraTargets`).
+  `demo/rowboat.tscn` and `demo/floating_box.tscn` inherit that and override
+  nodes by path with matching `index` attributes: renaming/reordering template
+  nodes breaks them and `demo/main.gd`.
+- Open hulls have a `WaterMask` (rowboat, example boat), its lid made by
+  **Fit to Hull** and saved as a `.tres` next to the boat
+  (`demo/rowboat_water_mask.tres`, `examples/assets/simple_hull_water_mask.tres`):
+  redo it after changing the hull model.
+- `boat.tscn`'s last child is `BuoyantBody`; inherited scenes override it by
+  path. Each floater's `draft` matches its hull (`docs/buoyancy-and-interactive-waves-plan.md`
+  lists them). The template body's `linear_damp_mode` is Replace, so Godot's
+  default damping does not add to the water's drag.
 - A non-uniformly scaled collision shape gives zero inverse inertia; set
   `inertia` explicitly (as `floating_box.tscn` does).
 - No `/** */` doc comments in `.gdshader`/`.gdshaderinc` (editor extracts them
   on every uniform-list call; stalled the editor for seconds). Use `/*` or `//`.
-- Debug helpers (probe draw, trail, aim marker, health panel) and the
+- Debug helpers (trail, aim marker, health panel) and the
   starfield are internal runtime children; never save them into a scene.
 
 ## Addon boundaries
 - `*_system` addons never depend on each other; shared code goes into `core`
   (depends on nothing). Otherwise connect via signals, groups, duck typing.
 - Water consumers use only `WaterSurface.find(node)`, never `OceanSystem`.
-  Damage sinking: connect `HitboxHealthManager.group_destroyed` to
-  `BuoyantBody._on_hitbox_group_destroyed` in the scene; no hitbox imports in
-  buoyancy code.
 - Only `ocean_environment` and `boat_template` compose systems
   (`floating_boat_template` adds weapons). `OceanEnvironment.sea_level` sets
   both `OceanSystem.water_level` and `SkySystem.sea_level`.
@@ -143,30 +139,54 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `project.godot` `[shader_globals]`, listed in `AtmosphereGlobals` and
   `atmosphere.gdshaderinc` (change all three together), written only by the
   owning `SkySystem`. Transparent materials haze themselves with
-  `FOG = atmosphere_fog(...)`; only `sky_system` and `boat_template` include it.
+  `FOG = atmosphere_fog(...)`; only `sky_system` includes it.
   Opaque materials must not write `FOG`. Environment fog stays off.
-- **Hulls:** `HullWaterFootprint` (group `ocean_hull`) with an editor-baked
-  `HullProfile` `.tres` (never hand-edit the image). ≤ 8 cutouts near the
-  camera, ≤ 32 wake footprints. SimHull record = 36 floats
-  (`WaterInteractionSim.FLOATS_PER_HULL`, `iwave_pressure.glsl`).
 - **Water surface:** a simulation registers one `WaterSurface` per `World3D`
-  in `_enter_tree` and unregisters in `_exit_tree`. Splashes:
-  `add_impulse(position, radius, amplitude)` while `can_add_impulses()` (≤ 64
-  per step).
+  in `_enter_tree` and unregisters in `_exit_tree`. `get_surface_drift()` is the
+  drift that moves the foam (`OceanSystem._get_surface_drift()`, one place);
+  `BuoyantBody` drags bodies along with it. Hulls report a `WaterDisturbance`
+  every physics tick (`submit_disturbance()`, values copied; latest wins) and
+  call `release_disturbance()` in `_exit_tree`.
+- **Water mask:** a `WaterMask` lid writes stencil 128
+  (`WaterMask.STENCIL_REFERENCE`, `water_mask.gdshader`) and every water tier
+  (`water.gdshader`, `water_medium.gdshader`, `water_low.gdshader`) reads
+  `stencil_mode read, compare_not_equal, 128`; change all together. The lid
+  draws at render priority −30, before the underwater view (−21) and the
+  water (−20), and discards while the camera is below its plane.
 - **Weapons:** recoil receivers implement `apply_recoil(fire_direction,
   shot_data)`; projectiles are group `projectile` or have `launch()` and carry
   `source_rigid_body_instance_id` metadata. `player_controlled` gates boat
   drive and weapon input (`controlled_property`).
 
+## Buoyancy invariants
+- One-way coupling: bodies make waves, nothing reads them back. `BuoyantBody`
+  reads only the FFT sea through `WaterSurface` queries; the interactive waves
+  stay out of every query except `OceanSystem`'s own camera point (the
+  interaction owner, for the above/below test). The previous system fed them
+  back and bodies rocked harder and harder.
+- `BuoyantBody` reports its hull every tick: a superellipse fitted to the
+  collision shapes' outline (`_exponent_for_area_share()`), depth = `draft` +
+  the waterline plane's mean depth (relative to the water, so riding the swell
+  makes no waves), the water's velocity under it plus the drift.
+- Visual, not physical: one placement knob, `draft` (no volumes or densities).
+  Probe lift is `share × weight / N × (1 + depth / draft)`; the shares balance
+  about the centre of mass (`_balance_probes()`), so every body rests level at
+  `draft`, and the lift acts no lower than the centre of mass, so no body
+  capsizes. Keep both.
+- Depth uses the body's pose this tick; only the water height is delayed
+  (extrapolated by query age and moved along the sample's slope to the
+  probe's current position). Damping and drag are relative to the water:
+  `height_rate()` along the probe's path, `surface_velocity` plus the drift.
+
 ## Ocean invariants
 - CDLOD: one multimesh of 16 × 16 nodes set via the RenderingServer, selected
   per frame (`OceanLodGrid.update()`). `LOD_RANGE_FACTOR` must stay above ~2.8
   or levels crack. Only the drawing curves with the earth (`EARTH_RADIUS`);
-  queries, buoyancy, hulls, reflections and the simulation stay flat. Keep
+  queries and reflections stay flat. Keep
   camera far planes past the horizon (demo: 60 km). The editor shows
   `editor_water_preview_mesh.tres`. Never save a generated mesh. The water is
   drawn at `water_level` (the `water_level` uniform), whatever the node's
-  transform: one height for drawing, queries, hulls and reflections.
+  transform: one height for drawing, queries and reflections.
 - Shader code lives in `water.gdshaderinc`; `water.gdshader`,
   `water_medium.gdshader`, `water_low.gdshader` only set defines. All variants
   keep identical uniforms (compile features out, not uniforms). Water optics,
@@ -210,14 +230,17 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `water_scattering_anisotropy`: no artistic tints. `SPECULAR = 0` (engine
   specular doubles the sky). Reflections share one rough-surface Fresnel
   (`rough_fresnel`), never plain Schlick. `OceanSystem.normal_scale` 1 =
-  physical slopes (one value for every cascade and the interaction waves).
+  physical slopes (one value for every cascade).
 - Transparency: water is in the transparent pass; light from behind goes into
   `EMISSION` (no `ALPHA`) via `underwater_transmittance()`, albedo scaled by
   `1 − transmittance` (same transmittance). Keep `depth_draw_always`,
   `cast_shadow` off and `mat_water.tres` `render_priority` below every other
-  transparent material. Caustics only in the water (`caustic_light()`).
-- `WaveSpectrum.displacement_scale` 1 = physical JONSWAP height (demo uses
-  2). `whitecap` thresholds include it; retune them together. Foam is coverage averaged by
+  transparent material, except the underwater view (one below) and
+  `WaterMask` lids (−30, they must draw first). Caustics only in the water
+  (`caustic_light()`).
+- `WaveSpectrum.displacement_scale` 1 = physical JONSWAP height (the demo uses
+  1; higher makes waves steeper than water allows and over-stiff boats capsize).
+  `whitecap` thresholds include it (default 0.8 for 1); retune them together. Foam is coverage averaged by
   mips: no distance fades. `foam_detail.png` must stay uniformly distributed
   (regenerate with `generate_foam_detail.py`).
 - Surface queries are async: `submit_query` every tick, `get_query_result`
@@ -231,24 +254,48 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   (`OceanSurfaceQueries.FLOATS_PER_CASCADE`, `OceanSystem._update_cascade_uniforms()`,
   `ocean_sampling.glslinc`). Queries read mip 0 and invert horizontal
   displacement.
+- Interactive waves (`OceanInteraction`, visual only): one step per physics
+  tick in `OceanSystem._physics_process` (`process_physics_priority` 100,
+  after the bodies report; also saved in `ocean_system.tscn`, as
+  `process_priority` is: a value only code sets becomes an override the
+  editor saves into every instance). A world-locked window centred on
+  the camera, with no lead toward where it looks (turning the camera swung it,
+  clearing and fading foam): cell c is texel c mod map size,
+  sampled with repeat wrapping at rest positions (`UV`); moving the window
+  clears only the cells it enters, and a damped border keeps waves off the
+  FFT's periodic seam. A hull's source is `T_now − T_previous`, the previous
+  footprint moved with the water (first sighting or a jump starts over, no
+  wave). The FFT buffer holds an input and an output half; pass order: source,
+  forward FFT, evolve (exact dispersion with the spectrum's `water_depth`),
+  inverse FFT, two output passes, mips. Keep the dispersion exact: a spatial
+  kernel cannot draw a Kelvin wake (plan, Phase 0.1). `interaction_fade()` in
+  `water.gdshaderinc` is copied in `surface_query.glsl`
+  (`OceanSurfaceQueries.INTERACTION_FADE_START`); change both. Water debug
+  views 16, 17, 18 show its height, slopes and foam.
+- Wake foam (`interaction_foam.glsl`): coverage in two halves of a buffer
+  (read one step, written the next), moved by the surface drift in whole
+  cells (never resampled: no blur), the remainder an offset the foam pass and
+  the water apply (`get_foam_offset()`, `interaction_foam_offset`; without
+  it the foam jumped a cell at a time), and faded by `FOAM_LIFETIME`. A hull holds
+  coverage by its speed through the water (`_hull_foam()`, the record's fifth
+  vec4), not by its draft (that saturated big hulls); crest foam grows toward
+  `CREST_FOAM_MAX_COVERAGE`. Keep both well below 1 so the foam stays lace.
+  The water adds it to `foam_signal` before `foam_intensity`. `mip_chain.glsl`
+  filters both maps in one dispatch (z: waves, foam).
+- `fft_compute.glsl` (`buffer_slot, spectrum_count, direction`) and
+  `transpose.glsl` (`buffer_slot, spectrum_count`) serve `WaveGenerator`
+  (4 spectra, inverse) and `OceanInteraction` (1, forward and inverse).
 - Includes aren't tracked by the importer: after editing an include, delete
   `.godot/imported/<name>-*` of every shader using it (touching is not
-  enough). `ocean_sampling.glslinc` → `surface_query.glsl`,
-  `iwave_pressure.glsl`; `iwave_common.glslinc` → every `iwave_*.glsl`;
+  enough). `ocean_sampling.glslinc` → `surface_query.glsl`;
+  `interaction_common.glslinc` → `interaction_source.glsl`,
+  `interaction_output.glsl`, `interaction_foam.glsl`;
   `atmosphere_common.glslinc` → `atmosphere_*.glsl`, `aerial_perspective.glsl`,
   `cloud_raymarch.glsl`, `cloud_trace.glsl`;
   `cloud_noise.glslinc` → `cloud_noise_bake.glsl`, `cloud_weather.glsl`;
   `cloud_common.glslinc` → `cloud_raymarch.glsl`, `cloud_trace.glsl`;
   `cloud_screen_common.glslinc` → `cloud_trace.glsl`, `cloud_reconstruct.glsl`,
   `cloud_composite.glsl` (which also includes `atmosphere_common.glslinc`).
-- Interaction sim (`WaterInteractionSim`, runtime only) simulates `η = h + p`.
-  Render texture `(h, η, foam, hull coverage)`. Queries add `η · (1 −
-  coverage)`, except for owners on a wave-making body, which read FFT waves
-  only (own waves fed back make it oscillate). Don't add a geometric own-wave
-  mask. Steps per physics tick or at `interaction_steps_per_second`.
-  `interaction_grid_size` is a power of two ≤ 1024 (exact FFT of `g·|k|`).
-- `HullProfile` images are RGBA16F; changing channels means re-baking all
-  profiles (one texture array format).
 - Planar reflections reserve render layer 20 (`reflection_water_layer`) for
   water. The water samples `PlanarReflectionCaptureEffect.texture` and
   `distance_texture` (resize both via `set_size()`), not the SubViewport.

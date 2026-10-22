@@ -2,17 +2,9 @@
 #version 460
 /**
  * Samples the rendered ocean surface at arbitrary world-space points. Used by
- * buoyancy/gameplay queries, where reading back whole displacement textures
- * would be far too expensive.
- *
- * Heights include the interaction simulation's eta = h + p rather than the
- * visible h, so a hull's own rest depression (h = -p) never costs buoyancy,
- * and only outside hulls (render .w = hull coverage): under a hull, eta is not
- * a surface anything floats on. Points from interaction_point_count on leave the
- * simulation out: OceanSurfaceQueries puts there the owners on a body that makes
- * waves itself, since the simulation is one summed field and that body's own
- * waves, read back after the query delay, act as a lagging spring and drive
- * it. Such bodies feel the incident (FFT) waves only.
+ * gameplay queries, where reading back whole displacement textures would be far
+ * too expensive. The interactive waves are left out (bodies never feel them),
+ * except for the first interaction_point_count points (OceanSystem's camera).
  */
 
 #define WORKGROUP_SIZE 64U
@@ -24,11 +16,14 @@ layout(push_constant) restrict readonly uniform PushConstants {
 	uint cascade_count;
 	float water_level;
 	float normal_sample_distance;
-	vec2 interaction_center;      // world XZ of the simulation window center
-	float interaction_cell_size;
-	float interaction_fade_start; // Chebyshev distance from the center (m)
-	float interaction_fade_end;
-	uint interaction_point_count; // points [0, this) add the simulation; 0 while it is off
+	uint interaction_point_count;
+	// The interactive waves' window (OceanInteraction.get_window()) and where they
+	// start to fade out (share of the half size), as interaction_fade() in water.gdshaderinc.
+	float interaction_center_x;
+	float interaction_center_z;
+	float interaction_half_size;
+	float interaction_map_scale;
+	float interaction_fade_start;
 };
 
 #define OCEAN_SAMPLING_SET 0
@@ -51,32 +46,9 @@ layout(std430, set = 0, binding = 2) restrict writeonly buffer SampleBuffer {
 	SurfaceSample samples[];
 };
 
-// Interaction render texture (rgba16f: h, eta, foam), wrap-around addressed.
-layout(rgba16f, set = 0, binding = 5) restrict readonly uniform image2D interaction_render;
-
-// Bilinear eta weighted by (1 - hull coverage) of each texel.
-float sample_interaction_eta(vec2 p) {
-	vec2 from_center = abs(p - interaction_center);
-	float fade = 1.0 - smoothstep(interaction_fade_start, interaction_fade_end, max(from_center.x, from_center.y));
-	if (fade <= 0.0) {
-		return 0.0;
-	}
-	ivec2 dims = imageSize(interaction_render);
-	vec2 q = p / interaction_cell_size - 0.5;
-	ivec2 base = ivec2(floor(q));
-	vec2 f = q - vec2(base);
-	ivec2 p0 = base & (dims - 1);
-	ivec2 p1 = (p0 + 1) & (dims - 1);
-	vec4 t00 = imageLoad(interaction_render, p0);
-	vec4 t10 = imageLoad(interaction_render, ivec2(p1.x, p0.y));
-	vec4 t01 = imageLoad(interaction_render, ivec2(p0.x, p1.y));
-	vec4 t11 = imageLoad(interaction_render, p1);
-	float e00 = t00.y * (1.0 - t00.w);
-	float e10 = t10.y * (1.0 - t10.w);
-	float e01 = t01.y * (1.0 - t01.w);
-	float e11 = t11.y * (1.0 - t11.w);
-	return mix(mix(e00, e10, f.x), mix(e01, e11, f.x), f.y) * fade;
-}
+// The interactive waves' map (OceanInteraction): x = height at a rest position, repeating
+// every window; repeat, linear sampler.
+layout(set = 0, binding = 5) uniform sampler2D interaction_map;
 
 void main() {
 	uint index = gl_GlobalInvocationID.x;
@@ -85,30 +57,26 @@ void main() {
 	}
 
 	vec2 p = vec2(points[3U * index], points[3U * index + 2U]);
-	bool with_interaction = index < interaction_point_count;
 	vec2 source = ocean_invert_horizontal_displacement(p);
 	vec3 visual_displacement;
 	vec3 velocity;
 	ocean_sample_displacement_and_velocity(source, visual_displacement, velocity);
-	if (with_interaction) {
-		visual_displacement.y += sample_interaction_eta(p);
-	}
 
 	// The rendered surface's normal from its tangents at the surface point over p: the
 	// displaced positions of its rest neighbours (no inversion needed, unlike heights at
-	// world offsets). Then the simulation's slope from its own heights.
+	// world offsets).
 	float e = max(normal_sample_distance, 0.001);
 	vec3 tangent_x = vec3(2.0 * e, 0.0, 0.0) + ocean_sample_visual_displacement(source + vec2(e, 0.0)) - ocean_sample_visual_displacement(source - vec2(e, 0.0));
 	vec3 tangent_z = vec3(0.0, 0.0, 2.0 * e) + ocean_sample_visual_displacement(source + vec2(0.0, e)) - ocean_sample_visual_displacement(source - vec2(0.0, e));
 	vec3 normal = normalize(cross(tangent_z, tangent_x));
-	if (with_interaction) {
-		vec2 slope = -normal.xz / normal.y + vec2(
-				sample_interaction_eta(p + vec2(e, 0.0)) - sample_interaction_eta(p - vec2(e, 0.0)),
-				sample_interaction_eta(p + vec2(0.0, e)) - sample_interaction_eta(p - vec2(0.0, e))) / (2.0 * e);
-		normal = normalize(vec3(-slope.x, 1.0, -slope.y));
-	}
 
-	samples[index].displacement_height = vec4(visual_displacement, water_level + visual_displacement.y);
+	float height = water_level + visual_displacement.y;
+	if (index < interaction_point_count) {
+		vec2 offset = abs(source - vec2(interaction_center_x, interaction_center_z)) / interaction_half_size;
+		float fade = 1.0 - smoothstep(interaction_fade_start, 1.0, max(offset.x, offset.y));
+		height += textureLod(interaction_map, source * interaction_map_scale, 0.0).x * fade;
+	}
+	samples[index].displacement_height = vec4(visual_displacement, height);
 	samples[index].normal_data = vec4(normal, 0.0);
 	samples[index].surface_velocity = vec4(velocity, 0.0);
 }
