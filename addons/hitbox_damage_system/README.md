@@ -21,7 +21,7 @@ depends on nothing.
   It then emits signals, spawns the hit effect and frees the projectile.
   Projectiles fired by the manager's own body are ignored.
 - When a group's health reaches 0, the manager emits `group_destroyed` once.
-  Anything can react to it, e.g. `BuoyantBody` sinking the ship.
+  Anything can react to it (e.g. sink or remove the ship).
 
 ## How to use
 
@@ -39,8 +39,7 @@ Ship (RigidBody3D)
    `hitbox_group`. Set each area's `collision_mask` to include the
    projectiles' physics layer (the demo uses layer 3 "Hitbox" for hitboxes and
    layer 2 "Projectile" for projectiles).
-3. Connect `group_destroyed` to whatever should react. For sinking, connect
-   it to `BuoyantBody._on_hitbox_group_destroyed`.
+3. Connect `group_destroyed` to whatever should react.
 
 A hitbox reports to the nearest manager above it, or to its `manager_path`. In
 the editor it warns when it has none.

@@ -15,8 +15,7 @@ const DEBUG_PANEL_WIDTH := 260.0
 signal hitbox_hit(hitbox_group: StringName, hitbox: Node, projectile: Node, hit_data: Dictionary)
 ## Emitted when a group's health changes through damage.
 signal group_health_changed(hitbox_group: StringName, health: float, max_health: float, hit_data: Dictionary)
-## Emitted once when a group's health reaches 0 (connect BuoyantBody._on_hitbox_group_destroyed
-## to sink the body).
+## Emitted once when a group's health reaches 0.
 signal group_destroyed(hitbox_group: StringName, hit_data: Dictionary)
 
 ## Enables damage routing, health changes, hit effects, and projectile cleanup.

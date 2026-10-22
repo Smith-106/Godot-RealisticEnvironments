@@ -46,7 +46,6 @@ wind_direction = 0.0
 gi_mode = 0
 wind_source_path = NodePath("../WindSystem")
 sky_source_path = NodePath("../SkySystem")
-interaction_viscosity = 0.05
 mesh_base_cell_size = 1.0
 
 [node name="OceanDebugPanel" parent="." unique_id=900526538 instance=ExtResource("9_gb4mm")]

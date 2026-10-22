@@ -2,8 +2,8 @@
 
 [English](README.md) · **简体中文**
 
-海洋各插件共用的基础。它不依赖任何插件；`ocean_system`、`sky_system`、
-`buoyancy_system` 和 `boat_template` 依赖它，请先启用它。
+海洋各插件共用的基础。它不依赖任何插件；`ocean_system`、`sky_system` 和
+`boat_template` 依赖它，请先启用它。
 
 ## 工作原理
 
@@ -11,12 +11,11 @@
 
 | 类 | 作用 |
 | --- | --- |
-| `WaterSurface` | 水面约定。水体模拟（`OceanSystem`）为每个 `World3D` 注册一个；漂浮物、水花等通过 `WaterSurface.find(node)` 找到它。 |
+| `WaterSurface` | 水面约定。水体模拟（`OceanSystem`）为每个 `World3D` 注册一个；需要采样水面的代码通过 `WaterSurface.find(node)` 找到它。 |
 | `WaterSurfaceQueryResult`、`WaterSurfaceSample` | 水面查询的结果：每个点的水面高度、法线、位移和水的速度。 |
 | `WindSource` | 通过方法或属性读取任意风源（`WindSystem` 或你自己的节点）。 |
 | `ProjectSetup` | 供各插件补充缺少的项目设置（全局着色器 uniform、输入动作），不改动已有设置。 |
 | `RenderingContext` | 管理一个计算功能的 `RenderingDevice` 资源，统一释放并记录创建失败。 |
-| `HullSlicer` | 编辑器中的网格切片工具，用于生成浮力探针和船体轮廓。 |
 
 水面查询是异步的：所有使用者的查询点在 GPU 上一次批量采样，几帧之后才回读到 CPU。
 因此结果总是稍旧一些，每个采样都可以把高度外推到当前时刻。
@@ -50,15 +49,6 @@ func _exit_tree() -> void:
 - 一个结果对应的是它那次派发的点（`result.points`）。如果你改变了点的数量，
   请检查采样数。
 - 始终用 `get_query_age(result)` 外推。
-
-### 制造水花
-
-```gdscript
-if _water.can_add_impulses():
-	_water.add_impulse(position, 1.5, 0.4)  # 半径和高度，单位为米
-```
-
-水面先隆起一个高斯形的鼓包，然后向外扩散成一圈波纹。
 
 ### 提供或读取风
 

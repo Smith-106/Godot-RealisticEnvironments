@@ -9,7 +9,6 @@ const PANEL_SIZE := Vector2(420, 560)
 var water : OceanSystem
 var wind_source : Node
 var sky_system : Node
-var buoyant_body : BuoyantBody
 var player_body : FloatingBoat
 
 var _panel : PanelContainer
@@ -27,13 +26,11 @@ func setup(
 	ocean_system : OceanSystem,
 	active_wind_source : Node = null,
 	active_sky_system : Node = null,
-	active_buoyant_body : BuoyantBody = null,
 	active_player_body : FloatingBoat = null
 ) -> void:
 	water = ocean_system
 	wind_source = active_wind_source
 	sky_system = active_sky_system
-	buoyant_body = active_buoyant_body
 	player_body = active_player_body
 	if _controls_ready:
 		_rebuild()
@@ -110,9 +107,9 @@ func _build() -> void:
 		content.add_child(HSeparator.new())
 		_add_sky_controls(content)
 
-	if buoyant_body:
+	if player_body:
 		content.add_child(HSeparator.new())
-		_add_buoyancy_controls(content)
+		_add_player_boat_controls(content)
 
 	content.add_child(HSeparator.new())
 	_add_ocean_controls(content)
@@ -257,23 +254,19 @@ func _add_sky_reflection_controls(parent : VBoxContainer) -> void:
 	)
 
 
-func _add_buoyancy_controls(parent : VBoxContainer) -> void:
+func _add_player_boat_controls(parent : VBoxContainer) -> void:
 	var title := Label.new()
-	title.text = "Buoyancy"
+	title.text = "Player Boat"
 	title.add_theme_font_size_override("font_size", 15)
 	parent.add_child(title)
 
-	if player_body:
-		var position_history := _add_check_row(parent, "Position History", "Shows the player body's world-space movement trail.")
-		position_history.name = "PlayerPositionHistory"
-		position_history.button_pressed = player_body.debug_enabled
-		position_history.toggled.connect(func(enabled : bool) -> void:
-			if not _is_syncing and player_body:
-				player_body.debug_enabled = enabled
-		)
-
-	_add_bound_param(parent, "Water Density", "Seawater is usually around 1025 kg/m^3; freshwater is around 1000 kg/m^3.", buoyant_body.water_density, 1.0, 2000.0, 1.0, func(value : float) -> void: buoyant_body.water_density = value, true)
-	_add_bound_param(parent, "Wave Damping Ratio", "Damping of each column's bobbing while it crosses the surface, as a fraction of critical damping: the energy radiated as waves.", buoyant_body.wave_damping_ratio, 0.0, 2.0, 0.01, func(value : float) -> void: buoyant_body.wave_damping_ratio = value, true)
+	var position_history := _add_check_row(parent, "Position History", "Shows the player body's world-space movement trail.")
+	position_history.name = "PlayerPositionHistory"
+	position_history.button_pressed = player_body.debug_enabled
+	position_history.toggled.connect(func(enabled : bool) -> void:
+		if not _is_syncing and player_body:
+			player_body.debug_enabled = enabled
+	)
 
 
 func _add_mesh_controls(parent : VBoxContainer) -> void:

@@ -3,7 +3,7 @@
 **English** · [简体中文](README.zh-CN.md)
 
 The shared foundation of the ocean addons. It depends on nothing; `ocean_system`,
-`sky_system`, `buoyancy_system` and `boat_template` depend on it. Enable it
+`sky_system` and `boat_template` depend on it. Enable it
 before them.
 
 ## How it works
@@ -13,12 +13,11 @@ together, the contract between them lives here:
 
 | Class | Role |
 | --- | --- |
-| `WaterSurface` | The water contract. A water simulation (`OceanSystem`) registers one per `World3D`; anything that floats or splashes finds it with `WaterSurface.find(node)`. |
+| `WaterSurface` | The water contract. A water simulation (`OceanSystem`) registers one per `World3D`; anything that samples the water finds it with `WaterSurface.find(node)`. |
 | `WaterSurfaceQueryResult`, `WaterSurfaceSample` | The answer to a water query: per point, the surface height, normal, displacement and water velocity. |
 | `WindSource` | Reads any wind provider (a `WindSystem` or a node of your own) by its methods or properties. |
 | `ProjectSetup` | Lets the addons' plugins add missing project settings (global shader uniforms, input actions) without changing existing ones. |
 | `RenderingContext` | Owns a compute feature's `RenderingDevice` resources, frees them together and records failures. |
-| `HullSlicer` | Editor-time mesh slicing, for buoyancy probes and hull profiles. |
 
 Water queries are asynchronous: the points of every consumer are sampled on
 the GPU in one batch and read back a few frames later. A result is therefore
@@ -53,15 +52,6 @@ func _exit_tree() -> void:
 - A result answers the points of its own dispatch (`result.points`). If you
   change the number of points, check the sample count.
 - Always extrapolate with `get_query_age(result)`.
-
-### Make a splash
-
-```gdscript
-if _water.can_add_impulses():
-	_water.add_impulse(position, 1.5, 0.4)  # radius and height in metres
-```
-
-The water rises by a Gaussian bump, which then spreads as a ring of waves.
 
 ### Provide or read wind
 

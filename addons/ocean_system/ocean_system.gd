@@ -3,12 +3,11 @@ class_name OceanSystem
 extends MeshInstance3D
 ## An open ocean out to the horizon: FFT wave cascades of one wind-driven spectrum
 ## (spectrum, cascades), a level-of-detail mesh on the earth's curve, physically based
-## water optics, foam, sky and scene reflections, and wakes, bow waves and splashes
-## around hulls (HullWaterFootprint). Instance ocean_system.tscn; see
+## water optics, foam, and sky and scene reflections. Instance ocean_system.tscn; see
 ## addons/ocean_system/README.md.
 ##
 ## The ocean registers a WaterSurface for its world: whatever floats on it or
-## disturbs it uses WaterSurface.find(), never this node. The waves follow a wind
+## samples it uses WaterSurface.find(), never this node. The waves follow a wind
 ## source (wind_source_path, else the spectrum's own wind) and the water reflects a sky
 ## source (sky_source_path, else the manual_* values). The water lies at water_level;
 ## the node's own transform is ignored, so leave it at the origin, level and unscaled.
@@ -47,7 +46,7 @@ const SIMULATION_MAP_SIZES : Array[int] = [128, 256, 512, 1024]
 const MAX_SKY_POINTS := 8
 ## The water is drawn on a sphere of this radius (meters) touching the camera's
 ## sea-level point (water.gdshader, EARTH_RADIUS), so it ends at a real horizon.
-## Only the drawing: surface queries, buoyancy and the simulation stay flat.
+## Only the drawing: surface queries and reflections stay flat.
 const EARTH_RADIUS := 6371000.0
 ## The cascades split the spectrum by tile length (_update_spectrum_bands()): a
 ## cascade draws waves no longer than its tile / CASCADE_BAND_WAVES_PER_TILE. Its
@@ -61,18 +60,12 @@ const CASCADE_BAND_MIN_TEXELS := 4.0
 ## waves longer than a tile cannot be drawn, and with a shorter tile a sizeable share of
 ## the sea's energy (all of it beyond the peak's long side) is missing.
 const _LARGEST_TILE_PEAK_WAVELENGTHS := 1.5
-## Own-wave simulations (_create_own_wave_sim()): absorbing border width and the
-## margin between it and the hulls (cells), and the largest grid (longer hulls are
-## cut off at its border).
-const OWN_WAVE_SPONGE_CELLS := 12.0
-const OWN_WAVE_MARGIN_CELLS := 8.0
-const OWN_WAVE_MAX_GRID_SIZE := 256
 ## Speed of the surface water's mean drift as a share of the wind speed (wind drift and
 ## Stokes drift together, about 3 %, Wu 1975): it carries the foam downwind.
 const _FOAM_DRIFT_WIND_SHARE := 0.03
 
 ## Height of the still water in world units. The surface is drawn here, and water
-## queries, buoyancy, hull cutouts and planar reflections use it; the node's own
+## queries and planar reflections use it; the node's own
 ## position does not move the sea. Keep the sky's sea_level equal to it
 ## (OceanEnvironment.sea_level sets both).
 @export var water_level := 0.0 :
@@ -161,8 +154,8 @@ const _FOAM_DRIFT_WIND_SHARE := 0.03
 	set(value):
 		short_wave_slope_scale = value
 		_update_micro_roughness()
-## Multiplies the slopes of every wave in the shading (normals, roughness, caustics),
-## the interaction simulation's included. 1 is the physical slope of the waves as
+## Multiplies the slopes of every wave in the shading (normals, roughness, caustics).
+## 1 is the physical slope of the waves as
 ## drawn (WaveSpectrum.displacement_scale included); lower is calmer-looking water.
 ## The mesh and water queries do not change.
 @export_range(0.0, 2.0, 0.01) var normal_scale := 1.0 :
@@ -171,7 +164,7 @@ const _FOAM_DRIFT_WIND_SHARE := 0.03
 		_set_water_shader_parameter(&'normal_scale', normal_scale)
 
 @export_group('Foam')
-## Albedo of dense foam (wave, wake and hull edge foam). Foam is a near-neutral
+## Albedo of dense foam. Foam is a near-neutral
 ## white scatterer (albedo about 0.8); the lights and sky tint it.
 @export_color_no_alpha var foam_color : Color = Color(0.9, 0.92, 0.93) :
 	set(value):
@@ -311,89 +304,6 @@ const _FOAM_DRIFT_WIND_SHARE := 0.03
 		reflection_clip_bias = value
 		_update_planar_reflection_settings()
 
-@export_group('Hull Cutouts')
-## Ships (HullWaterFootprint nodes) whose bounds come within this distance of the
-## camera get water hidden inside their hull; at most 8, nearest first. Farther
-## hulls are not cut out: their interior water is too small to see.
-@export_range(0.0, 2000.0, 1.0, "or_greater", "suffix:m") var hull_cutout_distance := 150.0
-
-@export_group('Interaction')
-## Runs the iWave interaction simulation on a window around the camera: hulls
-## (HullWaterFootprint) push water and radiate wakes and bow waves, and
-## WaterSurface.add_impulse() makes splashes. Runtime only; the editor shows the
-## FFT ocean alone.
-@export var interaction_enabled := true :
-	set(value):
-		interaction_enabled = value
-		_setup_interaction()
-## Simulation steps per second. 0 steps once per physics tick (every hull pose
-## moves the water). A fixed rate decouples the cost from the physics rate: a game
-## ticking at 120 Hz can simulate the water at 60 or 30. Use a divisor of the
-## physics rate, so every step sees the same number of new hull poses (each step
-## uses the latest ones); stable to ~5 steps a second at the default cell size.
-@export_range(0.0, 240.0, 1.0) var interaction_steps_per_second := 0.0
-## Simulation grid resolution. The window covers grid size x cell size meters.
-@export_enum('256x256:256', '512x512:512', '1024x1024:1024') var interaction_grid_size := 512 :
-	set(value):
-		interaction_grid_size = value
-		_setup_interaction()
-## Meters per simulation cell. Smaller cells resolve shorter waves but shrink
-## the window; waves shorter than about 4 cells are not represented.
-@export_range(0.1, 4.0, 0.05, "or_greater", "suffix:m") var interaction_cell_size := 0.5 :
-	set(value):
-		interaction_cell_size = value
-		_setup_interaction()
-## Velocity damping of simulated waves, in 1/s. Higher values make wakes fade sooner.
-@export_range(0.0, 5.0, 0.01, "or_greater") var interaction_damping := 0.2 :
-	set(value):
-		interaction_damping = value
-		_apply_interaction_settings()
-## Multiplies gravity in the simulation (wave speed scales with its square root).
-## 1 is physical deep-water dispersion.
-@export_range(0.1, 4.0, 0.01) var interaction_gravity_scale := 1.0 :
-	set(value):
-		interaction_gravity_scale = value
-		_apply_interaction_settings()
-## Viscosity of simulated waves, in m^2/s. Damps short waves far more than long
-## ones (rate ~ viscosity * k^2), smoothing grid-scale ripples while leaving
-## wakes intact. Above ~3 at 60 physics ticks per second the step is unstable.
-@export_range(0.0, 1.0, 0.005, "or_greater") var interaction_viscosity := 0.1 :
-	set(value):
-		interaction_viscosity = value
-		_apply_interaction_settings()
-## Width, in cells, of the absorbing border at the window edge. Waves fade out
-## there instead of wrapping around; rendering fades over the band inside it.
-@export_range(4.0, 128.0, 1.0) var interaction_sponge_cells := 24.0 :
-	set(value):
-		interaction_sponge_cells = value
-		_apply_interaction_settings()
-## Extra damping at the very edge of the window, in 1/s.
-@export_range(0.0, 60.0, 0.1, "or_greater") var interaction_sponge_damping := 12.0 :
-	set(value):
-		interaction_sponge_damping = value
-		_apply_interaction_settings()
-## Foam generated per second by steep simulated waves and advancing hulls.
-@export_range(0.0, 10.0, 0.01, "or_greater") var interaction_foam_grow := 1.5 :
-	set(value):
-		interaction_foam_grow = value
-		_apply_interaction_settings()
-## Exponential decay rate of simulated foam, in 1/s. Lower values leave longer wake trails.
-@export_range(0.0, 10.0, 0.01, "or_greater") var interaction_foam_decay := 0.35 :
-	set(value):
-		interaction_foam_decay = value
-		_apply_interaction_settings()
-## Wave slope (rise over run) below which simulated waves make no foam.
-@export_range(0.0, 2.0, 0.01) var interaction_foam_slope_threshold := 0.1 :
-	set(value):
-		interaction_foam_slope_threshold = value
-		_apply_interaction_settings()
-## Bow foam: foam source per meter of bow-wave rise just outside advancing
-## hulls (see HullWaterFootprint.bow_wave_strength).
-@export_range(0.0, 20.0, 0.01, "or_greater") var interaction_foam_bow_rate := 0.5 :
-	set(value):
-		interaction_foam_bow_rate = value
-		_apply_interaction_settings()
-
 @export_group('Quality')
 ## Water shader tier. High has every feature; Medium shortens the refraction search,
 ## the crest light march, the planar reflection search and the normal maps'
@@ -479,13 +389,6 @@ var _sky_source_polled := false
 ## True while the sky source gives the camera's atmosphere (get_atmosphere_view_volumes()),
 ## whose observer is read every frame.
 var _aerial_perspective_enabled := false
-## Each wave-making body's own waves: a small simulation forced by its hulls alone,
-## at the interaction simulation's cells and steps, following the body
-## (_step_own_waves()). Its queries take them out of the interaction waves, so every
-## body floats on the same waves of everything else. Slot k (OceanSurfaceQueries
-## .OWN_WAVE_SLOTS) holds the simulation of body _own_wave_bodies[k], or null.
-var _own_wave_sims : Array[WaterInteractionSim] = []
-var _own_wave_bodies := PackedInt64Array()
 ## Last camera exposure sent to the water material (_update_scene_exposure()).
 var _scene_exposure := 1.0
 ## Set by the sky source's lighting_changed signal.
@@ -508,8 +411,7 @@ var _has_wave_output := false
 ## Whether the spectrum's peak wave has been reported as too long for the largest tile
 ## (_check_peak_wavelength()); cleared once it fits again, so it is reported once per episode.
 var _peak_wavelength_reported := false
-## This frame's cascade records for the compute shaders (_update_cascade_uniforms()),
-## shared by the surface queries and the interaction simulation's ticks.
+## This frame's cascade records for the surface queries (_update_cascade_uniforms()).
 var _cascade_data := PackedByteArray()
 var _reflection_renderer : OceanReflectionRenderer
 ## The underwater view (underwater.gdshader): an internal full-screen quad shown while the
@@ -518,15 +420,8 @@ var _underwater : MeshInstance3D
 var _underwater_material : ShaderMaterial
 ## Whether this ocean has a surface query out for the camera (released in _exit_tree()).
 var _camera_query_submitted := false
-## The CDLOD mesh (runtime only; in the editor it only sends the uniforms) and the
-## hull footprints' cutouts and simulation records.
+## The CDLOD mesh (runtime only; in the editor it only sends the uniforms).
 var _lod_grid := OceanLodGrid.new(_set_water_shader_parameter)
-var _hulls := OceanHulls.new(_set_water_shader_parameter)
-## Null while interaction_enabled is off, in the editor, or before _ready.
-var _interaction : WaterInteractionSim
-var _interaction_texture := Texture2DRD.new()
-## Simulation time not yet stepped (interaction_steps_per_second).
-var _interaction_time_due := 0.0
 
 
 func _init() -> void:
@@ -558,7 +453,6 @@ func _ready() -> void:
 	_resolve_sky_source()
 	_setup_water_mesh()
 	_setup_wave_generator()
-	_setup_interaction()
 	_setup_underwater()
 	_push_all_shader_parameters()
 
@@ -566,7 +460,6 @@ func _process(delta : float) -> void:
 	var camera := get_viewport().get_camera_3d()
 	if not Engine.is_editor_hint():
 		_lod_grid.update(camera, global_position, water_level, mesh_base_cell_size, get_path())
-	_hulls.update(get_tree(), camera, hull_cutout_distance)
 	if _sky_source_polled or _sky_lighting_dirty:
 		_update_sky_lighting_shader_parameters()
 	if _aerial_perspective_enabled:
@@ -581,20 +474,6 @@ func _process(delta : float) -> void:
 		_update_micro_roughness()
 		_update_cascade_uniforms()
 	_dispatch_surface_queries()
-
-## The interaction simulation steps with physics: one step per tick sees exactly
-## one new pose of every hull, so hull motion reaches it without stutter.
-func _physics_process(delta : float) -> void:
-	if interaction_steps_per_second <= 0.0:
-		_step_interaction(delta)
-		return
-	# A fixed rate: as many steps as have come due, but never more than two
-	# steps' or ticks' worth at once (a hitch is not caught up).
-	var step := 1.0 / interaction_steps_per_second
-	_interaction_time_due = minf(_interaction_time_due + delta, 2.0 * maxf(step, delta))
-	while _interaction_time_due >= step:
-		_interaction_time_due -= step
-		_step_interaction(step)
 
 
 ## Wind speed (m/s) the waves follow: the wind source's, else the spectrum's.
@@ -648,10 +527,7 @@ func _push_all_shader_parameters() -> void:
 	_lod_grid.set_cell_size(mesh_base_cell_size, true)
 	_bind_wave_textures()
 	_update_cascade_uniforms()
-	_hulls.reset()
-	_hulls.update(get_tree(), get_viewport().get_camera_3d(), hull_cutout_distance)
 	_update_planar_reflection_settings()
-	_push_interaction_shader_parameters()
 
 
 ## Keeps one simulation state per cascade. A cascade resource that stays in the list
@@ -682,8 +558,6 @@ func _setup_wave_generator() -> void:
 	if not _is_running():
 		return
 	_surface_queries.clear_uniform_set_cache()
-	if _interaction != null:
-		_interaction.clear_uniform_set_cache()
 	_has_wave_output = false
 	for state in _cascade_states:
 		state.regenerate()
@@ -822,8 +696,8 @@ func _get_cascade_update_interval(cascade : WaveCascade, state : WaveCascadeStat
 	return max_wave_phase_step * sqrt(TAU * shortest_wavelength / WaveGenerator.G)
 
 ## Per cascade: x = weight of map B (A gets the rest) at the current time, y =
-## factor (1/s) turning B - A into a velocity. The water shader, surface queries
-## and the interaction simulation all blend with it.
+## factor (1/s) turning B - A into a velocity. The water shader and surface queries
+## blend with it.
 func _get_cascade_frame_blend(cascade_index : int) -> Vector4:
 	var state := _cascade_states[cascade_index]
 	if _wave_generator == null or state.frame_count == 0:
@@ -881,184 +755,6 @@ func _get_band_boundary_wavelength(larger : WaveCascade, smaller : WaveCascade) 
 
 func _apply_water_material() -> void:
 	RenderingServer.instance_geometry_set_material_override(get_instance(), get_water_material().get_rid())
-
-func _setup_interaction() -> void:
-	if not _is_running():
-		return
-	var previous := _interaction
-	_interaction = null
-	_release_own_waves()
-	# The simulation follows the game camera and does not run in the editor.
-	if interaction_enabled and not Engine.is_editor_hint():
-		if interaction_grid_size not in [256, 512, 1024] or interaction_cell_size <= 0.0:
-			push_error("OceanSystem %s: interaction_grid_size must be 256, 512 or 1024 and interaction_cell_size positive; the interaction simulation is off." % get_path())
-		else:
-			_interaction = WaterInteractionSim.new(RenderingServer.get_rendering_device(), interaction_grid_size, interaction_cell_size)
-			if _interaction.has_failed():
-				push_error("OceanSystem %s: the interaction simulation's GPU resources failed; it is off." % get_path())
-				_interaction.release()
-				_interaction = null
-	# Swapped in place before the old simulation is freed, never through RID() (that
-	# frees the texture the material holds).
-	_interaction_texture.texture_rd_rid = _interaction.render_texture if _interaction != null else RID()
-	_surface_queries.interaction = _interaction
-	if previous != null:
-		# Query uniform sets that referenced the old render texture are freed with it.
-		_surface_queries.clear_uniform_set_cache()
-		previous.release()
-	_apply_interaction_settings()
-	_push_interaction_shader_parameters()
-
-func _apply_interaction_settings() -> void:
-	# Tunables are copied into the simulations when they exist (see _setup_interaction).
-	if _interaction == null:
-		return
-	_apply_interaction_settings_to(_interaction)
-	_interaction.sponge_cells = interaction_sponge_cells
-	for sim in _own_wave_sims:
-		if sim != null:
-			_apply_interaction_settings_to(sim)
-	_set_water_shader_parameter(&'interaction_window', _get_interaction_window())
-
-## The wave dynamics every interaction simulation shares (the border is each one's own).
-func _apply_interaction_settings_to(sim : WaterInteractionSim) -> void:
-	sim.damping = interaction_damping
-	sim.viscosity = interaction_viscosity
-	sim.gravity_scale = interaction_gravity_scale
-	sim.sponge_damping = interaction_sponge_damping
-	sim.foam_grow = interaction_foam_grow
-	sim.foam_decay = interaction_foam_decay
-	sim.foam_slope_threshold = interaction_foam_slope_threshold
-	sim.foam_bow_rate = interaction_foam_bow_rate
-
-func _push_interaction_shader_parameters() -> void:
-	_set_water_shader_parameter(&'interaction_enabled', _interaction != null)
-	# Forced: the texture's RID changes when the simulation is rebuilt.
-	_set_water_shader_parameter(&'interaction_render', _interaction_texture, true)
-	_set_water_shader_parameter(&'interaction_cell_size', interaction_cell_size)
-	_set_water_shader_parameter(&'interaction_inv_extent', 1.0 / (float(interaction_grid_size) * interaction_cell_size))
-	_set_water_shader_parameter(&'interaction_window', _get_interaction_window())
-
-## (window center x, center z, fade start, fade end): rendering and queries fade
-## the simulation out by Chebyshev distance from the center, ending where the
-## absorbing border begins.
-func _get_interaction_window() -> Vector4:
-	if _interaction == null:
-		return Vector4.ZERO
-	var center := _interaction.get_window_center()
-	var half_extent := _interaction.get_half_extent()
-	var sponge_width := interaction_sponge_cells * interaction_cell_size
-	return Vector4(center.x, center.y, half_extent - 2.0 * sponge_width, half_extent - sponge_width)
-
-func _step_interaction(delta : float) -> void:
-	# Disabled, or nothing to sample the incident waves from before the first FFT output.
-	if _interaction == null or not _has_wave_output:
-		return
-	var camera := get_viewport().get_camera_3d()
-	# The window follows the active camera; without one there is nothing to center on.
-	if camera == null:
-		return
-	var bodies : Array[PhysicsBody3D] = []
-	var hull_data := _hulls.pack_interaction_hulls(get_tree(), camera.global_position, _interaction.get_half_extent() * sqrt(2.0), bodies)
-	var hull_profiles_rd := RenderingServer.texture_get_rd_texture(_hulls.profiles_texture.get_rid()) if _hulls.profiles_texture != null else RID()
-	@warning_ignore("integer_division")
-	_interaction.step(
-		delta,
-		camera.global_position,
-		hull_data,
-		hull_data.size() / WaterInteractionSim.FLOATS_PER_HULL,
-		_cascade_data,
-		cascades.size(),
-		water_level,
-		_wave_generator.descriptors[&'displacement_map_a'].rid,
-		_wave_generator.descriptors[&'displacement_map_b'].rid,
-		hull_profiles_rd
-	)
-	_step_own_waves(delta, hull_data, bodies, hull_profiles_rd)
-	_set_water_shader_parameter(&'interaction_window', _get_interaction_window())
-
-## Steps every wave-making body's own-wave simulation with its records of hull_data
-## (bodies holds each record's body): one per body among them, created when it starts
-## forcing the interaction simulation (both then start from its hull appearing, so
-## they stay alike) and released when it stops.
-func _step_own_waves(delta : float, hull_data : PackedFloat32Array, bodies : Array[PhysicsBody3D], hull_profiles_rd : RID) -> void:
-	var records := {}  # body id -> PackedFloat32Array of its SimHull records
-	var reaches := {}  # body id -> Vector3 (center x, center z, radius) of its hulls
-	for i in bodies.size():
-		if bodies[i] == null:
-			continue
-		var id := bodies[i].get_instance_id()
-		var record := hull_data.slice(i * WaterInteractionSim.FLOATS_PER_HULL, (i + 1) * WaterInteractionSim.FLOATS_PER_HULL)
-		# SimHull's fourth vec4: bounding sphere (center x, center z, radius, center y).
-		var sphere := Vector3(record[12], record[13], record[14])
-		records[id] = records.get(id, PackedFloat32Array()) + record
-		# A body with several hulls: around the first one's center, reaching all of them.
-		var reach : Vector3 = reaches.get(id, sphere)
-		reaches[id] = Vector3(reach.x, reach.y, maxf(reach.z, Vector2(sphere.x - reach.x, sphere.y - reach.y).length() + sphere.z))
-	var released := false
-	for slot in _own_wave_sims.size():
-		if _own_wave_sims[slot] != null and not records.has(_own_wave_bodies[slot]):
-			_own_wave_sims[slot].release()
-			_own_wave_sims[slot] = null
-			_own_wave_bodies[slot] = 0
-			released = true
-	if released:
-		# Query uniform sets that referenced the freed textures are gone with them.
-		_surface_queries.clear_uniform_set_cache()
-	var slots := {}
-	for slot in _own_wave_sims.size():
-		if _own_wave_sims[slot] != null:
-			slots[_own_wave_bodies[slot]] = slot
-	for id : int in records:
-		var reach : Vector3 = reaches[id]
-		if not slots.has(id):
-			var slot := _own_wave_bodies.find(0)
-			if slot < 0:
-				continue # More bodies than slots: the extra ones feel their own waves too.
-			var sim := _create_own_wave_sim(reach.z)
-			if sim == null:
-				continue
-			_own_wave_sims[slot] = sim
-			_own_wave_bodies[slot] = id
-			slots[id] = slot
-			_surface_queries.clear_uniform_set_cache()
-		var hulls : PackedFloat32Array = records[id]
-		@warning_ignore("integer_division")
-		_own_wave_sims[slots[id]].step(delta, Vector3(reach.x, 0.0, reach.y), hulls, hulls.size() / WaterInteractionSim.FLOATS_PER_HULL,
-			_cascade_data, cascades.size(), water_level,
-			_wave_generator.descriptors[&'displacement_map_a'].rid, _wave_generator.descriptors[&'displacement_map_b'].rid, hull_profiles_rd)
-	_surface_queries.set_own_waves(_own_wave_sims, slots)
-
-## An own-wave simulation for hulls within radius (m) of its center: the interaction
-## simulation's cells and settings on the smallest grid that holds them with a margin
-## inside its absorbing border; null (reported) if its GPU resources fail.
-func _create_own_wave_sim(radius : float) -> WaterInteractionSim:
-	var cells := 2.0 * radius / interaction_cell_size + 2.0 * (OWN_WAVE_SPONGE_CELLS + OWN_WAVE_MARGIN_CELLS)
-	var size := 64
-	while size < cells and size < OWN_WAVE_MAX_GRID_SIZE:
-		size *= 2
-	# Created after the interaction simulation started, its hulls arrive in cells with
-	# a history there: start from p = 0 too, so both radiate the same arrival.
-	var sim := WaterInteractionSim.new(RenderingServer.get_rendering_device(), size, interaction_cell_size, _interaction.step_count > 1)
-	if sim.has_failed():
-		push_error("OceanSystem %s: an own-wave simulation's GPU resources failed; that hull feels its own waves." % get_path())
-		sim.release()
-		return null
-	_apply_interaction_settings_to(sim)
-	sim.sponge_cells = OWN_WAVE_SPONGE_CELLS
-	return sim
-
-func _release_own_waves() -> void:
-	for sim in _own_wave_sims:
-		if sim != null:
-			sim.release()
-	_own_wave_sims.resize(OceanSurfaceQueries.OWN_WAVE_SLOTS)
-	_own_wave_sims.fill(null)
-	_own_wave_bodies.resize(OceanSurfaceQueries.OWN_WAVE_SLOTS)
-	_own_wave_bodies.fill(0)
-	if _surface_queries != null:
-		_surface_queries.clear_uniform_set_cache()
-		_surface_queries.set_own_waves(_own_wave_sims, {})
 
 ## The sky source's lighting and its optional extras (clouds, stars, planets,
 ## atmosphere), each falling back to the manual values or to none.
@@ -1312,9 +1008,7 @@ func _dispatch_surface_queries() -> void:
 		_wave_generator.descriptors[&'displacement_map_b'].rid,
 		_cascade_data,
 		cascades.size(),
-		water_level,
-		_get_interaction_window(),
-		interaction_cell_size
+		water_level
 	)
 
 func _notification(what: int) -> void:
@@ -1325,13 +1019,6 @@ func _notification(what: int) -> void:
 		_normal_maps_a.texture_rd_rid = RID()
 		_normal_maps_b.texture_rd_rid = RID()
 		_wave_generator = null
-		# Null when interaction is off, in the editor, or the ocean was disabled.
-		if _interaction != null:
-			_interaction_texture.texture_rd_rid = RID()
-			_interaction.release()
-		for sim in _own_wave_sims:
-			if sim != null:
-				sim.release()
 		# Null when the ocean was disabled for lack of a RenderingDevice.
 		if _surface_queries != null:
 			_surface_queries.retire()

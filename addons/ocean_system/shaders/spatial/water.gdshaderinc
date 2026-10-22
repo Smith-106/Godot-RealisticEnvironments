@@ -26,13 +26,12 @@
  * Snell's window (underwater_view(), and the sun's transmission in light()).
  *
  * The water is drawn on the earth's curve (earth_curvature_drop()), so it ends at a real
- * horizon. Everything else about the surface (waves, queries, hulls, planar reflections)
+ * horizon. Everything else about the surface (waves, queries, planar reflections)
  * stays flat: water_world_position is the flat position, and only the drawn vertex and
  * the shading normal follow the curve.
  */
 
 #define MAX_CASCADES 8
-#define MAX_NEAR_HULLS 8
 #define MAX_LOD_LEVELS 16
 // Radius (m) of the sphere the water is drawn on (OceanSystem.EARTH_RADIUS).
 #define EARTH_RADIUS 6371000.0
@@ -192,26 +191,9 @@ uniform bool lod_grid_enabled = false;
 uniform float lod_ranges[MAX_LOD_LEVELS];       // beyond range(L), level-L vertices sit on the level L + 1 lattice
 uniform float lod_morph_starts[MAX_LOD_LEVELS]; // level-L vertices morph between this and range(L)
 uniform int lod_top_level = 0;
-// Hulls near the camera (see OceanHulls.update() and HullProfile).
-uniform int near_hull_count = 0;
-uniform vec4 near_hull_world_to_local_x[MAX_NEAR_HULLS]; // rows of the world-to-hull affine transform: xyz basis row, w origin
-uniform vec4 near_hull_world_to_local_y[MAX_NEAR_HULLS];
-uniform vec4 near_hull_world_to_local_z[MAX_NEAR_HULLS];
-uniform vec4 near_hull_spheres[MAX_NEAR_HULLS]; // world center xyz, (radius + feather)^2
-uniform vec4 near_hull_rects[MAX_NEAR_HULLS];   // profile min z, min y, 1 / length, 1 / height
-uniform vec4 near_hull_params[MAX_NEAR_HULLS];  // profile layer, center x, feather (m), edge foam
-uniform float near_hull_top_offsets[MAX_NEAR_HULLS]; // cutout reach above the station top, in profile heights
-uniform sampler2DArray hull_profiles : filter_linear, repeat_disable; // R = inner half-width over (z, y), B = station top
-
-// Interaction simulation (WaterInteractionSim): rgba16f h, eta, foam, wrap-around addressed.
-uniform bool interaction_enabled = false;
-uniform sampler2D interaction_render : repeat_enable, filter_linear;
-uniform vec4 interaction_window = vec4(0.0); // window center x, center z, fade start, fade end (Chebyshev distance from center, m)
-uniform float interaction_inv_extent = 0.0;  // 1 / window size (m)
-uniform float interaction_cell_size = 0.5;
 
 // Height of the still water (OceanSystem.water_level): the surface is drawn here, as
-// queries, buoyancy and reflections see it.
+// queries and reflections see it.
 uniform float water_level = 0.0;
 
 group_uniforms cascade_data;
@@ -382,17 +364,6 @@ vec4 aerial_perspective_fog(vec3 position) {
 	return opacity > 1e-5 ? vec4(inscatter / opacity, opacity) : vec4(0.0);
 }
 
-/* 1 inside the interaction window, fading to 0 before its absorbing border. */
-float interaction_fade(vec2 xz) {
-	vec2 from_center = abs(xz - interaction_window.xy);
-	return 1.0 - smoothstep(interaction_window.z, interaction_window.w, max(from_center.x, from_center.y));
-}
-
-/* Interaction render texel at world XZ; repeat addressing matches the wrap-around grid. */
-vec4 sample_interaction(vec2 xz) {
-	return textureLod(interaction_render, xz * interaction_inv_extent, 0.0);
-}
-
 void vertex() {
 	// Vertex spacing (m), for prefiltering the displacement; 0 on the editor's preview plane.
 	float vertex_spacing = 0.0;
@@ -447,10 +418,6 @@ void vertex() {
 		displacement += cascade_displacement * scales.z;
 	}
 	VERTEX += displacement;
-	if (interaction_enabled) {
-		// Sampled at the displaced position: the simulation lives at final surface positions.
-		VERTEX.y += sample_interaction(VERTEX.xz).x * interaction_fade(VERTEX.xz);
-	}
 	water_world_position = VERTEX;
 	VERTEX.y -= earth_curvature_drop(VERTEX.xz, CAMERA_POSITION_WORLD);
 }
@@ -491,8 +458,7 @@ vec4 texture_bicubic(in sampler2DArray sampler, in vec3 uvw) {
  * One spectrum layer's (mean slope xy, unresolved slope variance, foam) over a pixel's
  * footprint, blended between its two FFT frames in maps A and B by b_weight. The footprint
  * (tile coordinates) is centered on uv and read as `taps` trilinear reads at mip lod spread
- * along its long axis `axis` (anisotropic filtering); explicit LOD, so it may run after the
- * hull discard. variance_weight scales the slope variance the reads average away.
+ * along its long axis `axis` (anisotropic filtering); explicit LOD. variance_weight scales the slope variance the reads average away.
  * bilinear_weight 1 skips the bicubic filter of a single read (8 extra reads), which only
  * helps under magnification.
  */
@@ -1249,50 +1215,6 @@ void fragment() {
 	int footprint_taps = clamp(int(ceil(footprint_major / max(footprint_minor, 1e-6) - 0.5)), 1, NORMAL_ANISOTROPY_TAPS);
 	float footprint_width = max(footprint_minor, footprint_major / float(footprint_taps));
 
-	// Hide water inside nearby hulls. The test runs on the water-surface point
-	// itself, so it is view-independent; pitch and roll come from the transform.
-	float hull_edge_foam = 0.0;
-	for (int i = 0; i < min(near_hull_count, MAX_NEAR_HULLS); ++i) {
-		vec3 to_center = water_world_position - near_hull_spheres[i].xyz;
-		if (dot(to_center, to_center) > near_hull_spheres[i].w)
-			continue; // Far from this hull.
-		vec4 world_position = vec4(water_world_position, 1.0);
-		vec3 local = vec3(dot(near_hull_world_to_local_x[i], world_position), dot(near_hull_world_to_local_y[i], world_position), dot(near_hull_world_to_local_z[i], world_position));
-		vec2 profile_uv = (local.zy - near_hull_rects[i].xy) * near_hull_rects[i].zw;
-		if (profile_uv.x < 0.0 || profile_uv.x > 1.0 || profile_uv.y < 0.0)
-			continue; // Beyond the bow/stern or below the keel.
-		vec4 params = near_hull_params[i];
-		// Explicit LOD: these lookups sit in divergent control flow, where implicit derivatives are undefined.
-		// Above this station's top (plus the offset) there is no hull; up to there,
-		// heights above the top use the width at the top.
-		float station_top = textureLod(hull_profiles, vec3(profile_uv.x, 0.5, params.x), 0.0).b;
-		if (profile_uv.y > station_top + 0.5 / float(textureSize(hull_profiles, 0).y) + near_hull_top_offsets[i])
-			continue;
-		float half_width = textureLod(hull_profiles, vec3(profile_uv.x, min(profile_uv.y, station_top), params.x), 0.0).r;
-		float hull_sdf = abs(local.x - params.y) - half_width; // < 0 inside the hull
-		if (hull_sdf < 0.0) {
-			discard;
-		}
-		hull_edge_foam = max(hull_edge_foam, (1.0 - smoothstep(0.0, max(params.z, 0.001), hull_sdf)) * params.w);
-	}
-
-	// Interaction simulation slope and foam (wakes, bow waves, splashes).
-	vec2 interaction_gradient = vec2(0.0);
-	float interaction_foam = 0.0;
-	if (interaction_enabled) {
-		vec2 xz = water_world_position.xz;
-		float fade = interaction_fade(xz);
-		if (fade > 0.0) {
-			float e = interaction_cell_size;
-			float h_left = sample_interaction(xz - vec2(e, 0.0)).x;
-			float h_right = sample_interaction(xz + vec2(e, 0.0)).x;
-			float h_back = sample_interaction(xz - vec2(0.0, e)).x;
-			float h_front = sample_interaction(xz + vec2(0.0, e)).x;
-			interaction_gradient = vec2(h_right - h_left, h_front - h_back) / (2.0 * e) * fade;
-			interaction_foam = sample_interaction(xz).z * fade;
-		}
-	}
-
 	vec2 gradient = vec2(0.0);
 	float foam_signal = 0.0;
 	// Total variance of the slopes inside the pixel footprint, over all cascades.
@@ -1346,18 +1268,17 @@ void fragment() {
 		// each texel: right at every distance, with no fade.
 		foam_factor = saturate(foam_signal * foam_intensity);
 
-		gradient = (gradient + interaction_gradient) * normal_scale;
+		gradient *= normal_scale;
 		slope_variance *= normal_scale * normal_scale;
 		world_normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
 	}
 	world_normal = earth_curvature_tilt(world_normal, water_world_position.xz, CAMERA_POSITION_WORLD);
 	NORMAL = (VIEW_MATRIX * vec4(world_normal, 0.0)).xyz;
-	float foam_coverage = max(max(foam_factor, hull_edge_foam), interaction_foam);
+	float foam_coverage = foam_factor;
 	// Reveal the coverage as foam lace: white where the pattern exceeds 1 - coverage,
 	// with a narrow edge. On the rest-position grid (UV), so the lace rides with the
 	// water. Once the pattern's texels shrink below a pixel its mips flatten toward
 	// 0.5 and the threshold no longer keeps the area; there plain coverage takes over.
-	// Explicit LOD: this follows the hull discard.
 	float detail_texels = footprint_major / foam_detail_tile_size * float(textureSize(foam_detail, 0).x);
 	float detail_lod = log2(max(detail_texels, 1.0));
 	float detail = textureLod(foam_detail, UV / foam_detail_tile_size, detail_lod).r;
@@ -1450,8 +1371,7 @@ void fragment() {
 #ifndef WATER_NO_CAUSTICS
 			caustics = caustic_light(hit_world, normalize(hit_normal), sun_dir, water_world_position, UV, meters_per_pixel);
 #endif
-			// Explicit LOD: this follows the hull discard.
-			vec3 behind = textureLod(scene_color, refracted_uv, refraction_lod).rgb * caustics;
+					vec3 behind = textureLod(scene_color, refracted_uv, refraction_lod).rgb * caustics;
 			transmitted_radiance = behind * water_transmittance * (1.0 - sky_fresnel) * (1.0 - foam_factor);
 		}
 	}
@@ -1478,8 +1398,7 @@ void fragment() {
 		float hit_distance = 0.0;
 		vec3 reflection_uv = planar_reflection_project(ray_end);
 		for (int i = 0; i < PLANAR_REFLECTION_STEPS && reflection_uv.z > 0.0; ++i) {
-			// Explicit LOD: this follows the hull discard.
-			float surface_distance = textureLod(planar_reflection_distance, reflection_uv.xy, 0.0).r;
+					float surface_distance = textureLod(planar_reflection_distance, reflection_uv.xy, 0.0).r;
 			if (surface_distance <= 0.0)
 				break;
 			vec3 texel_ray = ray_end.w > 0.0 ? normalize(ray_end.xyz - planar_reflection_camera_position) : reflection_direction;
@@ -1501,8 +1420,7 @@ void fragment() {
 		float minor_texels = length((planar_reflection_project(probe_across).xy - reflection_uv.xy) / FOOTPRINT_PROBE * footprint.y * vec2(textureSize(planar_reflection_texture, 0)));
 		vec2 reads = image_footprint_reads(length(major_uv * vec2(textureSize(planar_reflection_texture, 0))), minor_texels);
 		for (int t = 0; t < int(reads.x); ++t) {
-			// Explicit LOD: this follows the hull discard.
-			planar_sample += textureLod(planar_reflection_texture, reflection_uv.xy + major_uv * ((float(t) + 0.5) / reads.x - 0.5), reads.y);
+					planar_sample += textureLod(planar_reflection_texture, reflection_uv.xy + major_uv * ((float(t) + 0.5) / reads.x - 0.5), reads.y);
 		}
 		planar_sample /= reads.x;
 		planar_coverage = planar_reflection_strength * reflection_uv.z;
@@ -1523,8 +1441,7 @@ void fragment() {
 			vec2 reads = image_footprint_reads(length(major_uv * VIEWPORT_SIZE), minor_texels);
 			vec3 reflected_scene = vec3(0.0);
 			for (int t = 0; t < int(reads.x); ++t) {
-				// Explicit LOD: this follows the hull discard.
-				reflected_scene += textureLod(scene_color, hit.xy + major_uv * ((float(t) + 0.5) / reads.x - 0.5), reads.y).rgb;
+							reflected_scene += textureLod(scene_color, hit.xy + major_uv * ((float(t) + 0.5) / reads.x - 0.5), reads.y).rgb;
 			}
 			// Opaque: coverage is the hit's.
 			planar_sample = vec4(reflected_scene / reads.x, 1.0);
@@ -1622,8 +1539,7 @@ void fragment() {
 			// The screen holds it as drawn in air, before the underwater view dimmed it.
 			vec3 hit = find_reflected_scene(VERTEX, (VIEW_MATRIX * vec4(to_sky, 0.0)).xyz, PROJECTION_MATRIX, INV_PROJECTION_MATRIX);
 			if (hit.z > 0.0) {
-				// Explicit LOD: this follows the hull discard.
-				sky_through = mix(sky_through, textureLod(scene_color, hit.xy, 0.0).rgb, hit.z);
+							sky_through = mix(sky_through, textureLod(scene_color, hit.xy, 0.0).rgb, hit.z);
 			}
 			sky_through *= WATER_IOR * WATER_IOR;
 		}

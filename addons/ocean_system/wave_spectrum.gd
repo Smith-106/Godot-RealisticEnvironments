@@ -37,7 +37,7 @@ class_name WaveSpectrum extends Resource
 ## Short-wave detail: lower values damp the smallest ripples.
 @export_range(0.0, 1.0, 0.01) var detail := 1.0
 ## Multiplies the waves' displacement (height and horizontal chop) everywhere: the
-## drawn surface and its shading slopes, water queries and buoyancy. 1 is the height of the spectrum
+## drawn surface and its shading slopes and water queries. 1 is the height of the spectrum
 ## (JONSWAP). The cascades' whitecap thresholds include it: retune them together.
 @export_range(0.0, 4.0, 0.01, "or_greater") var displacement_scale := 1.0
 

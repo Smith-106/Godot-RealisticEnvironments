@@ -40,5 +40,4 @@ sky's `sea_level` (the two must match).
 - Scripts reach the systems as `wind`, `sky`, `ocean` and `exposure`, e.g.
   `$OceanEnvironment.sky.time_of_day = 0.75`.
 
-To float objects, see `buoyancy_system`. For a ready-made boat, see
-`boat_template`.
+For a ready-made boat, see `boat_template`.

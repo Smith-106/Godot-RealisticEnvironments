@@ -26,10 +26,10 @@ rig at runtime; `enable_camera_movement` gates mouse and movement input
 ## `debug/` — `OceanDebugPanel`
 
 A `CanvasLayer` built entirely in code. Call
-`setup(ocean, wind, sky, buoyant_body, player_body)`; any argument after the
+`setup(ocean, wind, sky, player_body)`; any argument after the
 ocean may be null and its section is skipped. Sections: FPS, ocean
 (simulation size, update rate, colours, shading, foam), sky reflection
-/ scatter / crest glow, far LOD, wind, sky (time, astronomy), buoyancy, a Spectrum
+/ scatter / crest glow, far LOD, wind, sky (time, astronomy), the player boat's trail, a Spectrum
 tab and one tab per wave cascade. `toggle_panel_visible()` and `is_interacting()` are used
 by the demo scripts.
 

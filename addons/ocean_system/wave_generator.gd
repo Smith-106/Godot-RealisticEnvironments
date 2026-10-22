@@ -89,7 +89,7 @@ func init_gpu(size : int, num_cascades : int) -> void:
 		var normal_map := context.create_texture(dims, RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, output_usage, spectrum_layer_capacity, [], mip_count)
 		# Start from zero: a cascade's first update reads the other output's foam,
 		# and until its second update the other output (sampled, with weight 0, by
-		# the interaction simulation and surface queries) was never written.
+		# the surface queries) was never written.
 		# Uninitialized memory can hold NaN, which nothing recovers from.
 		context.device.texture_clear(displacement_map.rid, Color(0, 0, 0, 0), 0, mip_count, 0, spectrum_layer_capacity)
 		context.device.texture_clear(normal_map.rid, Color(0, 0, 0, 0), 0, mip_count, 0, spectrum_layer_capacity)

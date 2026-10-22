@@ -6,6 +6,13 @@ before 1.0 a minor version may change the API.
 
 ## Unreleased
 
+- Removed for a rewrite: `buoyancy_system`, the interactive waves (iWave
+  wakes, bow waves, splashes, `WaterSurface.add_impulse()` /
+  `can_add_impulses()`), hull footprints and cutouts (`HullWaterFootprint`,
+  `HullProfile`, `HullSlicer`) and `BowSpray`. `WaterSurface.submit_query()`
+  lost its `body` argument. Boats and floating objects are frozen until
+  buoyancy returns.
+
 ## 0.1.0 (in preparation)
 
 First open-source release.

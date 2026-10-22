@@ -1,10 +1,7 @@
 [gd_scene format=3 uid="uid://cu6jvrb4ikqbo"]
 
 [ext_resource type="PackedScene" uid="uid://dxqyyqwa3mn4a" path="res://addons/floating_boat_template/floating_boat.tscn" id="1_template"]
-[ext_resource type="Script" uid="uid://obesevate4xe" path="res://addons/buoyancy_system/buoyancy_probe_node.gd" id="2_prqhi"]
-[ext_resource type="Script" uid="uid://cpknlpia25jwi" path="res://addons/buoyancy_system/buoyancy_fx_probe_node.gd" id="3_45tsj"]
 [ext_resource type="Script" uid="uid://by55imxv5cm3" path="res://addons/hitbox_damage_system/projectile_hitbox.gd" id="4_m4qgx"]
-[ext_resource type="Resource" uid="uid://cr70nmqqf1o77" path="res://demo/rowboat_hull_profile.tres" id="5_2yvxr"]
 [ext_resource type="PackedScene" uid="uid://c4ku7e1gt62nr" path="res://demo/assets/low_poly_boat/scene.gltf" id="6_oojqr"]
 [ext_resource type="PackedScene" uid="uid://cpi87gv104psq" path="res://addons/projectile_launcher_system/projectile_launcher.tscn" id="7_ojoqu"]
 
@@ -39,284 +36,7 @@ low_speed_turn_factor = 0.6
 [node name="CollisionShape3D" parent="." index="0" unique_id=302983775]
 shape = SubResource("ConvexPolygonShape3D_c6sjc")
 
-[node name="BuoyancyProbeVolume" parent="." index="2" unique_id=782435554]
-source_paths = Array[NodePath]([NodePath("../Model/Sketchfab_model/Wooden_boat_fbx/RootNode/Boat/Boat_Boat_texture_0")])
-physical_probe_count = 32
-fx_probe_count = 8
-
-[node name="Probe_000" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="0" unique_id=546707314]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, 0.24790569, -3.1558642)
-script = ExtResource("2_prqhi")
-height = 0.5428154841065407
-area_profile = PackedFloat32Array(0.006071929, 0.006071929, 0.006071929, 0.009541603, 0.012432997, 0.018215787, 0.023131158, 0.03180534)
-side_panels = PackedVector2Array(0, 0, 0.007175117, 0.0061221067, -0.000930525, 0.0027860673, 0, 0, -0.003252722, 0.0013210581, -0.040930077, -0.026447775, 0, 0, 0, 0)
-
-[node name="Probe_001" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="1" unique_id=2029403582]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, 0.24790569, -3.1558642)
-script = ExtResource("2_prqhi")
-height = 0.5428154841065407
-area_profile = PackedFloat32Array(0.006071929, 0.006071929, 0.006071929, 0.009541603, 0.012432997, 0.018215787, 0.023131158, 0.03180534)
-side_panels = PackedVector2Array(0.003252722, 0.0013210581, 0, 0, 0.000930525, 0.0027860673, -0.007175117, 0.0061221067, 0, 0, 0, 0, 0, 0, 0.040930077, -0.026447775)
-
-[node name="Probe_002" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="2" unique_id=505217384]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, -0.2949098, -2.4545612)
-script = ExtResource("2_prqhi")
-height = 1.0597826118270557
-area_profile = PackedFloat32Array(0.02236247, 0.05435117, 0.07849079, 0.10899853, 0.1316572, 0.15505633, 0.17786309, 0.105296135)
-side_panels = PackedVector2Array(0.0013272297, -0.00052901305, 0.033411466, 0.020225354, -0.00023376069, 0.010154706, 0, 0, -0.044907004, -0.016705345, -0.6416299, -0.3993638, 0, 0, 0, 0)
-
-[node name="Probe_003" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="3" unique_id=1155242579]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, -0.2949098, -2.4545612)
-script = ExtResource("2_prqhi")
-height = 1.0597826118270557
-area_profile = PackedFloat32Array(0.02236247, 0.05435117, 0.07849079, 0.10899853, 0.1316572, 0.15505633, 0.17786309, 0.105296135)
-side_panels = PackedVector2Array(0.044907004, -0.016705345, 0, 0, 0.00023376069, 0.010154706, -0.033411466, 0.020225354, -0.0013272297, -0.00052901305, 0, 0, 0, 0, 0.6416299, -0.3993638)
-
-[node name="Probe_004" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="4" unique_id=1505763842]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.0519549, 0.19620898, -1.7532579)
-script = ExtResource("2_prqhi")
-height = 0.5169671277205149
-area_profile = PackedFloat32Array(0.006071929, 0.006071929, 0.007286315, 0.012143858, 0.012143858, 0.012143858, 0.015787015, 0.030359644)
-side_panels = PackedVector2Array(0.004196876, 0.0014277846, 0.021097135, 0.009680602, -0.00017028452, 0.0024140566, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_005" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="5" unique_id=1924357619]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, -0.3983032, -1.7532579)
-script = ExtResource("2_prqhi")
-height = 1.1373276809851327
-area_profile = PackedFloat32Array(0.08169504, 0.24398114, 0.34499595, 0.39798734, 0.43773088, 0.44877073, 0.45870662, 0.17608593)
-side_panels = PackedVector2Array(0, 0, 0.0054206275, 0.0033153496, -0.00023252856, 0.0011836697, 0, 0, -0.19371141, -0.06947685, -0.8358258, -0.45045853, 0, 0, 0, 0)
-
-[node name="Probe_006" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="6" unique_id=1037373669]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, -0.3983032, -1.7532579)
-script = ExtResource("2_prqhi")
-height = 1.1373276809851327
-area_profile = PackedFloat32Array(0.08169504, 0.24398114, 0.34499595, 0.39798734, 0.43773088, 0.44877073, 0.45870662, 0.17608593)
-side_panels = PackedVector2Array(0.19371141, -0.06947685, 0, 0, 0.00023252856, 0.0011836697, -0.0054206275, 0.0033153496, 0, 0, 0, 0, 0, 0, 0.8358258, -0.45045853)
-
-[node name="Probe_007" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="7" unique_id=709283262]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0519549, 0.19620898, -1.7532579)
-script = ExtResource("2_prqhi")
-height = 0.5169671277205149
-area_profile = PackedFloat32Array(0.006071929, 0.006071929, 0.007286315, 0.012143858, 0.012143858, 0.012143858, 0.015787015, 0.030359644)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0.00017028452, 0.0024140566, -0.021097135, 0.009680602, -0.004196876, 0.0014277846, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_008" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="8" unique_id=1167570412]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.0519549, -0.21736473, -1.0519546)
-script = ExtResource("2_prqhi")
-height = 0.9046924735109012
-area_profile = PackedFloat32Array(0.012664309, 0.023420297, 0.041809566, 0.06019884, 0.06679122, 0.081710815, 0.087262295, 0.08552746)
-side_panels = PackedVector2Array(0.024260584, 0.0069701234, 0, 0, 0.00012397766, 0.0012872798, 0, 0, -0.36020184, -0.08174585, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_009" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="9" unique_id=91280987]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, -0.44999993, -1.0519546)
-script = ExtResource("2_prqhi")
-height = 1.0856309682130814
-area_profile = PackedFloat32Array(0.17955561, 0.37732702, 0.45365983, 0.4791041, 0.49703074, 0.5039701, 0.5048375, 0.510042)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, -0.955661, -0.29610613, -0.12262857, -0.07596195, 0, 0, 0, 0)
-
-[node name="Probe_010" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="10" unique_id=291249512]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, -0.44999993, -1.0519546)
-script = ExtResource("2_prqhi")
-height = 1.0856309682130814
-area_profile = PackedFloat32Array(0.17955561, 0.37732702, 0.45365983, 0.4791041, 0.49703074, 0.5039701, 0.5048375, 0.510042)
-side_panels = PackedVector2Array(0.955661, -0.29610613, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.12262857, -0.07596195)
-
-[node name="Probe_011" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="11" unique_id=1427127846]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0519549, -0.21736473, -1.0519546)
-script = ExtResource("2_prqhi")
-height = 0.9046924735109012
-area_profile = PackedFloat32Array(0.012664309, 0.023420297, 0.041809566, 0.06019884, 0.06679122, 0.081710815, 0.087262295, 0.08552746)
-side_panels = PackedVector2Array(0.36020184, -0.08174585, 0, 0, -0.00012397766, 0.0012872798, 0, 0, -0.024260584, 0.0069701234, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_012" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="12" unique_id=145231101]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.0519549, -0.24321307, -0.35065138)
-script = ExtResource("2_prqhi")
-height = 0.9305408298969268
-area_profile = PackedFloat32Array(0.037780892, 0.07016452, 0.101198815, 0.13763039, 0.1457263, 0.14977424, 0.15989414, 0.11671597)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, -0.96161526, -0.09688086, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_013" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="13" unique_id=1911299416]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, -0.44999993, -0.35065138)
-script = ExtResource("2_prqhi")
-height = 1.0856309682130814
-area_profile = PackedFloat32Array(0.26485175, 0.45684037, 0.50657237, 0.510042, 0.510042, 0.510042, 0.510042, 0.510042)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, -0.00953785, 0.004613667, -0.44974104, -0.04229744, -0.008948427, -0.005517078, 0, 0, 0, 0)
-
-[node name="Probe_014" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="14" unique_id=274505693]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, -0.44999993, -0.35065138)
-script = ExtResource("2_prqhi")
-height = 1.0856309682130814
-area_profile = PackedFloat32Array(0.26485175, 0.45684037, 0.50657237, 0.510042, 0.510042, 0.510042, 0.510042, 0.510042)
-side_panels = PackedVector2Array(0.44974104, -0.04229744, 0.00953785, 0.004613667, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.008948427, -0.005517078)
-
-[node name="Probe_015" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="15" unique_id=772720122]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0519549, -0.24321307, -0.35065138)
-script = ExtResource("2_prqhi")
-height = 0.9305408298969268
-area_profile = PackedFloat32Array(0.037780892, 0.07016452, 0.101198815, 0.13763039, 0.1457263, 0.14977424, 0.15989414, 0.11671597)
-side_panels = PackedVector2Array(0.96161526, -0.09688086, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_016" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="16" unique_id=1443975258]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.0519549, -0.24321307, 0.35065186)
-script = ExtResource("2_prqhi")
-height = 1.0339342554410298
-area_profile = PackedFloat32Array(0.043717887, 0.08865016, 0.15058383, 0.16515647, 0.20037365, 0.21251751, 0.2040168, 0.010929472)
-side_panels = PackedVector2Array(0, 0, 0.003167659, 0.0046720817, -0.0003157466, 0.006219791, -0.004663673, 0.0047397283, -0.8819214, 0.016105082, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_017" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="17" unique_id=371946458]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, -0.42415157, 0.35065186)
-script = ExtResource("2_prqhi")
-height = 1.0597826118270557
-area_profile = PackedFloat32Array(0.276643, 0.5307754, 0.595049, 0.595049, 0.5452888, 0.595049, 0.595049, 0.595049)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, -0.02500527, 0.026505375, -0.31750107, 0.039328095, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_018" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="18" unique_id=1277037625]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, -0.42415157, 0.35065186)
-script = ExtResource("2_prqhi")
-height = 1.0597826118270557
-area_profile = PackedFloat32Array(0.276643, 0.5307754, 0.595049, 0.595049, 0.5452888, 0.595049, 0.595049, 0.595049)
-side_panels = PackedVector2Array(0.31750107, 0.039328095, 0.02500527, 0.026505375, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_019" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="19" unique_id=114030985]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0519549, -0.24321307, 0.35065186)
-script = ExtResource("2_prqhi")
-height = 1.0339342554410298
-area_profile = PackedFloat32Array(0.043717887, 0.08865016, 0.15058383, 0.16515647, 0.20037365, 0.21251751, 0.2040168, 0.010929472)
-side_panels = PackedVector2Array(0.8819214, 0.016105082, 0.004663673, 0.0047397283, 0.0003157466, 0.006219791, -0.003167659, 0.0046720817, 0, 0, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_020" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="20" unique_id=1116942044]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.0519549, -0.19151637, 1.0519551)
-script = ExtResource("2_prqhi")
-height = 0.9822375426689784
-area_profile = PackedFloat32Array(0.024926865, 0.058801837, 0.10226407, 0.13741735, 0.1457263, 0.1533961, 0.13070627, 0.009906831)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, -0.7589476, 0.0857832, -0.0045934175, -0.0049548303, -0.0008303963, -0.011345476, 0.0025689774, -0.0042657997)
-
-[node name="Probe_021" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="21" unique_id=518868525]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, -0.37245485, 1.0519551)
-script = ExtResource("2_prqhi")
-height = 1.008085899055004
-area_profile = PackedFloat32Array(0.16409777, 0.41475946, 0.48964658, 0.50957495, 0.510042, 0.510042, 0.510042, 0.510042)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, -0.02281407, 0.03662549, -0.3771904, 0.08664851, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_022" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="22" unique_id=189394316]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, -0.37245485, 1.0519551)
-script = ExtResource("2_prqhi")
-height = 1.008085899055004
-area_profile = PackedFloat32Array(0.16409777, 0.41475946, 0.48964658, 0.50957495, 0.510042, 0.510042, 0.510042, 0.510042)
-side_panels = PackedVector2Array(0.3771904, 0.08664851, 0.02281407, 0.03662549, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_023" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="23" unique_id=2141539475]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0519549, -0.19151637, 1.0519551)
-script = ExtResource("2_prqhi")
-height = 0.9822375426689784
-area_profile = PackedFloat32Array(0.024926865, 0.058801837, 0.10226407, 0.13741735, 0.1457263, 0.1533961, 0.13070627, 0.009906831)
-side_panels = PackedVector2Array(0.7589476, 0.0857832, 0, 0, 0, 0, 0, 0, 0, 0, -0.0025689774, -0.0042657997, 0.0008303963, -0.011345476, 0.0045934175, -0.0049548303)
-
-[node name="Probe_024" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="24" unique_id=1151199517]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.0519549, -0.08812294, 1.7532583)
-script = ExtResource("2_prqhi")
-height = 0.7496023351947466
-area_profile = PackedFloat32Array(0.011515727, 0.027009614, 0.051716086, 0.06385994, 0.074538164, 0.08668202, 0.09673211, 0.093800835)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, -0.42897478, 0.087075144, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_025" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="25" unique_id=1316404172]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, -0.2949098, 1.7532583)
-script = ExtResource("2_prqhi")
-height = 0.9305408298969268
-area_profile = PackedFloat32Array(0.105921425, 0.33935335, 0.45067206, 0.44797343, 0.48507965, 0.50936735, 0.510042, 0.510042)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, -0.18191642, 0.12850396, -0.63446534, 0.14566721, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_026" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="26" unique_id=1426612673]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, -0.2949098, 1.7532583)
-script = ExtResource("2_prqhi")
-height = 0.9305408298969268
-area_profile = PackedFloat32Array(0.105921425, 0.33935335, 0.45067206, 0.44797343, 0.48507965, 0.50936735, 0.510042, 0.510042)
-side_panels = PackedVector2Array(0.63446534, 0.14566721, 0.18191642, 0.12850396, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_027" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="27" unique_id=1272461630]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0519549, -0.08812294, 1.7532583)
-script = ExtResource("2_prqhi")
-height = 0.7496023351947466
-area_profile = PackedFloat32Array(0.011515727, 0.027009614, 0.051716086, 0.06385994, 0.074538164, 0.08668202, 0.09673211, 0.093800835)
-side_panels = PackedVector2Array(0.42897478, 0.087075144, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_028" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="28" unique_id=1154933605]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.0519549, 0.14451227, 2.4545617)
-script = ExtResource("2_prqhi")
-height = 0.5169671277205149
-area_profile = PackedFloat32Array(0.007286315, 0.01457263, 0.021858944, 0.024287716, 0.0255021, 0.030359644, 0.043717887, 0.06557684)
-side_panels = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, -0.014995754, 0.0030181436, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_029" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="29" unique_id=282144440]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, -0.19151637, 2.4545617)
-script = ExtResource("2_prqhi")
-height = 0.8529957607388496
-area_profile = PackedFloat32Array(0.059615303, 0.26753286, 0.41583514, 0.46772254, 0.49955413, 0.5039701, 0.51390594, 0.3998273)
-side_panels = PackedVector2Array(0, 0, 0, 0, -0.018103946, 0.046609726, -0.10975263, 0.070643656, -0.8587046, 0.22953776, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_030" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="30" unique_id=63076017]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, -0.19151637, 2.4545617)
-script = ExtResource("2_prqhi")
-height = 0.8529957607388496
-area_profile = PackedFloat32Array(0.059615303, 0.26753286, 0.41583514, 0.46772254, 0.49955413, 0.5039701, 0.51390594, 0.3998273)
-side_panels = PackedVector2Array(0.8587046, 0.22953776, 0.10975263, 0.070643656, 0.018103946, 0.046609726, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_031" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="31" unique_id=146605327]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0519549, 0.14451227, 2.4545617)
-script = ExtResource("2_prqhi")
-height = 0.5169671277205149
-area_profile = PackedFloat32Array(0.007286315, 0.01457263, 0.021858944, 0.024287716, 0.0255021, 0.030359644, 0.043717887, 0.06557684)
-side_panels = PackedVector2Array(0.014995754, 0.0030181436, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-[node name="Probe_032" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="32" unique_id=1984950395]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.35065162, -0.01057787, 3.1558647)
-script = ExtResource("2_prqhi")
-height = 0.6720572660366694
-area_profile = PackedFloat32Array(0.049042504, 0.085474074, 0.10228865, 0.10509108, 0.10976179, 0.11816908, 0.11957029, 0.18309201)
-side_panels = PackedVector2Array(0, 0, 0, 0, -0.00041310603, 0.5681165, -0.007751346, 0.005282794, -0.07162404, 0.018266033, 0, 0, 0, -0.013748517, 0, 0)
-
-[node name="Probe_033" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="33" unique_id=1966069893]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.35065162, -0.01057787, 3.1558647)
-script = ExtResource("2_prqhi")
-height = 0.6720572660366694
-area_profile = PackedFloat32Array(0.049042504, 0.085474074, 0.10228865, 0.10509108, 0.10976179, 0.11816908, 0.11957029, 0.18309201)
-side_panels = PackedVector2Array(0.07162404, 0.018266033, 0.007751346, 0.005282794, 0.00041310603, 0.5681165, 0, 0, 0, 0, 0, 0, 0, -0.013748517, 0, 0)
-
-[node name="FxProbe_000_Bow" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="34" unique_id=1292545185]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.38406852, -0.19139594, -1.7313304)
-script = ExtResource("3_45tsj")
-tag = "bow"
-
-[node name="FxProbe_001_Bow" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="35" unique_id=1296306452]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.38406837, -0.19139594, -1.7313304)
-script = ExtResource("3_45tsj")
-tag = "bow"
-
-[node name="FxProbe_002_Side" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="36" unique_id=2068218632]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7696619, -0.19139594, -0.7722211)
-script = ExtResource("3_45tsj")
-
-[node name="FxProbe_003_Side" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="37" unique_id=1650555853]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.76966196, -0.19139594, -0.7722211)
-script = ExtResource("3_45tsj")
-
-[node name="FxProbe_004_Side" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="38" unique_id=2045077259]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.83860683, -0.19139594, 0.18688823)
-script = ExtResource("3_45tsj")
-
-[node name="FxProbe_005_Side" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="39" unique_id=407779638]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.837245, -0.19139594, 0.18688823)
-script = ExtResource("3_45tsj")
-
-[node name="FxProbe_006_Side" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="40" unique_id=1488858912]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6402899, -0.19139594, 1.1459975)
-script = ExtResource("3_45tsj")
-
-[node name="FxProbe_007_Side" type="MeshInstance3D" parent="BuoyancyProbeVolume/GeneratedProbes" parent_id_path=PackedInt32Array(846300433) index="41" unique_id=902615045]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6402901, -0.19139594, 1.1459975)
-script = ExtResource("3_45tsj")
-
-[node name="Hitboxes" parent="." index="3" unique_id=1581731188]
+[node name="Hitboxes" parent="." index="1" unique_id=1581731188]
 group_max_health = {
 "hull": 60.0
 }
@@ -330,16 +50,9 @@ hitbox_group = &"hull"
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Hitboxes/HullHitbox" index="0" unique_id=560455868]
 shape = SubResource("ConvexPolygonShape3D_c6sjc")
 
-[node name="Weapons" parent="." index="4" unique_id=1799022156]
+[node name="Weapons" parent="." index="2" unique_id=1799022156]
 visible = false
 min_pitch_degrees = -10.0
-
-[node name="HullWaterFootprint" parent="." index="5" unique_id=1721786654]
-profile = ExtResource("5_2yvxr")
-cutout_height_offset = 0.3
-wake_strength = 2.11
-bake_source_paths = Array[NodePath]([NodePath("../Model/Sketchfab_model/Wooden_boat_fbx/RootNode/Boat/Boat_Boat_texture_0")])
-bake_inset = 0.04
 
 [node name="ThirdPersonFocus" parent="CameraTargets" parent_id_path=PackedInt32Array(1262110883) index="0" unique_id=398705810]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0.3)
@@ -347,10 +60,10 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0.3)
 [node name="FirstPersonSeat" parent="CameraTargets" parent_id_path=PackedInt32Array(1262110883) index="1" unique_id=812544978]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.35, 2.6)
 
-[node name="Model" parent="." index="7" unique_id=1101353392 instance=ExtResource("6_oojqr")]
+[node name="Model" parent="." index="4" unique_id=1101353392 instance=ExtResource("6_oojqr")]
 transform = Transform3D(-2.6226834e-08, 0, 0.6, 0, 0.6, 0, -0.6, 0, -2.6226834e-08, 1.1920929e-07, -0.45767978, -0.008524179)
 
-[node name="SwivelGun" type="Node3D" parent="." index="8" unique_id=147997565]
+[node name="SwivelGun" type="Node3D" parent="." index="5" unique_id=147997565]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.03, -2.4)
 visible = false
 

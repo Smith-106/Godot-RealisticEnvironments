@@ -3,7 +3,10 @@
 [English](README.md) · **简体中文**
 
 适用于 Godot 4.8 的基于物理的开阔海洋。它包括延伸到弯曲地平线的 FFT 海浪、带大气的
-物理天空、体积云和夜空、像人眼一样的曝光，以及能在水面上漂浮的物体和船只。
+物理天空、体积云和夜空、像人眼一样的曝光，以及可驾驶的船只。
+
+> **正在重写。** 浮力和交互波浪（尾迹、水花、船体挖空）已被移除，正在从头重做。
+> 在此之前，船只和漂浮物都被冻结在原地。
 
 ![晴天海面上的两艘船](docs/images/screenshot-hero.jpg)
 
@@ -21,31 +24,27 @@
 | --- | --- |
 | [`core`](addons/core/README.zh-CN.md) | 共用的约定（`WaterSurface`、`WindSource`）和 GPU 辅助工具。 |
 | [`wind_system`](addons/wind_system/README.zh-CN.md) | 一股带阵风的风，海浪和云都跟随它。 |
-| [`ocean_system`](addons/ocean_system/README.zh-CN.md) | 在 GPU 上计算的 FFT 海浪和延伸到地平线的多细节层次网格；还有水体着色、泡沫、反射、尾迹和水面高度查询。 |
+| [`ocean_system`](addons/ocean_system/README.zh-CN.md) | 在 GPU 上计算的 FFT 海浪和延伸到地平线的多细节层次网格；还有水体着色、泡沫、反射和水面高度查询。 |
 | [`sky_system`](addons/sky_system/README.zh-CN.md) | 按天文规律运行的太阳和月亮、物理大气、体积云、星星和行星。它照亮场景并测量光照。 |
 | [`exposure_system`](addons/exposure_system/README.zh-CN.md) | 根据测得的光照为相机曝光，像人眼一样适应。 |
-| [`buoyancy_system`](addons/buoyancy_system/README.zh-CN.md) | 用采样水面的探针让刚体漂浮；还有接触事件和沉没。 |
 | [`hitbox_damage_system`](addons/hitbox_damage_system/README.zh-CN.md) | 投射物受击区和按分组的生命值（例如船体、桅杆）。 |
 | [`ocean_environment`](addons/ocean_environment/README.zh-CN.md) | 把风、天空、海洋和曝光放在一个接好线的场景里。 |
-| [`boat_template`](addons/boat_template/README.zh-CN.md) | 接好线的船：驾驶、浮力、沉没、生命值和尾迹。 |
+| [`boat_template`](addons/boat_template/README.zh-CN.md) | 接好线的船：驾驶、生命值和相机锚点。 |
 
 ```
 WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---> ExposureController
     |                     |      ^                           ^
     +---------------------|------|--- wind (cloud drift) ----+
-                registers |      +--- hull poses --- HullWaterFootprint
+                registers |
                           v
-      WaterSurface (core): async height queries, splashes
-                          ^
-      BuoyantBody: submits points every physics tick
+      WaterSurface (core): async height queries
 ```
 
 - 风（`WindSystem`）驱动海浪和云的漂移；天空（`SkySystem`）为海洋提供太阳、天空、云和
-  星星，并为 `ExposureController` 提供测光；`HullWaterFootprint` 告诉海洋船体在哪里。
+  星星，并为 `ExposureController` 提供测光。
 - 海洋和天空每帧都用 GPU 上的计算着色器渲染：海浪谱和 FFT、大气的查找纹理，以及云。
 - 物理代码从不直接访问海洋。它每个物理帧向世界的 `WaterSurface` 提交查询点，几帧后
   读取结果，并外推到当前时刻。
-- 伤害在场景中连接：`HitboxHealthManager.group_destroyed` 可以让 `BuoyantBody` 沉没。
 - 大多数单位是物理单位：风速用 m/s，光照用勒克斯，水的光学参数按每米计。画面效果来自
   物理，而不是人为的调色。
 
@@ -64,7 +63,7 @@ WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---
 | 示例 | 内容 |
 | --- | --- |
 | `examples/ocean_only.tscn` | 拿来即用的环境和一个自由飞行相机。 |
-| `examples/floating_objects.tscn` | 靠探针浮力漂浮的箱子和木桶。 |
+| `examples/floating_objects.tscn` | 箱子和木桶（在浮力回来之前是冻结的）。 |
 | `examples/boat.tscn` | 基于船只模板、可驾驶的船（W A S D）。 |
 
 **在你的项目中使用。**
@@ -75,16 +74,14 @@ WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---
    uniform 和去色带、船只的输入动作），从不改动已有设置，并打印它添加了什么。
 3. 实例化 `addons/ocean_environment/ocean_environment.tscn`，添加一个远裁剪面超过
    地平线的 `Camera3D`（演示场景用 60 公里），然后运行。
-4. 要让物体漂浮，给它们添加 `buoyancy_system` 的节点。要一艘可驾驶的船，继承
-   `addons/boat_template/boat.tscn`。
+4. 要做一艘船，继承 `addons/boat_template/boat.tscn`。
 
 | 插件 | 依赖 |
 | --- | --- |
 | `core`、`wind_system`、`exposure_system`、`hitbox_damage_system` | 无 |
 | `ocean_system`、`sky_system` | `core` |
-| `buoyancy_system` | `core`，以及水体（例如 `ocean_system`） |
 | `ocean_environment` | `core`、`wind_system`、`sky_system`、`ocean_system`、`exposure_system` |
-| `boat_template` | `core`、`ocean_system`、`sky_system`、`buoyancy_system`、`hitbox_damage_system` |
+| `boat_template` | `core`、`hitbox_damage_system` |
 
 每个设置在检查器中都有提示，每个类在编辑器帮助中都有页面（按 F1，搜索例如
 `OceanSystem`）。配置有误的节点会在场景面板中显示警告。编辑器内的说明目前只有英文。
@@ -92,7 +89,7 @@ WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---
 ## 演示场景
 
 `demo/main.tscn` 是开发用的沙盒。你驾驶一艘装有船头回旋炮的划艇。场景里有一艘可以
-击沉的卡拉维尔帆船、一个浮标、一个罗盘 HUD，以及一个隐藏的调试面板，可以实时调整
+射击的卡拉维尔帆船、一个浮标、一个罗盘 HUD，以及一个隐藏的调试面板，可以实时调整
 大多数海洋、天空和风的参数。武器（`projectile_launcher_system`、
 `floating_boat_template`）只是演示玩法，不属于开源插件。
 `demo/ocean_optics_debug.tscn` 是一个更轻的场景，用来调整水体着色。
@@ -116,7 +113,7 @@ addons/      各插件，每个都有自己的 README
 examples/    只使用开源插件的示例场景
 demo/        演示场景、船只和第三方模型
 systems/     演示用的辅助代码：相机、调试面板、罗盘 HUD
-tools/       开发脚本（lint、星表、银河和船体生成）
+tools/       开发脚本（lint、星表、银河、示例船体）
 docs/        设计记录和图片
 ```
 

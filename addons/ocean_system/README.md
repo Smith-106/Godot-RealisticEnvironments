@@ -3,8 +3,8 @@
 **English** · [简体中文](README.zh-CN.md)
 
 An open ocean for Godot 4.8 Forward+. It has wind-driven FFT waves out to a
-curved horizon, physically based water shading, foam and reflections. Hulls
-make wakes, and anything that floats can query the water height on the GPU.
+curved horizon, physically based water shading, foam and reflections.
+Gameplay code can query the water height on the GPU.
 
 Requires `core` and a `RenderingDevice` (Forward+). Without one
 (Compatibility renderer, headless) the ocean reports an error and stays off.
@@ -34,14 +34,9 @@ Requires `core` and a `RenderingDevice` (Forward+). Without one
   caustics and foam where waves compress. One rough-surface Fresnel weights
   every reflection: the sky with its clouds, stars, planets and atmosphere,
   the sun's highlight, and the scene (screen-space or planar).
-- **Wakes and splashes.** An iWave simulation runs on a window around the
-  camera (by default 512 × 512 cells of 0.5 m). Hulls (`HullWaterFootprint`)
-  push water in it, which makes Kelvin wakes, bow waves and wake foam. Waves
-  steeper than water can hold break: they lose their excess energy and foam.
-  `add_impulse()` adds splash rings. Water inside nearby hulls is cut out.
 - **Water queries.** The ocean registers a `WaterSurface` (see `core`). All
   queries in a frame go to the GPU in one dispatch. They sample the same
-  surface that is drawn, wakes included, and are read back asynchronously.
+  surface that is drawn and are read back asynchronously.
 
 The sea lies at `water_level`. The node's own transform is ignored.
 
@@ -69,8 +64,6 @@ The sea lies at `water_level`. The node's own transform is ignored.
 | Foam | `foam_color`, `foam_intensity`, `foam_roughness`, the foam pattern texture and its tile size. |
 | Sky | `sky_source_path`, reflection strength and F0, the sun's highlight; **Manual Sky** values for when there is no sky source. |
 | Reflections | `reflection_mode`: `SKY_ONLY`, `SCREEN_SPACE` or `PLANAR` (default), plus the planar reflection's resolution and clipping. Render layer 20 (`reflection_water_layer`) is reserved for the water. |
-| Hull Cutouts | `hull_cutout_distance`. |
-| Interaction | The wake simulation: on/off, grid, cell size, step rate, damping and foam. |
 | Quality | `shader_quality` (`LOW`, `MEDIUM`, `HIGH`), `simulation_map_size` (128–1024), `max_wave_phase_step`, `fragment_cascade_limit`, `use_bicubic_normals`, `mesh_base_cell_size`. |
 | Material | `water_material`: the template the ocean copies. The ocean renders with a private duplicate. |
 
@@ -79,26 +72,11 @@ the waves follow. `get_water_material()` returns the material actually used. To
 show single shading terms, set its `water_debug_view` uniform (1–15) at
 runtime.
 
-### Ships: cutouts and wakes
-
-1. Add a `HullWaterFootprint` to the ship, rigidly attached (usually a direct
-   child of the body; the boat template has one).
-2. Set `bake_source_paths` to the hull meshes only (no masts or rigging).
-3. Save the scene, press **Bake Profile**, and save again.
-
-The baked `HullProfile` hides the water inside the hull and lets the hull
-push water. Tune the wakes in the **Wake** group. If waves cresting a low
-gunwale show water inside the boat, raise `cutout_height_offset`. Only the 8
-nearest hulls get cutouts, and only the 32 nearest make wakes.
-
-### Water queries and splashes
+### Water queries
 
 Use `WaterSurface.find(node)` from `core` (its README has the example), never
-`OceanSystem`. Every body feels the same waves: the swell plus every wake and
-splash, heights and the water's motion. A body with its own `HullWaterFootprint`
-feels all of them but its own waves: a small simulation forced by its hulls alone
-takes them out (its own waves act on it only as its buoyancy's radiation damping
-and added mass). Up to 64 splashes per simulation step are accepted.
+`OceanSystem`. Results give the height, normal, displacement and velocity of
+the drawn surface.
 
 ### Sky source
 
@@ -125,9 +103,7 @@ frame.
 - Below the water the camera sees through the water (its colour and haze, light
   shafts from the waves) and the surface from under it (Snell's window, total
   internal reflection). The camera counts as underwater by the wave height at its
-  position, so a lens half in the water shows one or the other. Hull cutouts seen
-  from below can show the sky through a hull's waterline footprint.
+  position, so a lens half in the water shows one or the other.
 - One ocean per world, with one depth for the whole sea (no shores).
-- Only the drawing is curved. Queries, buoyancy and the wake simulation treat
-  the sea as flat.
-- Wakes exist only inside the simulation window around the camera.
+- Only the drawing is curved. Queries and reflections treat the sea as flat.
+- No wakes, splashes or hull cutouts: the interactive waves are being rewritten.

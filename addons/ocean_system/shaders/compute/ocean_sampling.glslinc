@@ -9,7 +9,7 @@
  *     push-constant members).
  *
  * Godot does not track include dependencies: after editing this file, reimport
- * every .glsl that includes it (surface_query.glsl, iwave_pressure.glsl).
+ * every .glsl that includes it (surface_query.glsl).
  */
 
 #define OCEAN_MAX_CASCADES 8U

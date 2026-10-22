@@ -2,9 +2,8 @@
 class_name FloatingBoat
 extends RigidBody3D
 ## Root of a floating boat: player drive input, model animation autoplay and a
-## debug position trail. Buoyancy (which also keeps it upright and resists its
-## motion through the water), damage, weapons and the hull footprint are child
-## nodes (see the template scene).
+## debug position trail. Damage and weapons are child nodes (see the template
+## scene). The template is frozen: nothing floats it yet.
 
 const DEBUG_HISTORY_MAX_POINTS := 240
 const DEBUG_HISTORY_MIN_DISTANCE := 0.2
