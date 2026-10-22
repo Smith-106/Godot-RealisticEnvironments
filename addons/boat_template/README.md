@@ -2,13 +2,12 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-`boat.tscn` is a boat with the systems already wired: driving, hit health and
-camera anchors. To make a boat, create an **inherited scene** from it.
+`boat.tscn` is a boat with the systems already wired: buoyancy, driving, hit
+health and camera anchors. To make a boat, create an **inherited scene** from
+it.
 
-> **Rewrite in progress.** Buoyancy is being redone from scratch, so the
-> template's body is frozen (`freeze = true`) and does not float yet.
-
-Requires `core` and `hitbox_damage_system`. When enabled, the plugin adds the
+Requires `core`, `buoyancy_system` and `hitbox_damage_system`. When enabled,
+the plugin adds the
 drive actions `boat_forward`, `boat_back`, `boat_turn_left` and
 `boat_turn_right` (W S A D) to the project, unless they already exist.
 
@@ -18,20 +17,31 @@ drive actions `boat_forward`, `boat_back`, `boat_turn_left` and
 Boat (RigidBody3D, FloatingBoat)   drive input, model animation
 ├─ CollisionShape3D           placeholder box: replace it
 ├─ Hitboxes                   HitboxHealthManager (one "hull" group, 100 HP)
-└─ CameraTargets/ThirdPersonFocus, FirstPersonSeat
+├─ CameraTargets/ThirdPersonFocus, FirstPersonSeat
+└─ BuoyantBody                floats the boat (draft 0.3 m)
 ```
 
-- **`FloatingBoat`** (the root) pushes the boat forward and turns it while
-  `player_controlled` is on. Thrust stops above `max_forward_speed` /
-  `max_reverse_speed`, and turning weakens at low speed.
+- **`BuoyantBody`** floats the boat (see `buoyancy_system`'s README). The
+  body's `linear_damp_mode` is **Replace**, so only the water slows it.
+- **`FloatingBoat`** (the root) drives the boat while `player_controlled` is
+  on. The propeller pushes and the rudder pushes sideways at
+  `propulsion_position`, at the stern below the waterline: the bow lifts a
+  little as the boat speeds up, and the boat leans and slides into turns.
+  Both fade out as that point leaves the water (`buoyancy_path`). Thrust eases
+  off toward `max_forward_speed` / `max_reverse_speed`. `turn_acceleration`
+  is the yaw acceleration at full rudder, whatever the boat's mass; the
+  water's sideways drag sets the turn rate it settles at, and turning weakens
+  at low speed (`low_speed_turn_factor`).
 - Health comes from `hitbox_damage_system` (see its README).
 
 ## How to use
 
 1. **Scene > New Inherited Scene** from `boat.tscn`. Add your model with the
    bow along −Z.
-2. Replace the collision shape, and set the boat's real `mass` and
-   `center_of_mass`.
+2. Replace the collision shape, and set the boat's `mass` and
+   `center_of_mass`. On `BuoyantBody`, set `draft` (how deep the hull sits)
+   and the drag; on the root, put `propulsion_position` at the stern, below
+   the waterline.
 3. Add `ProjectileHitbox` areas under `Hitboxes`, and list their groups in
    `group_max_health`.
 4. Move `CameraTargets/*` onto the deck.

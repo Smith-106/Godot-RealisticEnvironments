@@ -8,23 +8,26 @@
 | 场景 | 内容 | 操作 |
 | --- | --- | --- |
 | `ocean_only.tscn` | 拿来即用的环境：天空、云、风和海浪。 | 按住鼠标右键环顾；W A S D 飞行，Q / E 下降 / 上升，Shift 加速，滚轮调整速度。 |
-| `floating_objects.tscn` | 箱子和木桶，在浮力重写完成前是冻结的。 | 同上。 |
-| `boat.tscn` | 船只模板的船和两个箱子，在浮力重写完成前是冻结的。 | W A S D 驾驶；按住鼠标右键环绕，滚轮缩放。 |
+| `floating_objects.tscn` | 箱子和木桶随波起伏、顺风漂移。 | 同上。 |
+| `boat.tscn` | 船只模板的船和两个箱子。 | W A S D 驾驶；按住鼠标右键环绕，滚轮缩放。 |
 
 要修改时间、天气或海浪，选中 `OceanEnvironment`，右键打开 **子节点可编辑**，然后编辑
 `SkySystem`、`WindSystem` 或 `Ocean`。
 
 ## 制作方法
 
-**漂浮物。** `crate.tscn` 和 `barrel.tscn` 都是一个冻结的 `RigidBody3D`（质量、
-网格、碰撞形状）。浮力正在重写，在此之前没有东西让它们漂浮。
+**漂浮物。** `crate.tscn` 和 `barrel.tscn` 都是一个 `RigidBody3D`（质量、网格、
+碰撞形状），带一个 `BuoyantBody` 子节点。它的 `draft` 就是它们的吃水深度：250 千克的
+箱子为 0.25 米，侧躺的 40 千克木桶为 0.13 米。作为漂浮杂物，它们沿纵向和横向的阻力
+相同。
 
 **船。** `simple_boat.tscn` 是 `addons/boat_template/boat.tscn` 的继承场景：
 
 1. `Model` 是 `assets/simple_hull.obj`，由 `tools/make_example_hull.py` 生成
    （船头朝 −Z）。
-2. 根节点设置 `mass`、`center_of_mass` 以及驾驶参数。`CollisionShape3D`
-   使用由网格生成的凸形状。
+2. 根节点设置 `mass`、`center_of_mass` 以及驾驶参数，`propulsion_position` 位于
+   船尾板水线以下。`CollisionShape3D` 使用由网格生成的凸形状，`BuoyantBody` 让船体
+   吃水 0.255 米。
 3. 把 `CameraTargets` 移到船上。
 
 `boat.tscn` 为它驾驶的船打开了 `player_controlled`。W A S D 动作由 Boat Template

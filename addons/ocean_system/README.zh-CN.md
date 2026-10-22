@@ -3,7 +3,8 @@
 [English](README.md) · **简体中文**
 
 适用于 Godot 4.8 Forward+ 的开阔海洋。风驱动的 FFT 海浪一直延伸到弯曲的地平线，
-并带有基于物理的水体着色、泡沫和反射。游戏代码可以在 GPU 上查询水面高度。
+并带有基于物理的水体着色、泡沫、反射，以及船只激起的尾迹。游戏代码可以在 GPU 上查询
+水面高度。
 
 需要 `core` 插件和 `RenderingDevice`（Forward+）。没有 `RenderingDevice` 时
 （Compatibility 渲染器、无头模式），海洋会报错并保持关闭。
@@ -28,6 +29,12 @@
   天空（连同云、星星、行星和大气）、太阳高光和场景（屏幕空间或平面反射）。
 - **水面查询。** 海洋注册一个 `WaterSurface`（见 `core`）。一帧中的所有查询在一次
   GPU 派发中完成。它们采样的就是画出来的水面，结果异步回读。
+- **交互波浪。** 船体向 `WaterSurface` 报告自己（`BuoyantBody` 会这样做），相机周围
+  的波浪模拟画出它们的运动激起的波浪：开尔文尾迹（任何速度下都约为 19.5° 的 V 形）、
+  船首波，以及上下起伏的船体激起的环形波。船体只有相对于水运动时才会激起波浪，所以
+  随涌浪漂浮不会产生波浪。每个波都以真实的速度传播：模拟每个物理帧按有限水深色散关系
+  精确地推进每个傅里叶分量。这些波浪只用于绘制：水面查询不包含它们，所以它们从不推动
+  物体（单向耦合，不会越积越大）。
 
 海面位于 `water_level`。节点自身的变换会被忽略。
 
@@ -54,17 +61,19 @@
 | Foam | `foam_color`、`foam_intensity`、`foam_roughness`、泡沫纹理及其平铺尺寸。 |
 | Sky | `sky_source_path`、反射强度和 F0、太阳高光；**Manual Sky** 中是没有天空源时使用的值。 |
 | Reflections | `reflection_mode`：`SKY_ONLY`、`SCREEN_SPACE` 或 `PLANAR`（默认），以及平面反射的分辨率和裁剪。渲染层 20（`reflection_water_layer`）留给水面专用。 |
+| Interactive Waves | `interaction_map_size`（Off、256、512 或 1024 个格子）和 `interaction_cell_size`（默认 0.25 米）：两者共同决定相机周围船体能激起波浪的窗口（512 × 0.25 米 = 128 米）。窗口会朝相机看的方向前移，并在边缘淡出。 |
 | Quality | `shader_quality`（`LOW`、`MEDIUM`、`HIGH`）、`simulation_map_size`（128–1024）、`max_wave_phase_step`、`fragment_cascade_limit`、`use_bicubic_normals`、`mesh_base_cell_size`。 |
 | Material | `water_material`：海洋复制的材质模板。海洋用一份私有副本渲染。 |
 
 在代码中：`get_wind_speed()` 和 `get_wind_direction_degrees()` 返回海浪跟随的风。
 `get_water_material()` 返回实际使用的材质；在运行时设置它的 `water_debug_view`
-uniform（1–15），可以单独显示某一项着色。
+uniform（1–17），可以单独显示某一项着色；16 和 17 显示交互波浪的高度和斜率。
 
 ### 水面查询
 
 使用 `core` 中的 `WaterSurface.find(node)`（示例见它的 README），不要直接访问
-`OceanSystem`。结果给出画出来的水面的高度、法线、位移和速度。
+`OceanSystem`。结果给出画出来的水面的高度、法线、位移和速度。`get_surface_drift()`
+是让泡沫顺风移动的漂流，为风速的 3%；`buoyancy_system` 让漂浮物随它移动。
 
 ### 天空源
 
@@ -88,5 +97,7 @@ uniform（1–15），可以单独显示某一项着色。
 
 - 相机在水下时，能看到水体本身（水色与雾化、波浪聚焦形成的光束）以及从下方看到的水面（斯涅尔窗、全反射）。是否在水下按相机位置处的波高判断，因此镜头半入水时只会显示其中一种。
 - 每个世界只有一片海洋，整片海只有一个水深（没有海岸）。
+- 船体只在相机周围的窗口内激起波浪（默认每个方向约 64 米），同时最多 16 个（最近的
+  那些）。战列舰的长尾迹需要第二个更粗的窗口，目前还没有。
 - 只有绘制是弯曲的。查询和反射都把海面当作平面。
-- 没有尾迹、水花或船体挖空：交互波浪正在重写。
+- 船体周围还没有泡沫，没有水花，开放船体内仍会显示水面：交互波浪的这些部分正在重做。

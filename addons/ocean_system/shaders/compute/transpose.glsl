@@ -6,22 +6,22 @@
  */
 
 #define TILE_SIZE   (32U)
-#define NUM_SPECTRA (4U)
 
 layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) restrict buffer FFTBuffer {
-	vec2 data[]; // map_size x map_size x num_spectra x 2 * spectrum slots
+	vec2 data[]; // map_size x map_size x spectrum_count x 2 * spectrum slots
 };
 
 layout(push_constant) restrict readonly uniform PushConstants {
 	uint buffer_slot;
+	uint spectrum_count; // spectra per slot in the buffer
 };
 
 shared vec2 tile[TILE_SIZE][TILE_SIZE+1];
 
-#define DATA_IN(id, layer)  (data[(id.z)*map_size*map_size*NUM_SPECTRA*2 + NUM_SPECTRA*map_size*map_size + (layer)*map_size*map_size + (id.y)*map_size + (id.x)])
-#define DATA_OUT(id, layer) (data[(id.z)*map_size*map_size*NUM_SPECTRA*2 +                             0 + (layer)*map_size*map_size + (id.y)*map_size + (id.x)])
+#define DATA_IN(id, layer)  (data[(id.z)*map_size*map_size*spectrum_count*2 + spectrum_count*map_size*map_size + (layer)*map_size*map_size + (id.y)*map_size + (id.x)])
+#define DATA_OUT(id, layer) (data[(id.z)*map_size*map_size*spectrum_count*2 +                                0 + (layer)*map_size*map_size + (id.y)*map_size + (id.x)])
 void main() {
 	const uint map_size = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
 	const uvec2 id_block = gl_WorkGroupID.xy;

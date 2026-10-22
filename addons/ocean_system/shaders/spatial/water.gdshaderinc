@@ -157,7 +157,7 @@ uniform float aerial_max_distance = 1.0;
 uniform float sky_reflection_strength : hint_range(0.0, 2.0) = 1.0;
 uniform float sky_reflection_f0 : hint_range(0.0, 0.12) = 0.02;
 uniform float sun_specular_strength : hint_range(0.0, 4.0) = 1.0;
-uniform int water_debug_view : hint_range(0, 15) = 0;
+uniform int water_debug_view : hint_range(0, 17) = 0;
 // The camera's exposure (CameraAttributes.exposure_multiplier, or the world's), set
 // every frame by OceanSystem. The reflections are summed pre-exposed, as the sky source's
 // clouds and atmosphere and the planar reflection are stored, and EMISSION (which Godot
@@ -209,6 +209,12 @@ uniform sampler2DArray displacements_b : filter_linear_mipmap, repeat_enable;
 uniform sampler2DArray normals_a : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform sampler2DArray normals_b : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform vec4 wave_frame_blends[MAX_CASCADES]; // x: weight of map B (OceanSystem._get_cascade_frame_blend())
+// The interactive waves (OceanInteraction): the waves hulls make, on a world-locked map
+// around the camera that repeats every window (sampled with repeat wrapping):
+// (height, slope x, slope z, squared slope) at rest positions, full mips.
+uniform bool interaction_enabled = false;
+uniform sampler2D interaction_map : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform vec4 interaction_window = vec4(0.0, 0.0, 1.0, 1.0); // centre x, z, half size (m), 1 / size (1/m)
 
 varying float foam_factor;
 // Flat (uncurved) world position of the displaced surface.
@@ -364,6 +370,13 @@ vec4 aerial_perspective_fog(vec3 position) {
 	return opacity > 1e-5 ? vec4(inscatter / opacity, opacity) : vec4(0.0);
 }
 
+// Weight of the interactive waves at rest position xz: 1 inside their window, fading to
+// 0 over its outer fifth (surface_query.glsl does the same for the camera's height).
+float interaction_fade(vec2 xz) {
+	vec2 offset = abs(xz - interaction_window.xy) / interaction_window.z;
+	return 1.0 - smoothstep(0.8, 1.0, max(offset.x, offset.y));
+}
+
 void vertex() {
 	// Vertex spacing (m), for prefiltering the displacement; 0 on the editor's preview plane.
 	float vertex_spacing = 0.0;
@@ -416,6 +429,11 @@ void vertex() {
 			cascade_displacement += mix(textureLod(displacements_a, pending_coords, lod).xyz, textureLod(displacements_b, pending_coords, lod).xyz, b_weight) * blend_state.w;
 		}
 		displacement += cascade_displacement * scales.z;
+	}
+	// The interactive waves' height, prefiltered to the vertex spacing like the cascades.
+	if (interaction_enabled) {
+		float interaction_lod = log2(max(vertex_spacing * float(textureSize(interaction_map, 0).x) * interaction_window.w, 1.0));
+		displacement.y += textureLod(interaction_map, UV * interaction_window.w, interaction_lod).x * interaction_fade(UV);
 	}
 	VERTEX += displacement;
 	water_world_position = VERTEX;
@@ -1221,6 +1239,8 @@ void fragment() {
 	float slope_variance = 0.0;
 	foam_factor = 0.0;
 	vec3 world_normal = vec3(0.0, 1.0, 0.0);
+	// The interactive waves over the pixel footprint (height, slopes, squared slope).
+	vec4 interaction = vec4(0.0);
 	float sky_reflection_amount = 0.0;
 	vec3 reflected_sky_color = vec3(0.0);
 	float sun_specular_amount = 0.0;
@@ -1267,7 +1287,18 @@ void fragment() {
 		// Foam is coverage (fft_unpack.glsl), so its mips hold the covered share of
 		// each texel: right at every distance, with no fade.
 		foam_factor = saturate(foam_signal * foam_intensity);
-
+	}
+	if (interaction_enabled) {
+		// Filtered over the pixel footprint (anisotropic), so the mean slope and the
+		// slope variance it hides come out as for the cascades.
+		float scale = interaction_window.w;
+		interaction = textureGrad(interaction_map, UV * scale, uv_dx * scale, uv_dy * scale);
+		float fade = interaction_fade(UV);
+		gradient += interaction.yz * fade;
+		slope_variance += max(interaction.w - dot(interaction.yz, interaction.yz), 0.0) * fade;
+		interaction *= fade;
+	}
+	if (num_cascades > 0 || interaction_enabled) {
 		gradient *= normal_scale;
 		slope_variance *= normal_scale * normal_scale;
 		world_normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
@@ -1508,6 +1539,10 @@ void fragment() {
 			debug_color = vec3(caustics * 0.25); // caustic light factor on what lies below (1 = none)
 		} else if (water_debug_view == 14) {
 			debug_color = vec3(abs(refracted_uv - SCREEN_UV) * 20.0, 0.0); // refraction offset on screen
+		} else if (water_debug_view == 16) {
+			debug_color = vec3(max(interaction.x, 0.0), max(-interaction.x, 0.0), 0.0) * 4.0; // interactive waves' height: red up, green down, full at 0.25 m
+		} else if (water_debug_view == 17) {
+			debug_color = vec3(abs(interaction.yz) * 4.0, 0.0); // interactive waves' slopes along x (red) and z (green)
 		}
 		// Shown unlit, so the scene's lighting does not scale the values.
 		ALBEDO = vec3(0.0);

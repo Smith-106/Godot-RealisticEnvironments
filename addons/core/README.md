@@ -3,7 +3,7 @@
 **English** · [简体中文](README.zh-CN.md)
 
 The shared foundation of the ocean addons. It depends on nothing; `ocean_system`,
-`sky_system` and `boat_template` depend on it. Enable it
+`sky_system`, `buoyancy_system` and `boat_template` depend on it. Enable it
 before them.
 
 ## How it works
@@ -13,8 +13,9 @@ together, the contract between them lives here:
 
 | Class | Role |
 | --- | --- |
-| `WaterSurface` | The water contract. A water simulation (`OceanSystem`) registers one per `World3D`; anything that samples the water finds it with `WaterSurface.find(node)`. |
+| `WaterSurface` | The water contract. A water simulation (`OceanSystem`) registers one per `World3D`; anything that samples the water finds it with `WaterSurface.find(node)`. It also gives the surface drift (`get_surface_drift()`), the water's mean flow downwind that carries foam and floating things. |
 | `WaterSurfaceQueryResult`, `WaterSurfaceSample` | The answer to a water query: per point, the surface height, normal, displacement and water velocity. |
+| `WaterDisturbance` | A hull in the water, as `WaterSurface.submit_disturbance()` takes it: footprint, depth and the water's velocity under it. The water draws the waves its motion makes. |
 | `WindSource` | Reads any wind provider (a `WindSystem` or a node of your own) by its methods or properties. |
 | `ProjectSetup` | Lets the addons' plugins add missing project settings (global shader uniforms, input actions) without changing existing ones. |
 | `RenderingContext` | Owns a compute feature's `RenderingDevice` resources, frees them together and records failures. |
@@ -66,3 +67,12 @@ properties. Directions are the way the wind blows toward, in degrees: 0 = +Z,
 Extend `WaterSurface` and implement its abstract methods. Call
 `WaterSurface.register(get_world_3d(), surface)` in `_enter_tree()` and
 `unregister()` in `_exit_tree()`. Each world can have only one water surface.
+Water without interactive waves can ignore `submit_disturbance()` and
+`release_disturbance()`.
+
+### Make waves
+
+Report a hull every physics tick with `submit_disturbance(self, disturbance)`
+(one `WaterDisturbance`, reused) and call `release_disturbance(self)` in
+`_exit_tree()`. `BuoyantBody` does this for floating bodies. The waves are
+only drawn: query results leave them out.

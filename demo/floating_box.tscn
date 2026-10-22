@@ -26,7 +26,8 @@ max_forward_speed = 8.0
 max_reverse_speed = 8.0
 forward_acceleration = 0.5
 reverse_acceleration = 0.3
-turn_torque_per_kg = 1.0
+turn_acceleration = 8.0
+propulsion_position = Vector3(0, -0.6, 9)
 low_speed_turn_factor = 1.0
 animation_player_path = NodePath("Sketchfab_Scene/AnimationPlayer")
 autoplay_animation = &"Sail"
@@ -161,3 +162,7 @@ spring_strength = 5.0
 damping = 1.0
 
 [editable path="Sketchfab_Scene"]
+
+[node name="BuoyantBody" parent="." unique_id=1907536648]
+draft = 2.13
+forward_drag = 0.1

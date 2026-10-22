@@ -77,9 +77,10 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `demo/rowboat.tscn` and `demo/floating_box.tscn` inherit that and override
   nodes by path with matching `index` attributes: renaming/reordering template
   nodes breaks them and `demo/main.gd`.
-- Buoyancy and the interactive waves (wakes, splashes, hull cutouts) are being
-  rewritten from scratch: until then the template, the demo boats and buoy and
-  the example floaters are frozen RigidBodies (`freeze = true`).
+- `boat.tscn`'s last child is `BuoyantBody`; inherited scenes override it by
+  path. Each floater's `draft` matches its hull (`docs/buoyancy-and-interactive-waves-plan.md`
+  lists them). The template body's `linear_damp_mode` is Replace, so Godot's
+  default damping does not add to the water's drag.
 - A non-uniformly scaled collision shape gives zero inverse inertia; set
   `inertia` explicitly (as `floating_box.tscn` does).
 - No `/** */` doc comments in `.gdshader`/`.gdshaderinc` (editor extracts them
@@ -137,11 +138,35 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `FOG = atmosphere_fog(...)`; only `sky_system` includes it.
   Opaque materials must not write `FOG`. Environment fog stays off.
 - **Water surface:** a simulation registers one `WaterSurface` per `World3D`
-  in `_enter_tree` and unregisters in `_exit_tree`.
+  in `_enter_tree` and unregisters in `_exit_tree`. `get_surface_drift()` is the
+  drift that moves the foam (`OceanSystem._get_surface_drift()`, one place);
+  `BuoyantBody` drags bodies along with it. Hulls report a `WaterDisturbance`
+  every physics tick (`submit_disturbance()`, values copied; latest wins) and
+  call `release_disturbance()` in `_exit_tree`.
 - **Weapons:** recoil receivers implement `apply_recoil(fire_direction,
   shot_data)`; projectiles are group `projectile` or have `launch()` and carry
   `source_rigid_body_instance_id` metadata. `player_controlled` gates boat
   drive and weapon input (`controlled_property`).
+
+## Buoyancy invariants
+- One-way coupling: bodies make waves, nothing reads them back. `BuoyantBody`
+  reads only the FFT sea through `WaterSurface` queries; the interactive waves
+  stay out of every query except `OceanSystem`'s own camera point (the
+  interaction owner, for the above/below test). The previous system fed them
+  back and bodies rocked harder and harder.
+- `BuoyantBody` reports its hull every tick: a superellipse fitted to the
+  collision shapes' outline (`_exponent_for_area_share()`), depth = `draft` +
+  the waterline plane's mean depth (relative to the water, so riding the swell
+  makes no waves), the water's velocity under it plus the drift.
+- Visual, not physical: one placement knob, `draft` (no volumes or densities).
+  Probe lift is `share × weight / N × (1 + depth / draft)`; the shares balance
+  about the centre of mass (`_balance_probes()`), so every body rests level at
+  `draft`, and the lift acts no lower than the centre of mass, so no body
+  capsizes. Keep both.
+- Depth uses the body's pose this tick; only the water height is delayed
+  (extrapolated by query age and moved along the sample's slope to the
+  probe's current position). Damping and drag are relative to the water:
+  `height_rate()` along the probe's path, `surface_velocity` plus the drift.
 
 ## Ocean invariants
 - CDLOD: one multimesh of 16 × 16 nodes set via the RenderingServer, selected
@@ -217,9 +242,28 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   (`OceanSurfaceQueries.FLOATS_PER_CASCADE`, `OceanSystem._update_cascade_uniforms()`,
   `ocean_sampling.glslinc`). Queries read mip 0 and invert horizontal
   displacement.
+- Interactive waves (`OceanInteraction`, visual only): one step per physics
+  tick in `OceanSystem._physics_process` (`process_physics_priority` 100, after
+  the bodies report). A world-locked window: cell c is texel c mod map size,
+  sampled with repeat wrapping at rest positions (`UV`); moving the window
+  clears only the cells it enters, and a damped border keeps waves off the
+  FFT's periodic seam. A hull's source is `T_now − T_previous`, the previous
+  footprint moved with the water (first sighting or a jump starts over, no
+  wave). The FFT buffer holds an input and an output half; pass order: source,
+  forward FFT, evolve (exact dispersion with the spectrum's `water_depth`),
+  inverse FFT, two output passes, mips. Keep the dispersion exact: a spatial
+  kernel cannot draw a Kelvin wake (plan, Phase 0.1). `interaction_fade()` in
+  `water.gdshaderinc` is copied in `surface_query.glsl`
+  (`OceanSurfaceQueries.INTERACTION_FADE_START`); change both. Water debug
+  views 16, 17 show its height and slopes.
+- `fft_compute.glsl` (`buffer_slot, spectrum_count, direction`) and
+  `transpose.glsl` (`buffer_slot, spectrum_count`) serve `WaveGenerator`
+  (4 spectra, inverse) and `OceanInteraction` (1, forward and inverse).
 - Includes aren't tracked by the importer: after editing an include, delete
   `.godot/imported/<name>-*` of every shader using it (touching is not
   enough). `ocean_sampling.glslinc` → `surface_query.glsl`;
+  `interaction_common.glslinc` → `interaction_source.glsl`,
+  `interaction_output.glsl`;
   `atmosphere_common.glslinc` → `atmosphere_*.glsl`, `aerial_perspective.glsl`,
   `cloud_raymarch.glsl`, `cloud_trace.glsl`;
   `cloud_noise.glslinc` → `cloud_noise_bake.glsl`, `cloud_weather.glsl`;

@@ -1,5 +1,7 @@
 [gd_scene format=3 uid="uid://by88fplwyxhla"]
 
+[ext_resource type="Script" uid="uid://d21whouuqhx10" path="res://addons/buoyancy_system/buoyant_body.gd" id="2_buoyancy"]
+
 [sub_resource type="CylinderMesh" id="CylinderMesh_barrel"]
 top_radius = 0.3
 bottom_radius = 0.3
@@ -13,7 +15,6 @@ height = 0.9
 radius = 0.3
 
 [node name="Barrel" type="RigidBody3D" unique_id=1027670017]
-freeze = true
 mass = 40.0
 
 [node name="Mesh" type="MeshInstance3D" parent="." unique_id=1508357622]
@@ -24,3 +25,9 @@ surface_material_override/0 = SubResource("Material_barrel")
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1826621256]
 transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0, 0)
 shape = SubResource("CylinderShape_barrel")
+
+[node name="BuoyantBody" type="Node" parent="." unique_id=177355524]
+script = ExtResource("2_buoyancy")
+draft = 0.13
+forward_drag = 0.6
+sideways_drag = 1.0

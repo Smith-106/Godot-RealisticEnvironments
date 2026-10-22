@@ -5,8 +5,7 @@
 适用于 Godot 4.8 的基于物理的开阔海洋。它包括延伸到弯曲地平线的 FFT 海浪、带大气的
 物理天空、体积云和夜空、像人眼一样的曝光，以及可驾驶的船只。
 
-> **正在重写。** 浮力和交互波浪（尾迹、水花、船体挖空）已被移除，正在从头重做。
-> 在此之前，船只和漂浮物都被冻结在原地。
+> **开发中。** 船只可以漂浮并留下尾迹；船体周围的泡沫和开放船体内的挖空仍在制作中。
 
 ![晴天海面上的两艘船](docs/images/screenshot-hero.jpg)
 
@@ -24,12 +23,13 @@
 | --- | --- |
 | [`core`](addons/core/README.zh-CN.md) | 共用的约定（`WaterSurface`、`WindSource`）和 GPU 辅助工具。 |
 | [`wind_system`](addons/wind_system/README.zh-CN.md) | 一股带阵风的风，海浪和云都跟随它。 |
-| [`ocean_system`](addons/ocean_system/README.zh-CN.md) | 在 GPU 上计算的 FFT 海浪和延伸到地平线的多细节层次网格；还有水体着色、泡沫、反射和水面高度查询。 |
+| [`ocean_system`](addons/ocean_system/README.zh-CN.md) | 在 GPU 上计算的 FFT 海浪和延伸到地平线的多细节层次网格；还有水体着色、泡沫、反射、船只尾迹和水面高度查询。 |
 | [`sky_system`](addons/sky_system/README.zh-CN.md) | 按天文规律运行的太阳和月亮、物理大气、体积云、星星和行星。它照亮场景并测量光照。 |
 | [`exposure_system`](addons/exposure_system/README.zh-CN.md) | 根据测得的光照为相机曝光，像人眼一样适应。 |
+| [`buoyancy_system`](addons/buoyancy_system/README.zh-CN.md) | 让刚体漂浮：以设定的吃水深度静止，随波起伏，顺风漂移。 |
 | [`hitbox_damage_system`](addons/hitbox_damage_system/README.zh-CN.md) | 投射物受击区和按分组的生命值（例如船体、桅杆）。 |
 | [`ocean_environment`](addons/ocean_environment/README.zh-CN.md) | 把风、天空、海洋和曝光放在一个接好线的场景里。 |
-| [`boat_template`](addons/boat_template/README.zh-CN.md) | 接好线的船：驾驶、生命值和相机锚点。 |
+| [`boat_template`](addons/boat_template/README.zh-CN.md) | 接好线的船：浮力、驾驶、生命值和相机锚点。 |
 
 ```
 WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---> ExposureController
@@ -63,7 +63,7 @@ WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---
 | 示例 | 内容 |
 | --- | --- |
 | `examples/ocean_only.tscn` | 拿来即用的环境和一个自由飞行相机。 |
-| `examples/floating_objects.tscn` | 箱子和木桶（在浮力回来之前是冻结的）。 |
+| `examples/floating_objects.tscn` | 随波起伏的箱子和木桶。 |
 | `examples/boat.tscn` | 基于船只模板、可驾驶的船（W A S D）。 |
 
 **在你的项目中使用。**
@@ -79,9 +79,9 @@ WindSystem --- wind ---> OceanSystem <--- sky source --- SkySystem --- light ---
 | 插件 | 依赖 |
 | --- | --- |
 | `core`、`wind_system`、`exposure_system`、`hitbox_damage_system` | 无 |
-| `ocean_system`、`sky_system` | `core` |
+| `ocean_system`、`sky_system`、`buoyancy_system` | `core` |
 | `ocean_environment` | `core`、`wind_system`、`sky_system`、`ocean_system`、`exposure_system` |
-| `boat_template` | `core`、`hitbox_damage_system` |
+| `boat_template` | `core`、`buoyancy_system`、`hitbox_damage_system` |
 
 每个设置在检查器中都有提示，每个类在编辑器帮助中都有页面（按 F1，搜索例如
 `OceanSystem`）。配置有误的节点会在场景面板中显示警告。编辑器内的说明目前只有英文。

@@ -1,0 +1,50 @@
+/**
+ * Shared by the interactive wave passes (OceanInteraction): the window's cells and the
+ * hulls' footprints.
+ *
+ * Godot does not track include dependencies: after editing this file, reimport
+ * interaction_source.glsl and interaction_output.glsl.
+ */
+
+// A hull (OceanInteraction._write_hull()): its footprint now and one step earlier,
+// moved along with the water since. Each pose is centre (x, z) and length axis (x, z,
+// unit), each shape half length, half beam, superellipse exponent and depth (m, times
+// the wave strength).
+struct InteractionHull {
+	vec4 pose;
+	vec4 shape;
+	vec4 previous_pose;
+	vec4 previous_shape;
+};
+
+// The cell (x, z) a texel holds in the window whose first cell is origin: cells repeat
+// every map_size texels (a power of two), so moving the window keeps every cell in place.
+ivec2 interaction_cell(ivec2 texel, ivec2 origin, int map_size) {
+	return origin + ((texel - origin) & (map_size - 1));
+}
+
+// The footprint's radius at p: 0 at its centre, 1 on its edge (|u|^n + |v|^n = 1 in
+// the hull's frame), larger outside.
+float interaction_footprint_radius(vec4 pose, vec4 shape, vec2 p) {
+	vec2 offset = p - pose.xy;
+	vec2 local = abs(vec2(dot(offset, pose.zw), pose.z * offset.y - pose.w * offset.x)) / shape.xy;
+	vec2 powers = pow(max(local, vec2(1e-6)), vec2(shape.z));
+	return pow(powers.x + powers.y, 1.0 / shape.z);
+}
+
+// Whether p is outside the circle around the footprint (a cheap early out).
+bool interaction_outside_bounds(vec4 pose, vec4 shape, vec2 p) {
+	vec2 offset = p - pose.xy;
+	return dot(offset, offset) > dot(shape.xy, shape.xy);
+}
+
+// The hull's depth below the water at p: shape.w in the middle, tapering smoothly (with
+// zero slope) to nothing at the footprint's edge, so the hull's edge does not ring.
+float interaction_hull_depth(vec4 pose, vec4 shape, vec2 p) {
+	if (shape.w <= 0.0 || interaction_outside_bounds(pose, shape, p)) {
+		return 0.0;
+	}
+	float r = interaction_footprint_radius(pose, shape, p);
+	float s = max(1.0 - r * r, 0.0);
+	return shape.w * s * s;
+}

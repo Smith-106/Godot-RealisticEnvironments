@@ -3,8 +3,8 @@
 **English** · [简体中文](README.zh-CN.md)
 
 An open ocean for Godot 4.8 Forward+. It has wind-driven FFT waves out to a
-curved horizon, physically based water shading, foam and reflections.
-Gameplay code can query the water height on the GPU.
+curved horizon, physically based water shading, foam and reflections, and the
+wakes boats make. Gameplay code can query the water height on the GPU.
 
 Requires `core` and a `RenderingDevice` (Forward+). Without one
 (Compatibility renderer, headless) the ocean reports an error and stays off.
@@ -37,6 +37,15 @@ Requires `core` and a `RenderingDevice` (Forward+). Without one
 - **Water queries.** The ocean registers a `WaterSurface` (see `core`). All
   queries in a frame go to the GPU in one dispatch. They sample the same
   surface that is drawn and are read back asynchronously.
+- **Interactive waves.** Hulls report themselves to the `WaterSurface`
+  (`BuoyantBody` does), and a wave simulation around the camera draws the
+  waves their motion makes: the Kelvin wake (a V of about 19.5° at any speed),
+  the bow wave and the rings of a bobbing hull. A hull makes waves only by
+  moving relative to the water, so floating with the swell makes none. Every
+  wave travels at its real speed: the simulation moves each Fourier mode
+  exactly, by the finite-depth dispersion relation, once per physics tick.
+  The waves are only drawn: water queries leave them out, so they never push
+  bodies (one-way, so nothing can build up).
 
 The sea lies at `water_level`. The node's own transform is ignored.
 
@@ -64,19 +73,22 @@ The sea lies at `water_level`. The node's own transform is ignored.
 | Foam | `foam_color`, `foam_intensity`, `foam_roughness`, the foam pattern texture and its tile size. |
 | Sky | `sky_source_path`, reflection strength and F0, the sun's highlight; **Manual Sky** values for when there is no sky source. |
 | Reflections | `reflection_mode`: `SKY_ONLY`, `SCREEN_SPACE` or `PLANAR` (default), plus the planar reflection's resolution and clipping. Render layer 20 (`reflection_water_layer`) is reserved for the water. |
+| Interactive Waves | `interaction_map_size` (Off, 256, 512 or 1024 cells) and `interaction_cell_size` (default 0.25 m): together the window around the camera where hulls make waves (512 × 0.25 m = 128 m). The window leads the camera toward where it looks and fades out at its edge. |
 | Quality | `shader_quality` (`LOW`, `MEDIUM`, `HIGH`), `simulation_map_size` (128–1024), `max_wave_phase_step`, `fragment_cascade_limit`, `use_bicubic_normals`, `mesh_base_cell_size`. |
 | Material | `water_material`: the template the ocean copies. The ocean renders with a private duplicate. |
 
 From code: `get_wind_speed()` and `get_wind_direction_degrees()` give the wind
 the waves follow. `get_water_material()` returns the material actually used. To
-show single shading terms, set its `water_debug_view` uniform (1–15) at
-runtime.
+show single shading terms, set its `water_debug_view` uniform (1–17) at
+runtime; 16 and 17 show the interactive waves' height and slopes.
 
 ### Water queries
 
 Use `WaterSurface.find(node)` from `core` (its README has the example), never
 `OceanSystem`. Results give the height, normal, displacement and velocity of
-the drawn surface.
+the drawn surface. `get_surface_drift()` is the drift that moves the foam
+downwind, 3 % of the wind speed; `buoyancy_system` carries floating bodies
+with it.
 
 ### Sky source
 
@@ -105,5 +117,9 @@ frame.
   internal reflection). The camera counts as underwater by the wave height at its
   position, so a lens half in the water shows one or the other.
 - One ocean per world, with one depth for the whole sea (no shores).
+- Hulls make waves only inside the window around the camera (about 64 m each
+  way by default), at most 16 at once (the nearest). A battleship's long wake
+  needs a coarser second window, which is not there yet.
 - Only the drawing is curved. Queries and reflections treat the sea as flat.
-- No wakes, splashes or hull cutouts: the interactive waves are being rewritten.
+- No foam around hulls, no splashes, and water still shows inside open hulls:
+  those parts of the interactive waves are being rebuilt.

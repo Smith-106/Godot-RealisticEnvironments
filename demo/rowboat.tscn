@@ -30,7 +30,8 @@ max_forward_speed = 4.0
 max_reverse_speed = 1.5
 forward_acceleration = 1.5
 reverse_acceleration = 0.8
-turn_torque_per_kg = 1.8
+turn_acceleration = 30.0
+propulsion_position = Vector3(0, -0.35, 2.4)
 low_speed_turn_factor = 0.6
 
 [node name="CollisionShape3D" parent="." index="0" unique_id=302983775]
@@ -86,3 +87,7 @@ projectile_mass = 2.0
 drag_coefficient = 0.1
 projectile_lifetime = 8.0
 yaw_target_path = NodePath("..")
+
+[node name="BuoyantBody" parent="." unique_id=1907536648]
+draft = 0.26
+forward_drag = 0.3

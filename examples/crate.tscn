@@ -1,5 +1,7 @@
 [gd_scene format=3 uid="uid://ccpem72n8k6ie"]
 
+[ext_resource type="Script" uid="uid://d21whouuqhx10" path="res://addons/buoyancy_system/buoyant_body.gd" id="2_buoyancy"]
+
 [sub_resource type="BoxMesh" id="BoxMesh_crate"]
 
 [sub_resource type="StandardMaterial3D" id="Material_crate"]
@@ -8,7 +10,6 @@ albedo_color = Color(0.6, 0.42, 0.24, 1)
 [sub_resource type="BoxShape3D" id="BoxShape_crate"]
 
 [node name="Crate" type="RigidBody3D" unique_id=470520592]
-freeze = true
 mass = 250.0
 
 [node name="Mesh" type="MeshInstance3D" parent="." unique_id=193948764]
@@ -17,3 +18,9 @@ surface_material_override/0 = SubResource("Material_crate")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=813375530]
 shape = SubResource("BoxShape_crate")
+
+[node name="BuoyantBody" type="Node" parent="." unique_id=177355524]
+script = ExtResource("2_buoyancy")
+draft = 0.25
+forward_drag = 1.0
+sideways_drag = 1.0

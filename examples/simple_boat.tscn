@@ -13,7 +13,8 @@ max_forward_speed = 4.5
 max_reverse_speed = 1.5
 forward_acceleration = 1.6
 reverse_acceleration = 0.8
-turn_torque_per_kg = 1.8
+turn_acceleration = 45.0
+propulsion_position = Vector3(0, -0.3, 2)
 low_speed_turn_factor = 0.6
 
 [node name="CollisionShape3D" parent="." index="0" unique_id=302983775]
@@ -27,3 +28,6 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 1.2)
 
 [node name="Model" type="MeshInstance3D" parent="." index="3" unique_id=1557376115]
 mesh = ExtResource("2_hull")
+
+[node name="BuoyantBody" parent="." unique_id=1907536648]
+draft = 0.255

@@ -1,8 +1,12 @@
 class_name OceanSurfaceQueries
 extends WaterSurface
 ## The ocean's WaterSurface: batches every owner's query points into one compute
-## dispatch per frame and reads the results back asynchronously. Owned by
+## dispatch per frame and reads the results back asynchronously, and keeps the hulls
+## reported for the interactive waves (OceanInteraction reads them). Owned by
 ## OceanSystem, which registers it for its world.
+##
+## Results leave the interactive waves out, except for the interaction owner's points
+## (OceanSystem's camera, which needs the drawn height to tell above from below).
 ##
 ## A ring of SLOT_COUNT buffer sets lets new dispatches start while earlier
 ## readbacks are still in flight; each slot is reused only after its readback
@@ -19,13 +23,16 @@ const BYTES_PER_CASCADE := FLOATS_PER_CASCADE * 4
 const BYTES_PER_SAMPLE := 48
 const FLOATS_PER_SAMPLE := 12
 const NORMAL_SAMPLE_DISTANCE := 0.25
+## Edge of the window (share of its half size) where the interactive waves start to fade
+## out, as interaction_fade() in water.gdshaderinc.
+const INTERACTION_FADE_START := 0.8
 
 class QuerySlot:
 	var capacity := 0
 	var point_buffer := RID()
 	var cascade_buffer := RID()
 	var sample_buffer := RID()
-	## "displacement_a_rid:displacement_b_rid" -> uniform set RID.
+	## "displacement_a_rid:displacement_b_rid:interaction_map_rid" -> uniform set RID.
 	var uniform_sets := {}
 	var in_flight := false
 	var points := PackedVector3Array()
@@ -44,14 +51,21 @@ var _clock := 0.0
 var _clock_physics_frame := 0
 var _clock_physics_fraction := 0.0
 var _physics_step := 0.0
+## The surface drift (m/s), set every frame by OceanSystem.
+var _surface_drift := Vector3.ZERO
 var _shader : RID
 var _pipeline : RID
 var _slots : Array[QuerySlot] = []
 var _queued := {}   # owner_id -> PackedVector3Array
 var _owners := {}   # owner_id -> true, for owners that have not been released
 var _results := {}  # owner_id -> WaterSurfaceQueryResult
+var _disturbances := {}  # owner_id -> WaterDisturbance (copies)
+## The owner whose points also get the interactive waves' height (0: none).
+var _interaction_owner_id := 0
 var _retired := false
 var _displacement_sampler : RID
+## 1x1 zero map bound in place of the interactive waves' map while there is none.
+var _flat_interaction_map : RID
 
 
 ## Sampler for the wave displacement maps in compute shaders (ocean_sampling.glslinc):
@@ -73,6 +87,12 @@ func _init(device : RenderingDevice) -> void:
 	for i in SLOT_COUNT:
 		_slots.push_back(QuerySlot.new())
 	_displacement_sampler = _device.sampler_create(create_displacement_sampler_state())
+	var flat_format := RDTextureFormat.new()
+	flat_format.format = RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT
+	flat_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
+	var zero := PackedByteArray()
+	zero.resize(8)
+	_flat_interaction_map = _device.texture_create(flat_format, RDTextureView.new(), [zero])
 
 
 func submit_query(query_owner : Object, points : PackedVector3Array) -> void:
@@ -112,6 +132,38 @@ func release_query(query_owner : Object) -> void:
 	_results.erase(owner_id)
 
 
+func submit_disturbance(disturbance_owner : Object, disturbance : WaterDisturbance) -> void:
+	if _retired:
+		return
+	var owner_id := disturbance_owner.get_instance_id()
+	var copy : WaterDisturbance = _disturbances.get(owner_id)
+	if copy == null:
+		copy = WaterDisturbance.new()
+		_disturbances[owner_id] = copy
+	copy.position = disturbance.position
+	copy.forward = disturbance.forward
+	copy.half_extents = disturbance.half_extents
+	copy.shape_exponent = disturbance.shape_exponent
+	copy.depth = disturbance.depth
+	copy.water_velocity = disturbance.water_velocity
+	copy.wave_strength = disturbance.wave_strength
+
+
+func release_disturbance(disturbance_owner : Object) -> void:
+	_disturbances.erase(disturbance_owner.get_instance_id())
+
+
+## The latest hull reported per owner (owner instance id -> WaterDisturbance).
+func get_disturbances() -> Dictionary:
+	return _disturbances
+
+
+## Makes query_owner's points also get the interactive waves' height (OceanSystem's
+## camera; everyone else's results leave those waves out).
+func set_interaction_owner(query_owner : Object) -> void:
+	_interaction_owner_id = query_owner.get_instance_id()
+
+
 ## The ocean clock (OceanSystem.time): the clock of dispatch_time.
 func get_clock() -> float:
 	return _clock
@@ -125,6 +177,15 @@ func advance_clock(clock : float, physics_step : float) -> void:
 	_physics_step = physics_step
 
 
+func get_surface_drift() -> Vector3:
+	return _surface_drift
+
+
+## Sets the drift get_surface_drift() reports (OceanSystem, every frame).
+func set_surface_drift(drift : Vector3) -> void:
+	_surface_drift = drift
+
+
 ## Displacement textures are recreated when the wave generator is rebuilt. Uniform
 ## sets that referenced the old textures are freed by the RenderingDevice together
 ## with those textures, so only the cache entries need to go.
@@ -133,8 +194,10 @@ func clear_uniform_set_cache() -> void:
 		slot.uniform_sets.clear()
 
 
-## Dispatches every queued query.
-func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedByteArray, cascade_count : int, water_level : float) -> void:
+## Dispatches every queued query. interaction_map is the interactive waves' map (an
+## invalid RID without them) and interaction_window its window (centre x, z, half size,
+## 1 / size; OceanInteraction.get_window()).
+func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedByteArray, cascade_count : int, water_level : float, interaction_map : RID, interaction_window : Vector4) -> void:
 	if _queued.is_empty() or not _pipeline.is_valid():
 		return
 	var slot := _get_idle_slot()
@@ -144,6 +207,15 @@ func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedB
 
 	var points := PackedVector3Array()
 	var requests : Array[Dictionary] = []
+	# The interaction owner's points go first: the shader adds the interactive waves to
+	# the first interaction_point_count points.
+	var interaction_point_count := 0
+	if interaction_map.is_valid() and _queued.has(_interaction_owner_id):
+		var interaction_points : PackedVector3Array = _queued[_interaction_owner_id]
+		requests.push_back({"owner_id": _interaction_owner_id, "offset": 0, "count": interaction_points.size()})
+		points.append_array(interaction_points)
+		interaction_point_count = interaction_points.size()
+		_queued.erase(_interaction_owner_id)
 	for owner_id in _queued:
 		var owner_points : PackedVector3Array = _queued[owner_id]
 		requests.push_back({"owner_id": owner_id, "offset": points.size(), "count": owner_points.size()})
@@ -160,10 +232,17 @@ func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedB
 		cascade_count,
 		water_level,
 		NORMAL_SAMPLE_DISTANCE,
+		interaction_point_count,
+		interaction_window.x,
+		interaction_window.y,
+		interaction_window.z,
+		interaction_window.w,
+		INTERACTION_FADE_START,
 	])
+	var map := interaction_map if interaction_map.is_valid() else _flat_interaction_map
 	var compute_list := _device.compute_list_begin()
 	_device.compute_list_bind_compute_pipeline(compute_list, _pipeline)
-	_device.compute_list_bind_uniform_set(compute_list, _get_uniform_set(slot, displacement_a, displacement_b), 0)
+	_device.compute_list_bind_uniform_set(compute_list, _get_uniform_set(slot, displacement_a, displacement_b, map), 0)
 	_device.compute_list_set_push_constant(compute_list, push_constant, push_constant.size())
 	_device.compute_list_dispatch(compute_list, ceili(float(points.size()) / float(WORKGROUP_SIZE)), 1, 1)
 	_device.compute_list_end()
@@ -189,6 +268,8 @@ func retire() -> void:
 	for slot in _slots:
 		_free_slot_buffers(slot)
 	_device.free_rid(_displacement_sampler)
+	_device.free_rid(_flat_interaction_map)
+	_disturbances.clear()
 	if _shader.is_valid():
 		_device.free_rid(_shader)
 	_owners.clear()
@@ -249,8 +330,8 @@ func _free_slot_buffers(slot : QuerySlot) -> void:
 	slot.capacity = 0
 
 
-func _get_uniform_set(slot : QuerySlot, displacement_a : RID, displacement_b : RID) -> RID:
-	var key := "%d:%d" % [displacement_a.get_id(), displacement_b.get_id()]
+func _get_uniform_set(slot : QuerySlot, displacement_a : RID, displacement_b : RID, interaction_map : RID) -> RID:
+	var key := "%d:%d:%d" % [displacement_a.get_id(), displacement_b.get_id(), interaction_map.get_id()]
 	if slot.uniform_sets.has(key):
 		return slot.uniform_sets[key]
 	var uniforms : Array[RDUniform] = [
@@ -259,6 +340,7 @@ func _get_uniform_set(slot : QuerySlot, displacement_a : RID, displacement_b : R
 		RenderingContext.buffer_uniform(2, slot.sample_buffer),
 		RenderingContext.sampled_uniform(3, _displacement_sampler, displacement_a),
 		RenderingContext.sampled_uniform(4, _displacement_sampler, displacement_b),
+		RenderingContext.sampled_uniform(5, _displacement_sampler, interaction_map),
 	]
 	var uniform_set := _device.uniform_set_create(uniforms, _shader, 0)
 	slot.uniform_sets[key] = uniform_set

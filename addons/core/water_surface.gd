@@ -11,6 +11,10 @@ extends RefCounted
 ## completed result (null until the first one arrives, a few frames later) and
 ## extrapolate its heights by [method get_query_age]. Release the owner when it
 ## stops querying (e.g. in _exit_tree).
+##
+## Hulls report themselves with [method submit_disturbance] every physics tick, and
+## the water draws the waves they make. Those waves are only drawn: query results
+## leave them out, so nothing a body does to the water can push it back.
 
 ## World3D instance id -> WaterSurface.
 static var _surfaces := {}
@@ -61,3 +65,17 @@ static func find(node : Node) -> WaterSurface:
 ## The surface's clock, in the units of WaterSurfaceQueryResult.dispatch_time:
 ## a result dispatched at or before a moment read here predates it.
 @abstract func get_clock() -> float
+
+## Mean horizontal velocity (m/s, world space, y = 0) of the surface water on top of
+## the waves' own motion: the wind and wave drift that carries foam and floating
+## things downwind. Zero for still water.
+@abstract func get_surface_drift() -> Vector3
+
+## Reports disturbance_owner's hull for this physics tick; the latest report per owner
+## wins. The water draws the waves the hull's motion relative to the water makes. The
+## values are copied, so one WaterDisturbance can be reused every tick. Water without
+## interactive waves ignores it.
+@abstract func submit_disturbance(disturbance_owner : Object, disturbance : WaterDisturbance) -> void
+
+## Forgets disturbance_owner's hull. Call from the owner's _exit_tree.
+@abstract func release_disturbance(disturbance_owner : Object) -> void

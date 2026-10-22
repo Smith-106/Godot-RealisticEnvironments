@@ -61,8 +61,9 @@ const CASCADE_BAND_MIN_TEXELS := 4.0
 ## the sea's energy (all of it beyond the peak's long side) is missing.
 const _LARGEST_TILE_PEAK_WAVELENGTHS := 1.5
 ## Speed of the surface water's mean drift as a share of the wind speed (wind drift and
-## Stokes drift together, about 3 %, Wu 1975): it carries the foam downwind.
-const _FOAM_DRIFT_WIND_SHARE := 0.03
+## Stokes drift together, about 3 %, Wu 1975): it carries the foam and floating bodies
+## downwind (WaterSurface.get_surface_drift()).
+const _SURFACE_DRIFT_WIND_SHARE := 0.03
 
 ## Height of the still water in world units. The surface is drawn here, and water
 ## queries and planar reflections use it; the node's own
@@ -304,6 +305,25 @@ const _FOAM_DRIFT_WIND_SHARE := 0.03
 		reflection_clip_bias = value
 		_update_planar_reflection_settings()
 
+@export_group('Interactive Waves')
+## Cells per side of the interactive waves around the camera: the wakes, bow waves and
+## rings that hulls reporting to the WaterSurface make (BuoyantBody does). Off turns
+## them off. The cost grows with the square; the waves are only drawn, never felt.
+@export_enum('Off:0', '256x256:256', '512x512:512', '1024x1024:1024') var interaction_map_size := 512 :
+	set(value):
+		if value != 0 and value not in SIMULATION_MAP_SIZES:
+			push_error("OceanSystem.interaction_map_size must be 0 or one of %s; keeping %d." % [SIMULATION_MAP_SIZES, interaction_map_size])
+			return
+		interaction_map_size = value
+		_setup_interaction()
+## Size of one cell of the interactive waves. With interaction_map_size it sets the
+## window around the camera (512 x 0.25 m = 128 m): smaller cells draw finer ripples
+## over a smaller window.
+@export_range(0.05, 2.0, 0.01, "or_greater", "suffix:m") var interaction_cell_size := 0.25 :
+	set(value):
+		interaction_cell_size = maxf(value, 0.01)
+		_setup_interaction()
+
 @export_group('Quality')
 ## Water shader tier. High has every feature; Medium shortens the refraction search,
 ## the crest light march, the planar reflection search and the normal maps'
@@ -422,6 +442,11 @@ var _underwater_material : ShaderMaterial
 var _camera_query_submitted := false
 ## The CDLOD mesh (runtime only; in the editor it only sends the uniforms).
 var _lod_grid := OceanLodGrid.new(_set_water_shader_parameter)
+## The interactive waves (null when off, in the editor, or after their GPU resources
+## failed), their map bound to the water material, and a flat map bound without them.
+var _interaction : OceanInteraction
+var _interaction_map := Texture2DRD.new()
+var _flat_interaction_map : ImageTexture
 
 
 func _init() -> void:
@@ -431,6 +456,8 @@ func _init() -> void:
 func _enter_tree() -> void:
 	if _surface_queries == null and RenderingServer.get_rendering_device() != null:
 		_surface_queries = OceanSurfaceQueries.new(RenderingServer.get_rendering_device())
+		# The camera's above/below test needs the drawn height, interactive waves included.
+		_surface_queries.set_interaction_owner(self)
 	if _surface_queries != null:
 		WaterSurface.register(get_world_3d(), _surface_queries)
 
@@ -443,6 +470,8 @@ func _exit_tree() -> void:
 
 func _ready() -> void:
 	process_priority = 100
+	# The interactive waves step after the bodies have reported their hulls this tick.
+	process_physics_priority = 100
 	if _surface_queries == null:
 		push_error("OceanSystem needs a RenderingDevice (Forward+ or Mobile renderer). The ocean is disabled.")
 		set_process(false)
@@ -454,6 +483,7 @@ func _ready() -> void:
 	_setup_water_mesh()
 	_setup_wave_generator()
 	_setup_underwater()
+	_setup_interaction()
 	_push_all_shader_parameters()
 
 func _process(delta : float) -> void:
@@ -468,12 +498,20 @@ func _process(delta : float) -> void:
 	_update_underwater(camera)
 	_time += delta
 	_surface_queries.advance_clock(_time, get_physics_process_delta_time())
+	_surface_queries.set_surface_drift(_get_surface_drift())
 	# No generator means no cascades: a flat ocean.
 	if _wave_generator != null:
 		_update_waves(delta)
 		_update_micro_roughness()
 		_update_cascade_uniforms()
 	_dispatch_surface_queries()
+
+
+func _physics_process(delta : float) -> void:
+	if _interaction == null:
+		return
+	_interaction.step(delta, get_viewport().get_camera_3d(), _surface_queries.get_disturbances(), spectrum.water_depth)
+	_set_water_shader_parameter(&'interaction_window', _interaction.get_window())
 
 
 ## Wind speed (m/s) the waves follow: the wind source's, else the spectrum's.
@@ -495,6 +533,13 @@ func get_water_material() -> ShaderMaterial:
 		if _material.shader in WATER_SHADERS:
 			_material.shader = WATER_SHADERS[shader_quality]
 	return _material
+
+
+## The surface water's mean drift (m/s, world space): downwind at a share of the wind
+## speed. Moves the foam and is the WaterSurface's get_surface_drift().
+func _get_surface_drift() -> Vector3:
+	var drift := WindSource.direction_to_vector(get_wind_direction_degrees()) * (get_wind_speed() * _SURFACE_DRIFT_WIND_SHARE)
+	return Vector3(drift.x, 0.0, drift.y)
 
 
 ## Whether the ocean runs: it is ready and has a RenderingDevice (else _ready()
@@ -526,6 +571,7 @@ func _push_all_shader_parameters() -> void:
 	_update_manual_sky_shader_parameters()
 	_lod_grid.set_cell_size(mesh_base_cell_size, true)
 	_bind_wave_textures()
+	_bind_interaction_map()
 	_update_cascade_uniforms()
 	_update_planar_reflection_settings()
 
@@ -596,6 +642,36 @@ func _bind_wave_textures() -> void:
 	_set_water_shader_parameter(&'normals_a', maps[2], true)
 	_set_water_shader_parameter(&'normals_b', maps[3], true)
 
+## (Re)builds the interactive waves for interaction_map_size and interaction_cell_size.
+## Runtime only; off when the size is 0 or their GPU resources fail.
+func _setup_interaction() -> void:
+	if not _is_running() or Engine.is_editor_hint():
+		return
+	# The previous simulation is freed when this returns, after its map is unbound.
+	var _previous_interaction := _interaction
+	_interaction = null
+	if interaction_map_size > 0:
+		var interaction := OceanInteraction.new()
+		interaction.init_gpu(interaction_map_size, interaction_cell_size)
+		if interaction.context.failed:
+			push_error("OceanSystem %s: the interactive waves' GPU resources failed; they are off." % get_path())
+		else:
+			_interaction = interaction
+	# Swapped in place, never through RID() (that frees the texture the material holds).
+	if _interaction != null:
+		_interaction_map.texture_rd_rid = _interaction.map.rid
+	_bind_interaction_map()
+
+func _bind_interaction_map() -> void:
+	_set_water_shader_parameter(&'interaction_enabled', _interaction != null)
+	if _interaction != null:
+		_set_water_shader_parameter(&'interaction_map', _interaction_map, true)
+		_set_water_shader_parameter(&'interaction_window', _interaction.get_window())
+		return
+	if _flat_interaction_map == null:
+		_flat_interaction_map = ImageTexture.create_from_image(Image.create_empty(1, 1, false, Image.FORMAT_RGBAH))
+	_set_water_shader_parameter(&'interaction_map', _flat_interaction_map, true)
+
 ## A 1x1, one-layer texture array of zeros: flat water, no slopes, no foam.
 func _get_flat_wave_maps() -> Texture2DArray:
 	if _flat_wave_maps == null:
@@ -648,6 +724,7 @@ func _update_waves(frame_delta : float) -> void:
 	var wind_speed := get_wind_speed()
 	var wind_direction := get_wind_direction_degrees()
 	_check_peak_wavelength(wind_speed)
+	var drift := _get_surface_drift()
 	var all_have_frames := true
 	for i in cascades.size():
 		var state := _cascade_states[i]
@@ -658,7 +735,7 @@ func _update_waves(frame_delta : float) -> void:
 			var frame_time := _time + interval
 			var step := frame_time - state.frame_time if state.frame_count > 0 else 0.0
 			state.advance(step, cascades[i], spectrum, wind_speed, wind_direction)
-			state.advance_foam_drift(step, WindSource.direction_to_vector(wind_direction) * (wind_speed * _FOAM_DRIFT_WIND_SHARE), cascades[i].tile_length / simulation_map_size)
+			state.advance_foam_drift(step, Vector2(drift.x, drift.z), cascades[i].tile_length / simulation_map_size)
 			_wave_generator.update_cascade(i, cascades[i], state, spectrum.displacement_scale)
 			state.previous_frame_time = state.frame_time
 			state.frame_time = frame_time
@@ -1008,7 +1085,9 @@ func _dispatch_surface_queries() -> void:
 		_wave_generator.descriptors[&'displacement_map_b'].rid,
 		_cascade_data,
 		cascades.size(),
-		water_level
+		water_level,
+		_interaction.map.rid if _interaction != null else RID(),
+		_interaction.get_window() if _interaction != null else Vector4.ZERO
 	)
 
 func _notification(what: int) -> void:
@@ -1019,6 +1098,8 @@ func _notification(what: int) -> void:
 		_normal_maps_a.texture_rd_rid = RID()
 		_normal_maps_b.texture_rd_rid = RID()
 		_wave_generator = null
+		_interaction_map.texture_rd_rid = RID()
+		_interaction = null
 		# Null when the ocean was disabled for lack of a RenderingDevice.
 		if _surface_queries != null:
 			_surface_queries.retire()
