@@ -6,9 +6,6 @@ A physically based open ocean for Godot 4.8. It has FFT waves out to a curved
 horizon, a physical sky with an atmosphere, volumetric clouds and the night
 sky, eye-like exposure, and drivable boats.
 
-> **Work in progress.** Boats float and leave wakes and foam; cutting the
-> water out of open boats is still being built.
-
 ![Two boats on a fair-weather sea](docs/images/screenshot-hero.jpg)
 
 | | |

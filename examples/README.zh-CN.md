@@ -29,6 +29,8 @@
    船尾板水线以下。`CollisionShape3D` 使用由网格生成的凸形状，`BuoyantBody` 让船体
    吃水 0.255 米。
 3. 把 `CameraTargets` 移到船上。
+4. `WaterMask` 位于 0.3 米高处，在船舷上沿稍下方；对 `Model` 点击 **Fit to Hull** 生成了
+   它的盖子（`assets/simple_hull_water_mask.tres`），所以船内不会显示水面。
 
 `boat.tscn` 为它驾驶的船打开了 `player_controlled`。W A S D 动作由 Boat Template
 插件添加。

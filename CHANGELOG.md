@@ -28,6 +28,10 @@ before 1.0 a minor version may change the API.
   speed through the water, steep wake crests foam too; it drifts with the
   surface drift, fades over about 8 s and is drawn with the whitecaps
   (`foam_intensity`). Water debug view 18.
+- `WaterMask` (`core`): an invisible lid that keeps the water out of an open
+  hull through the stencil buffer (value 128, read by every water shader
+  tier); **Fit to Hull** slices the hull's model to make it. The rowboat and
+  the example boat have one.
 - `FloatingBoat`: thrust and rudder act at `propulsion_position` (stern,
   below the waterline) and fade out of the water (`buoyancy_path`); thrust
   eases off toward the speed limits. `turn_torque_per_kg` is replaced by

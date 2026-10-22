@@ -48,6 +48,9 @@ Boat (RigidBody3D, FloatingBoat)   drive input, model animation
 5. Optional: `animation_player_path` and `autoplay_animation` loop a model
    animation (e.g. sails).
 6. Turn on `player_controlled` on the boat the player drives.
+7. An open boat: add a `WaterMask` (`core`) just below the gunwale, set its
+   `hull_path` to the model and press **Fit to Hull**, so no water shows
+   inside.
 
 Keep the template's node names and order. Scenes inherited from it override
 nodes by path.

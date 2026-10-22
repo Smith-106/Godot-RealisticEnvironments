@@ -1,6 +1,6 @@
 # Buoyancy and interactive waves plan
 
-Status: Phases 0–3 done · Written 2026-10-21 · Target: Godot 4.8 Forward+
+Status: Phases 0–4 done · Written 2026-10-21 · Target: Godot 4.8 Forward+
 
 Objects on the ocean should interact with the water in a visually realistic way;
 physical accuracy is not a goal. Scale: about 10 floaters at once, ships up to
@@ -368,6 +368,33 @@ Known limit: a crest rising above the gunwale in front of the boat is cut where
 it overlaps the opening. AGENTS.md gets the exception to "water has the lowest
 transparent priority".
 
+### Phase 4 implementation notes (2026-10-21)
+
+- **`WaterMask` lives in `core`**, not `ocean_system`: the stencil value is
+  part of the water contract, and boats should not need the ocean addon to
+  carry one. It is a `MeshInstance3D`; its material is applied through the
+  RenderingServer (never saved), tinted in the editor, invisible in the game.
+- **Stencil 128** (`STENCIL_REFERENCE`), not the spike's 1, which Godot's
+  outline and X-ray stencil presets use by default.
+- **Fit to Hull** (an inspector button) slices the hull's meshes at the
+  mask's height, chains the crossings into closed loops, takes the inner skin
+  (the largest loop inside the outermost that covers half its area; else the
+  outermost), grows it by `edge_margin` (2 cm) into the walls and triangulates
+  it. Seats, oarlocks and oars make small loops it ignores.
+- **Only from above:** the lid discards while the camera is below its plane,
+  so a camera low inside a boat sees the water there instead of a hole in the
+  sea beyond.
+- Lids: the example boat's at 0.30 m (gunwale 0.35, 4.39 × 1.46 m), the
+  rowboat's at 0.58 m (5.60 × 2.05 m), saved as `.tres` resources.
+
+### Phase 4 measurements
+
+Both boats floating at rest in a 4 m/s sea: from above, straight down and from
+the seat the inside is dry; low beside the hull and low off the bow the water
+outside, the contact line and the reflections are as without the mask; with
+the camera 0.15 m below the lid, inside the hull, the water inside shows and
+the sea beyond is whole. The demo and the examples run without errors.
+
 ## Later
 
 - **Coarse level for ships:** a second window (e.g. 512² × 2 m, ~1 km), each
@@ -396,6 +423,10 @@ contract, the interaction window in the water shader, the stencil exception).
   saving the inherited boat scenes in the editor (the `BuoyantBody` overrides
   have no `index` attribute yet); a battleship-sized hull; the configuration
   warnings in the Scene dock.
+- Cutouts (4): pressing Fit to Hull and the tinted preview in the editor (the
+  lids were made by the same method from a script); a hull heeled so far that
+  water rises above the lid; the screen-space reflection mode and the
+  underwater view next to a masked boat.
 - Interactive waves (2): the camera's above/below switch near a wake crest;
   the window following a fast-moving camera; 1024² and other cell sizes; the
   Low and Medium shader tiers; caustics under wakes (the underwater view does

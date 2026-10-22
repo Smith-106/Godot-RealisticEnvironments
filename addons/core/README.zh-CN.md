@@ -14,6 +14,7 @@
 | `WaterSurface` | 水面约定。水体模拟（`OceanSystem`）为每个 `World3D` 注册一个；需要采样水面的代码通过 `WaterSurface.find(node)` 找到它。它还给出表层漂流（`get_surface_drift()`），即水顺风的平均流动，带着泡沫和漂浮物移动。 |
 | `WaterSurfaceQueryResult`、`WaterSurfaceSample` | 水面查询的结果：每个点的水面高度、法线、位移和水的速度。 |
 | `WaterDisturbance` | 水中的一个船体，即 `WaterSurface.submit_disturbance()` 接收的数据：船体轮廓、吃水深度和其下方水的速度。水面会画出它的运动激起的波浪。 |
+| `WaterMask` | 让开放船体内没有水：一个看不见的盖子，在模板缓冲中做标记，水面不在那里绘制。 |
 | `WindSource` | 通过方法或属性读取任意风源（`WindSystem` 或你自己的节点）。 |
 | `ProjectSetup` | 供各插件补充缺少的项目设置（全局着色器 uniform、输入动作），不改动已有设置。 |
 | `RenderingContext` | 管理一个计算功能的 `RenderingDevice` 资源，统一释放并记录创建失败。 |
@@ -70,3 +71,17 @@ func _exit_tree() -> void:
 每个物理帧用 `submit_disturbance(self, disturbance)` 报告一个船体（复用同一个
 `WaterDisturbance`），并在 `_exit_tree()` 中调用 `release_disturbance(self)`。
 `BuoyantBody` 会为漂浮物体这样做。这些波浪只用于绘制：查询结果不包含它们。
+
+### 让开放船体内没有水
+
+开放小船的船底低于水线，所以不处理的话船内会显示海面。在船上添加一个 `WaterMask`
+（一个 `MeshInstance3D`），保持水平，放在船舷上沿稍下方、座位上方。把 `hull_path`
+指向船体模型，然后在检查器中点击 **Fit to Hull**。它在这个高度切开模型，把盖子做成
+船体轮廓的内侧（有内外两层船壳时取内层），并向船壁外推 `edge_margin`。也可以给它一个
+你自己做的平面盖子网格。编辑器中盖子带颜色显示；游戏中它是看不见的。
+
+- 盖子在它可见的像素上写入模板值 128（`WaterMask.STENCIL_REFERENCE`），水面跳过这些
+  像素。自定义水面着色器也需要同样的 `stencil_mode read, compare_not_equal, 128;`。
+- 只有相机在盖子上方时才起作用：从下方（相机低于船舷坐在船里）会看到船内的水，而不是
+  海面上的一个洞。
+- 船内高过盖子的波浪仍会显示；船前方高过船舷的浪峰在与开口重叠处会被裁掉。

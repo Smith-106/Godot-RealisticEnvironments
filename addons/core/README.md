@@ -16,6 +16,7 @@ together, the contract between them lives here:
 | `WaterSurface` | The water contract. A water simulation (`OceanSystem`) registers one per `World3D`; anything that samples the water finds it with `WaterSurface.find(node)`. It also gives the surface drift (`get_surface_drift()`), the water's mean flow downwind that carries foam and floating things. |
 | `WaterSurfaceQueryResult`, `WaterSurfaceSample` | The answer to a water query: per point, the surface height, normal, displacement and water velocity. |
 | `WaterDisturbance` | A hull in the water, as `WaterSurface.submit_disturbance()` takes it: footprint, depth and the water's velocity under it. The water draws the waves its motion makes. |
+| `WaterMask` | Keeps the water out of an open hull: an invisible lid that marks the stencil buffer, and the water does not draw there. |
 | `WindSource` | Reads any wind provider (a `WindSystem` or a node of your own) by its methods or properties. |
 | `ProjectSetup` | Lets the addons' plugins add missing project settings (global shader uniforms, input actions) without changing existing ones. |
 | `RenderingContext` | Owns a compute feature's `RenderingDevice` resources, frees them together and records failures. |
@@ -76,3 +77,22 @@ Report a hull every physics tick with `submit_disturbance(self, disturbance)`
 (one `WaterDisturbance`, reused) and call `release_disturbance(self)` in
 `_exit_tree()`. `BuoyantBody` does this for floating bodies. The waves are
 only drawn: query results leave them out.
+
+### Keep water out of an open hull
+
+An open boat's floor sits below the waterline, so without help the sea shows
+inside it. Add a `WaterMask` (a `MeshInstance3D`) to the boat, level, just
+below the gunwale and above the seats. Set `hull_path` to the hull's model and
+press **Fit to Hull** in the inspector. It slices the model at that height and
+makes the lid the inside of the hull's outline (the inner skin of a hull with
+two), pushed `edge_margin` into the walls. Or give it a flat lid mesh of your
+own. The editor shows the lid tinted; in the game it is invisible.
+
+- The lid marks the pixels where it is in view with stencil value 128
+  (`WaterMask.STENCIL_REFERENCE`), and the water skips them. A custom water
+  shader needs the same `stencil_mode read, compare_not_equal, 128;`.
+- It works only while the camera is above the lid: from below (a camera low
+  in the boat) the water inside shows, rather than a hole in the sea.
+- Waves rising above the lid inside the hull still show, and so does a crest
+  in front of the boat that rises above the gunwale, where it overlaps the
+  opening (it is cut there).

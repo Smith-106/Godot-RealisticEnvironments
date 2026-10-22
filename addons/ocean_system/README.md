@@ -51,6 +51,9 @@ Requires `core` and a `RenderingDevice` (Forward+). Without one
   (not the deeper they sit), plus foam where wake crests grow steep. It drifts
   with the surface drift and fades over about 8 s, and it is drawn as the
   whitecaps are (lace, roughness, light), so `foam_intensity` scales it too.
+- **Open hulls.** The water skips pixels a `WaterMask` lid marks in the
+  stencil buffer (see `core`), so it does not show inside open boats. Every
+  water shader tier has the `stencil_mode` line; add it to a custom one.
 
 The sea lies at `water_level`. The node's own transform is ignored.
 
@@ -127,5 +130,4 @@ frame.
   way by default), at most 16 at once (the nearest). A battleship's long wake
   needs a coarser second window, which is not there yet.
 - Only the drawing is curved. Queries and reflections treat the sea as flat.
-- No splashes yet, and water still shows inside open hulls (cutouts are
-  being built).
+- No splashes yet.

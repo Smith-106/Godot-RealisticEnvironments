@@ -2,6 +2,8 @@
 
 [ext_resource type="PackedScene" uid="uid://uo22um60c0vn" path="res://addons/boat_template/boat.tscn" id="1_boat"]
 [ext_resource type="ArrayMesh" uid="uid://b8d81o1g2nk66" path="res://examples/assets/simple_hull.obj" id="2_hull"]
+[ext_resource type="Script" uid="uid://bgwfypmjbuf0x" path="res://addons/core/water_mask.gd" id="3_mask"]
+[ext_resource type="ArrayMesh" uid="uid://rgbr1bd4dhql" path="res://examples/assets/simple_hull_water_mask.tres" id="4_mask_mesh"]
 
 [sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_60qmf"]
 points = PackedVector3Array(-0.20245145, -0.1396891, -1.4856966, 0.75158733, 0.40317464, 1.6754249, 0.68165034, 0.40317464, 2.2344832, 0.4023536, -0.4349206, 1.8154082, -0.71498364, 0.40317464, 1.9549541, 0.122906506, 0.40317464, -2.1644917, -0.5054735, -0.36502466, 2.2344832, 0.59581465, -0.13833806, -0.4895726, -0.7066285, 0.23499767, -0.2506497, -0.25215822, -0.36919683, -0.70632493, 0.61186373, -0.2253968, 2.2344832, 0.61186373, 0.40317464, -0.9772583, 0.28235874, -0.31495696, -0.9566565, -0.69300413, -0.077334136, 0.0612325, -0.29596335, 0.40317464, -1.8154082, -0.64519703, 0.40317464, 2.2344832, -0.5067793, -0.19971022, -0.7350131, -0.78492063, 0.40317464, 1.3963333, -0.57526004, -0.36502466, 1.4663249, -0.36574993, -0.4349206, 2.2344832, 0.6559611, -0.13812105, -0.060896635, 0.29624745, -0.078453355, -1.4394835, -0.64519703, -0.2253968, 1.9549541, 0.3345354, -0.36709794, -0.40954477, -0.08079459, 0.04828008, -1.860753, 0.61186373, -0.29521072, 1.8154082, 0.33241662, -0.4349206, 2.2344832, -0.6874338, 0.35, -0.24367662, 0.67235184, 0.046740532, -0.37546045, 0.45375788, -0.30991426, -0.47007924, -0.5101548, -0.07754994, -0.9251906, -0.08645323, 0.40317464, -2.2344832)
@@ -31,3 +33,9 @@ mesh = ExtResource("2_hull")
 
 [node name="BuoyantBody" parent="." unique_id=1907536648]
 draft = 0.255
+
+[node name="WaterMask" type="MeshInstance3D" parent="." unique_id=1640277391]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.3, 0)
+mesh = ExtResource("4_mask_mesh")
+script = ExtResource("3_mask")
+hull_path = NodePath("../Model")

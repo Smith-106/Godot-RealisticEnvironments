@@ -41,5 +41,7 @@ Boat (RigidBody3D, FloatingBoat)   drive input, model animation
 5. 可选：`animation_player_path` 和 `autoplay_animation` 用来循环播放模型动画
    （例如船帆）。
 6. 在玩家驾驶的船上打开 `player_controlled`。
+7. 开放小船：在船舷上沿稍下方添加一个 `WaterMask`（`core`），把 `hull_path` 指向模型，
+   点击 **Fit to Hull**，船内就不会显示水面。
 
 请保持模板中节点的名称和顺序不变，继承它的场景是按路径覆盖节点的。

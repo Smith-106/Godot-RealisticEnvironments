@@ -33,6 +33,9 @@ on its side. Their drag is the same along and across, as for debris.
    `CollisionShape3D` holds a convex shape made from the mesh, and
    `BuoyantBody` floats the hull 0.255 m deep.
 3. `CameraTargets` was moved onto the boat.
+4. `WaterMask` sits 0.3 m up, just below the gunwale; **Fit to Hull** on
+   `Model` made its lid (`assets/simple_hull_water_mask.tres`), so no water
+   shows inside.
 
 `boat.tscn` turns on `player_controlled` for the boat it drives. The Boat
 Template plugin adds the W A S D actions.

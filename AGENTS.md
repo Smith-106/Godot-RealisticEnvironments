@@ -77,6 +77,10 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `demo/rowboat.tscn` and `demo/floating_box.tscn` inherit that and override
   nodes by path with matching `index` attributes: renaming/reordering template
   nodes breaks them and `demo/main.gd`.
+- Open hulls have a `WaterMask` (rowboat, example boat), its lid made by
+  **Fit to Hull** and saved as a `.tres` next to the boat
+  (`demo/rowboat_water_mask.tres`, `examples/assets/simple_hull_water_mask.tres`):
+  redo it after changing the hull model.
 - `boat.tscn`'s last child is `BuoyantBody`; inherited scenes override it by
   path. Each floater's `draft` matches its hull (`docs/buoyancy-and-interactive-waves-plan.md`
   lists them). The template body's `linear_damp_mode` is Replace, so Godot's
@@ -143,6 +147,12 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `BuoyantBody` drags bodies along with it. Hulls report a `WaterDisturbance`
   every physics tick (`submit_disturbance()`, values copied; latest wins) and
   call `release_disturbance()` in `_exit_tree`.
+- **Water mask:** a `WaterMask` lid writes stencil 128
+  (`WaterMask.STENCIL_REFERENCE`, `water_mask.gdshader`) and every water tier
+  (`water.gdshader`, `water_medium.gdshader`, `water_low.gdshader`) reads
+  `stencil_mode read, compare_not_equal, 128`; change all together. The lid
+  draws at render priority −30, before the underwater view (−21) and the
+  water (−20), and discards while the camera is below its plane.
 - **Weapons:** recoil receivers implement `apply_recoil(fire_direction,
   shot_data)`; projectiles are group `projectile` or have `launch()` and carry
   `source_rigid_body_instance_id` metadata. `player_controlled` gates boat
@@ -225,7 +235,9 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `EMISSION` (no `ALPHA`) via `underwater_transmittance()`, albedo scaled by
   `1 − transmittance` (same transmittance). Keep `depth_draw_always`,
   `cast_shadow` off and `mat_water.tres` `render_priority` below every other
-  transparent material. Caustics only in the water (`caustic_light()`).
+  transparent material, except the underwater view (one below) and
+  `WaterMask` lids (−30, they must draw first). Caustics only in the water
+  (`caustic_light()`).
 - `WaveSpectrum.displacement_scale` 1 = physical JONSWAP height (the demo uses
   1; higher makes waves steeper than water allows and over-stiff boats capsize).
   `whitecap` thresholds include it (default 0.8 for 1); retune them together. Foam is coverage averaged by
