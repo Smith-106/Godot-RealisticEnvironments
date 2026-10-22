@@ -81,7 +81,7 @@ The sea lies at `water_level`. The node's own transform is ignored.
 | Foam | `foam_color`, `foam_intensity`, `foam_roughness`, the foam pattern texture and its tile size. |
 | Sky | `sky_source_path`, reflection strength and F0, the sun's highlight; **Manual Sky** values for when there is no sky source. |
 | Reflections | `reflection_mode`: `SKY_ONLY`, `SCREEN_SPACE` or `PLANAR` (default), plus the planar reflection's resolution and clipping. Render layer 20 (`reflection_water_layer`) is reserved for the water. |
-| Interactive Waves | `interaction_map_size` (Off, 256, 512 or 1024 cells) and `interaction_cell_size` (default 0.25 m): together the window around the camera where hulls make waves (512 × 0.25 m = 128 m). The window leads the camera toward where it looks and fades out at its edge. |
+| Interactive Waves | `interaction_map_size` (Off, 256, 512 or 1024 cells) and `interaction_cell_size` (default 0.25 m): together the window around the camera where hulls make waves (512 × 0.25 m = 128 m). The window is centred on the camera (turning the camera changes nothing) and fades out at its edge. |
 | Quality | `shader_quality` (`LOW`, `MEDIUM`, `HIGH`), `simulation_map_size` (128–1024), `max_wave_phase_step`, `fragment_cascade_limit`, `use_bicubic_normals`, `mesh_base_cell_size`. |
 | Material | `water_material`: the template the ocean copies. The ocean renders with a private duplicate. |
 

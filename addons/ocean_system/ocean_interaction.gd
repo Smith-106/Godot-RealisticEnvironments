@@ -11,9 +11,11 @@ class_name OceanInteraction extends RefCounted
 ## hulls churn up (interaction_foam.glsl), and their mips. Its GPU resources are freed
 ## with it.
 ##
-## The window is world-locked: cell c lives in texel c mod map_size, so the map repeats
-## (the water samples it with repeat wrapping) and moving the window only clears the
-## cells it enters. The FFT's periodic domain is that same wrap; the damped border keeps
+## The window is world-locked and centred on the camera: cell c lives in texel
+## c mod map_size, so the map repeats (the water samples it with repeat wrapping) and
+## moving the window only clears the cells it enters. It does not lead the camera toward
+## where it looks: turning the camera would swing it, clearing and fading wakes and foam
+## as it went. The FFT's periodic domain is that same wrap; the damped border keeps
 ## waves from crossing it.
 
 const SHADER_DIR := 'res://addons/ocean_system/shaders/compute/'
@@ -30,9 +32,6 @@ const BORDER_DAMPING := 8.0
 ## damping (1/s) of every wave, so the window does not fill up with old ripples.
 const VISCOSITY := 0.01
 const DAMPING := 0.03
-## The window's centre leads the camera toward where it looks by this share of the
-## window, so more of the water in view is simulated.
-const LOOK_AHEAD := 0.25
 ## Drawn heights (m) and slopes approach these smoothly (interaction_output.glsl).
 const MAX_HEIGHT := 2.0
 const MAX_SLOPE := 0.7
@@ -74,8 +73,9 @@ var _window_center := Vector2.ZERO
 ## Owner instance id -> its hull record's first eight floats at the last step.
 var _previous := {}
 var _too_many_reported := false
-## The foam's drift (m) not yet moved by whole cells, and the foam buffer half holding
-## the last step's foam.
+## The foam's drift (m, within one cell) not yet moved by whole cells: the foam of
+## cell c lies at the cell's centre plus this (get_foam_offset()). And the foam buffer
+## half holding the last step's foam.
 var _foam_drift := Vector2.ZERO
 var _foam_read_half := 0
 
@@ -168,16 +168,15 @@ func step(delta : float, camera : Camera3D, disturbances : Dictionary, water_dep
 	assert(context != null and not context.failed, "OceanInteraction.step() needs working GPU resources.")
 	var window_size := map_size * cell_size
 	if camera != null:
-		# The lead shrinks as the camera looks down (nothing ahead is in view then).
-		var look := -camera.global_transform.basis.z.normalized()
-		_window_center = Vector2(camera.global_position.x, camera.global_position.z) + Vector2(look.x, look.z) * (LOOK_AHEAD * window_size)
+		_window_center = Vector2(camera.global_position.x, camera.global_position.z)
 	@warning_ignore("integer_division")
 	var origin := Vector2i((_window_center / cell_size).floor()) - Vector2i(map_size / 2, map_size / 2)
 	var previous_origin := _origin if _has_origin else origin
 	_origin = origin
 	_has_origin = true
 	var hull_count := _write_hulls(delta, disturbances)
-	# The foam drifts in whole cells; the rest carries over (as the cascades' foam does).
+	# The foam's data drifts in whole cells (never resampled, so never blurred); the rest
+	# carries over as an offset the foam pass and the water apply, so it moves smoothly.
 	_foam_drift += Vector2(drift.x, drift.z) * delta
 	var shift := Vector2i((_foam_drift / cell_size).floor())
 	_foam_drift -= Vector2(shift) * cell_size
@@ -199,7 +198,8 @@ func step(delta : float, camera : Camera3D, disturbances : Dictionary, water_dep
 	# Reads only the simulated waves and the hulls: alongside the second output pass.
 	_pipelines[&'foam'].call(context, compute_list, RenderingContext.create_push_constant([
 		origin.x, origin.y, previous_origin.x, previous_origin.y, shift.x, shift.y, _foam_read_half, hull_count,
-		cell_size, delta, exp(-delta / FOAM_LIFETIME), FOAM_REACH, CREST_FOAM_SLOPE, CREST_FOAM_RATE, CREST_FOAM_MAX_COVERAGE]))
+		cell_size, delta, exp(-delta / FOAM_LIFETIME), FOAM_REACH, CREST_FOAM_SLOPE, CREST_FOAM_RATE, CREST_FOAM_MAX_COVERAGE,
+		_foam_drift.x, _foam_drift.y]))
 	_foam_read_half = 1 - _foam_read_half
 	for i in _mip_steps.size():
 		context.compute_list_add_barrier(compute_list)
@@ -214,6 +214,13 @@ func get_window() -> Vector4:
 	@warning_ignore("integer_division")
 	var center := (Vector2(_origin) + Vector2(map_size / 2, map_size / 2)) * cell_size
 	return Vector4(center.x, center.y, window_size * 0.5, 1.0 / window_size)
+
+
+## Where the foam lies relative to its cells (m, world x and z): the drift not yet moved
+## by whole cells. The water samples the foam map that much upwind
+## (interaction_foam_offset in water.gdshaderinc).
+func get_foam_offset() -> Vector2:
+	return _foam_drift
 
 
 ## Rows, transpose, rows (fft_compute.glsl, transpose.glsl): from the input half into

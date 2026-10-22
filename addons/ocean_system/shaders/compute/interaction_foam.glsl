@@ -5,8 +5,10 @@
  * cell (0-1) that the water adds to the whitecaps' (foam_signal), so it gets the same
  * lace, roughness and lighting.
  *
- * Each step the foam moves with the surface drift (whole cells, so it never blurs; the
- * cascades' foam moves the same way) and fades by decay. Its sources:
+ * Each step the foam moves with the surface drift: its data by whole cells (never
+ * resampled, so it never blurs), the rest as an offset (foam_offset: the foam of a
+ * cell lies at its centre plus it), which the water applies when it samples the map,
+ * so the foam moves smoothly. It fades by decay. Its sources:
  *   - hulls: each holds the coverage its speed through the water churns up (foam.x)
  *     over its footprint grown by foam_reach, so the foam rings the waterline; what it
  *     leaves behind is the wake's trail. Its width follows the hull, its density the
@@ -51,6 +53,8 @@ layout(push_constant) restrict readonly uniform PushConstants {
 	float crest_slope;     // slope past which crests foam ...
 	float crest_rate;      // ... growing coverage at this rate (1/s) per unit of slope ...
 	float crest_max_coverage; // ... toward this
+	float foam_offset_x;   // m: where the foam lies past its cell's centre
+	float foam_offset_z;
 };
 
 uint texel_index(ivec2 texel, int map_size) {
@@ -74,7 +78,7 @@ void main() {
 	}
 	coverage *= decay;
 
-	vec2 p = (vec2(cell) + 0.5) * cell_size;
+	vec2 p = (vec2(cell) + 0.5) * cell_size + vec2(foam_offset_x, foam_offset_z);
 	for (uint i = 0u; i < hull_count; ++i) {
 		InteractionHull hull = hulls[i];
 		if (hull.foam.x > 0.0 && !interaction_outside_bounds(hull.pose, hull.shape, p, foam_reach)) {

@@ -255,8 +255,12 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `ocean_sampling.glslinc`). Queries read mip 0 and invert horizontal
   displacement.
 - Interactive waves (`OceanInteraction`, visual only): one step per physics
-  tick in `OceanSystem._physics_process` (`process_physics_priority` 100, after
-  the bodies report). A world-locked window: cell c is texel c mod map size,
+  tick in `OceanSystem._physics_process` (`process_physics_priority` 100,
+  after the bodies report; also saved in `ocean_system.tscn`, as
+  `process_priority` is: a value only code sets becomes an override the
+  editor saves into every instance). A world-locked window centred on
+  the camera, with no lead toward where it looks (turning the camera swung it,
+  clearing and fading foam): cell c is texel c mod map size,
   sampled with repeat wrapping at rest positions (`UV`); moving the window
   clears only the cells it enters, and a damped border keeps waves off the
   FFT's periodic seam. A hull's source is `T_now − T_previous`, the previous
@@ -270,7 +274,9 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   views 16, 17, 18 show its height, slopes and foam.
 - Wake foam (`interaction_foam.glsl`): coverage in two halves of a buffer
   (read one step, written the next), moved by the surface drift in whole
-  cells (never resampled: no blur) and faded by `FOAM_LIFETIME`. A hull holds
+  cells (never resampled: no blur), the remainder an offset the foam pass and
+  the water apply (`get_foam_offset()`, `interaction_foam_offset`; without
+  it the foam jumped a cell at a time), and faded by `FOAM_LIFETIME`. A hull holds
   coverage by its speed through the water (`_hull_foam()`, the record's fifth
   vec4), not by its draft (that saturated big hulls); crest foam grows toward
   `CREST_FOAM_MAX_COVERAGE`. Keep both well below 1 so the foam stays lace.

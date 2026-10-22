@@ -513,6 +513,7 @@ func _physics_process(delta : float) -> void:
 		return
 	_interaction.step(delta, get_viewport().get_camera_3d(), _surface_queries.get_disturbances(), spectrum.water_depth, _get_surface_drift())
 	_set_water_shader_parameter(&'interaction_window', _interaction.get_window())
+	_set_water_shader_parameter(&'interaction_foam_offset', _interaction.get_foam_offset())
 
 
 ## Wind speed (m/s) the waves follow: the wind source's, else the spectrum's.

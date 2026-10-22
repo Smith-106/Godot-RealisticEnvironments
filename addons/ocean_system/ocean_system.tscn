@@ -24,6 +24,7 @@ foam_lifetime = 0.8
 
 [node name="OceanSystem" type="MeshInstance3D" unique_id=1912029964]
 process_priority = 100
+process_physics_priority = 100
 sorting_offset = 999.0
 cast_shadow = 0
 extra_cull_margin = 362.03867

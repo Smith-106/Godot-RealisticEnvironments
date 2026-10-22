@@ -298,8 +298,10 @@ Done as planned, with these differences:
   The fragment shader reads it with `textureGrad` and anisotropic filtering,
   adding the hidden slope variance to the roughness. Instead of a coverage
   debug view, view 17 shows the slopes.
-- **Window centre:** the camera plus 0.25 × the window along its view
-  direction's horizontal part, so a camera looking down gets no lead.
+- **Window centre:** first the camera plus 0.25 × the window along its view
+  direction. That lead swung the window as the camera turned, clearing and
+  fading foam (a 180° turn erased 10 % of a trail); since 2026-10-21 the
+  window is centred on the camera.
 - Other: drifting debris makes no waves (its velocity matches the water's);
   `BuoyantBody.wake_strength` scales a body's waves; at most 16 hulls, the
   nearest, with one error past that.
@@ -335,7 +337,11 @@ roughness and lighting as the whitecaps. Coverage stays linearly averageable
   lives in two halves of a buffer and in a second rgba16f map; `mip_chain.glsl`
   now filters both maps in one dispatch.
 - **Drift** in whole cells with the remainder carried over (as the cascades'
-  foam), so the foam never blurs; cells new to the window start clean.
+  foam), so the foam never blurs; cells new to the window start clean. At
+  first the remainder was dropped and the foam visibly jumped a cell (0.25 m)
+  every half second in a 15 m/s wind; now it is an offset the foam pass and
+  the water's lookup apply (`get_foam_offset()`), so the foam moves smoothly
+  (largest frame-to-frame change 0.07 instead of 1.37 in the test).
 - **Hull foam by speed, not displacement.** The first version grew foam with
   how fast a hull displaces water (|dT/dt|). Over one passage that adds up to
   roughly the draft, so the caravel (2.13 m) laid a solid white stripe while

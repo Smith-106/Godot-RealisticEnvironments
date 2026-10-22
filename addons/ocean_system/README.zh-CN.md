@@ -68,7 +68,7 @@
 | Foam | `foam_color`、`foam_intensity`、`foam_roughness`、泡沫纹理及其平铺尺寸。 |
 | Sky | `sky_source_path`、反射强度和 F0、太阳高光；**Manual Sky** 中是没有天空源时使用的值。 |
 | Reflections | `reflection_mode`：`SKY_ONLY`、`SCREEN_SPACE` 或 `PLANAR`（默认），以及平面反射的分辨率和裁剪。渲染层 20（`reflection_water_layer`）留给水面专用。 |
-| Interactive Waves | `interaction_map_size`（Off、256、512 或 1024 个格子）和 `interaction_cell_size`（默认 0.25 米）：两者共同决定相机周围船体能激起波浪的窗口（512 × 0.25 米 = 128 米）。窗口会朝相机看的方向前移，并在边缘淡出。 |
+| Interactive Waves | `interaction_map_size`（Off、256、512 或 1024 个格子）和 `interaction_cell_size`（默认 0.25 米）：两者共同决定相机周围船体能激起波浪的窗口（512 × 0.25 米 = 128 米）。窗口以相机为中心（转动相机不会改变它），并在边缘淡出。 |
 | Quality | `shader_quality`（`LOW`、`MEDIUM`、`HIGH`）、`simulation_map_size`（128–1024）、`max_wave_phase_step`、`fragment_cascade_limit`、`use_bicubic_normals`、`mesh_base_cell_size`。 |
 | Material | `water_material`：海洋复制的材质模板。海洋用一份私有副本渲染。 |
 

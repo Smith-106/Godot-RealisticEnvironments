@@ -27,7 +27,9 @@ before 1.0 a minor version may change the API.
 - Wake foam: hulls churn up foam around the waterline and in a trail by their
   speed through the water, steep wake crests foam too; it drifts with the
   surface drift, fades over about 8 s and is drawn with the whitecaps
-  (`foam_intensity`). Water debug view 18.
+  (`foam_intensity`). Water debug view 18. The foam drifts smoothly (no
+  cell-sized jumps), and the window is centred on the camera, so turning the
+  camera no longer moves or erases wakes and foam.
 - `WaterMask` (`core`): an invisible lid that keeps the water out of an open
   hull through the stencil buffer (value 128, read by every water shader
   tier); **Fit to Hull** slices the hull's model to make it. The rowboat and

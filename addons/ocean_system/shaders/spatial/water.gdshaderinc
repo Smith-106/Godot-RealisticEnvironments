@@ -214,8 +214,11 @@ uniform vec4 wave_frame_blends[MAX_CASCADES]; // x: weight of map B (OceanSystem
 // (height, slope x, slope z, squared slope) at rest positions, full mips.
 uniform bool interaction_enabled = false;
 uniform sampler2D interaction_map : filter_linear_mipmap_anisotropic, repeat_enable;
-// The foam hulls churn up, on the same window: x = coverage, full mips.
+// The foam hulls churn up, on the same window: x = coverage, full mips; its foam lies
+// interaction_foam_offset (m) past the cells (the drift within a cell), so it moves
+// smoothly (OceanInteraction.get_foam_offset()).
 uniform sampler2D interaction_foam_map : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform vec2 interaction_foam_offset = vec2(0.0);
 uniform vec4 interaction_window = vec4(0.0, 0.0, 1.0, 1.0); // centre x, z, half size (m), 1 / size (1/m)
 
 varying float foam_factor;
@@ -1298,7 +1301,7 @@ void fragment() {
 		gradient += interaction.yz * fade;
 		slope_variance += max(interaction.w - dot(interaction.yz, interaction.yz), 0.0) * fade;
 		interaction *= fade;
-		interaction_foam = textureGrad(interaction_foam_map, UV * scale, uv_dx * scale, uv_dy * scale).x * fade;
+		interaction_foam = textureGrad(interaction_foam_map, (UV - interaction_foam_offset) * scale, uv_dx * scale, uv_dy * scale).x * fade;
 		foam_signal += interaction_foam;
 	}
 	// Foam is coverage (fft_unpack.glsl, interaction_foam.glsl), so its mips hold the
