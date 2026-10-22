@@ -54,7 +54,7 @@ void main() {
 		float coverage = 0.0;
 		for (uint i = 0u; i < hull_count; ++i) {
 			InteractionHull hull = hulls[i];
-			if (hull.shape.w > 0.0 && !interaction_outside_bounds(hull.pose, hull.shape, p)) {
+			if (hull.shape.w > 0.0 && !interaction_outside_bounds(hull.pose, hull.shape, p, 1.0)) {
 				coverage = max(coverage, 1.0 - smoothstep(0.75, 1.0, interaction_footprint_radius(hull.pose, hull.shape, p)));
 			}
 		}

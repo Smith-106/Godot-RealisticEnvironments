@@ -46,6 +46,11 @@ Requires `core` and a `RenderingDevice` (Forward+). Without one
   exactly, by the finite-depth dispersion relation, once per physics tick.
   The waves are only drawn: water queries leave them out, so they never push
   bodies (one-way, so nothing can build up).
+- **Wake foam.** Hulls churn up foam on the same window: around the waterline
+  and in a trail behind them, denser the faster they move through the water
+  (not the deeper they sit), plus foam where wake crests grow steep. It drifts
+  with the surface drift and fades over about 8 s, and it is drawn as the
+  whitecaps are (lace, roughness, light), so `foam_intensity` scales it too.
 
 The sea lies at `water_level`. The node's own transform is ignored.
 
@@ -79,8 +84,9 @@ The sea lies at `water_level`. The node's own transform is ignored.
 
 From code: `get_wind_speed()` and `get_wind_direction_degrees()` give the wind
 the waves follow. `get_water_material()` returns the material actually used. To
-show single shading terms, set its `water_debug_view` uniform (1–17) at
-runtime; 16 and 17 show the interactive waves' height and slopes.
+show single shading terms, set its `water_debug_view` uniform (1–18) at
+runtime; 16 and 17 show the interactive waves' height and slopes, 18 their
+foam.
 
 ### Water queries
 
@@ -121,5 +127,5 @@ frame.
   way by default), at most 16 at once (the nearest). A battleship's long wake
   needs a coarser second window, which is not there yet.
 - Only the drawing is curved. Queries and reflections treat the sea as flat.
-- No foam around hulls, no splashes, and water still shows inside open hulls:
-  those parts of the interactive waves are being rebuilt.
+- No splashes yet, and water still shows inside open hulls (cutouts are
+  being built).

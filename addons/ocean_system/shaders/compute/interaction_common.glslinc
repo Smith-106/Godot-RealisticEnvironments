@@ -3,18 +3,20 @@
  * hulls' footprints.
  *
  * Godot does not track include dependencies: after editing this file, reimport
- * interaction_source.glsl and interaction_output.glsl.
+ * interaction_source.glsl, interaction_output.glsl and interaction_foam.glsl.
  */
 
-// A hull (OceanInteraction._write_hull()): its footprint now and one step earlier,
+// A hull (OceanInteraction._write_hulls()): its footprint now and one step earlier,
 // moved along with the water since. Each pose is centre (x, z) and length axis (x, z,
 // unit), each shape half length, half beam, superellipse exponent and depth (m, times
-// the wave strength).
+// the wave strength). foam.x is the foam coverage its speed through the water churns
+// up (interaction_foam.glsl); yzw unused.
 struct InteractionHull {
 	vec4 pose;
 	vec4 shape;
 	vec4 previous_pose;
 	vec4 previous_shape;
+	vec4 foam;
 };
 
 // The cell (x, z) a texel holds in the window whose first cell is origin: cells repeat
@@ -32,19 +34,20 @@ float interaction_footprint_radius(vec4 pose, vec4 shape, vec2 p) {
 	return pow(powers.x + powers.y, 1.0 / shape.z);
 }
 
-// Whether p is outside the circle around the footprint (a cheap early out).
-bool interaction_outside_bounds(vec4 pose, vec4 shape, vec2 p) {
+// Whether p is outside the circle around the footprint grown by reach (a cheap early out).
+bool interaction_outside_bounds(vec4 pose, vec4 shape, vec2 p, float reach) {
 	vec2 offset = p - pose.xy;
-	return dot(offset, offset) > dot(shape.xy, shape.xy);
+	return dot(offset, offset) > dot(shape.xy, shape.xy) * reach * reach;
 }
 
 // The hull's depth below the water at p: shape.w in the middle, tapering smoothly (with
-// zero slope) to nothing at the footprint's edge, so the hull's edge does not ring.
-float interaction_hull_depth(vec4 pose, vec4 shape, vec2 p) {
-	if (shape.w <= 0.0 || interaction_outside_bounds(pose, shape, p)) {
+// zero slope) to nothing at reach times the footprint's edge (reach 1: the footprint
+// itself, so the hull's edge does not ring).
+float interaction_hull_depth(vec4 pose, vec4 shape, vec2 p, float reach) {
+	if (shape.w <= 0.0 || interaction_outside_bounds(pose, shape, p, reach)) {
 		return 0.0;
 	}
-	float r = interaction_footprint_radius(pose, shape, p);
+	float r = interaction_footprint_radius(pose, shape, p) / reach;
 	float s = max(1.0 - r * r, 0.0);
 	return shape.w * s * s;
 }

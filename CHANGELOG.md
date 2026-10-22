@@ -24,6 +24,10 @@ before 1.0 a minor version may change the API.
   `release_disturbance()`; `OceanSystem.interaction_map_size` and
   `interaction_cell_size`; `BuoyantBody.wake_strength`; water debug views 16
   and 17. `fft_compute.glsl` takes a direction and the spectrum count.
+- Wake foam: hulls churn up foam around the waterline and in a trail by their
+  speed through the water, steep wake crests foam too; it drifts with the
+  surface drift, fades over about 8 s and is drawn with the whitecaps
+  (`foam_intensity`). Water debug view 18.
 - `FloatingBoat`: thrust and rudder act at `propulsion_position` (stern,
   below the waterline) and fade out of the water (`buoyancy_path`); thrust
   eases off toward the speed limits. `turn_torque_per_kg` is replaced by

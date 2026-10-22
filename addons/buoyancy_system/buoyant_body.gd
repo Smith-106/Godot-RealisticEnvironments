@@ -85,8 +85,9 @@ class Hull:
 @export_range(0.0, 10.0, 0.01, "or_greater", "suffix:1/s") var sideways_drag := 2.0
 
 @export_group("Waves")
-## Scales the waves the body makes as it moves through the water: wake, bow wave and
-## rings (drawn by the ocean's interactive waves, never felt). 0 makes none.
+## Scales the waves and foam the body makes as it moves through the water: wake, bow
+## wave, rings and the foam its speed churns up (drawn by the ocean's interactive waves,
+## never felt). 0 makes none.
 @export_range(0.0, 4.0, 0.01, "or_greater") var wake_strength := 1.0
 
 @export_group("Debug")

@@ -446,6 +446,7 @@ var _lod_grid := OceanLodGrid.new(_set_water_shader_parameter)
 ## failed), their map bound to the water material, and a flat map bound without them.
 var _interaction : OceanInteraction
 var _interaction_map := Texture2DRD.new()
+var _interaction_foam_map := Texture2DRD.new()
 var _flat_interaction_map : ImageTexture
 
 
@@ -510,7 +511,7 @@ func _process(delta : float) -> void:
 func _physics_process(delta : float) -> void:
 	if _interaction == null:
 		return
-	_interaction.step(delta, get_viewport().get_camera_3d(), _surface_queries.get_disturbances(), spectrum.water_depth)
+	_interaction.step(delta, get_viewport().get_camera_3d(), _surface_queries.get_disturbances(), spectrum.water_depth, _get_surface_drift())
 	_set_water_shader_parameter(&'interaction_window', _interaction.get_window())
 
 
@@ -660,17 +661,20 @@ func _setup_interaction() -> void:
 	# Swapped in place, never through RID() (that frees the texture the material holds).
 	if _interaction != null:
 		_interaction_map.texture_rd_rid = _interaction.map.rid
+		_interaction_foam_map.texture_rd_rid = _interaction.foam_map.rid
 	_bind_interaction_map()
 
 func _bind_interaction_map() -> void:
 	_set_water_shader_parameter(&'interaction_enabled', _interaction != null)
 	if _interaction != null:
 		_set_water_shader_parameter(&'interaction_map', _interaction_map, true)
+		_set_water_shader_parameter(&'interaction_foam_map', _interaction_foam_map, true)
 		_set_water_shader_parameter(&'interaction_window', _interaction.get_window())
 		return
 	if _flat_interaction_map == null:
 		_flat_interaction_map = ImageTexture.create_from_image(Image.create_empty(1, 1, false, Image.FORMAT_RGBAH))
 	_set_water_shader_parameter(&'interaction_map', _flat_interaction_map, true)
+	_set_water_shader_parameter(&'interaction_foam_map', _flat_interaction_map, true)
 
 ## A 1x1, one-layer texture array of zeros: flat water, no slopes, no foam.
 func _get_flat_wave_maps() -> Texture2DArray:
@@ -1099,6 +1103,7 @@ func _notification(what: int) -> void:
 		_normal_maps_b.texture_rd_rid = RID()
 		_wave_generator = null
 		_interaction_map.texture_rd_rid = RID()
+		_interaction_foam_map.texture_rd_rid = RID()
 		_interaction = null
 		# Null when the ocean was disabled for lack of a RenderingDevice.
 		if _surface_queries != null:

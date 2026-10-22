@@ -1,6 +1,6 @@
 # Buoyancy and interactive waves plan
 
-Status: Phases 0–2 done · Written 2026-10-21 · Target: Godot 4.8 Forward+
+Status: Phases 0–3 done · Written 2026-10-21 · Target: Godot 4.8 Forward+
 
 Objects on the ocean should interact with the water in a visually realistic way;
 physical accuracy is not a goal. Scale: about 10 floaters at once, ships up to
@@ -328,6 +328,36 @@ speed), and steep simulated crests. It drifts with `get_surface_drift()`, decays
 over a lifetime, and is added to `foam_signal`, so it gets the same lace,
 roughness and lighting as the whitecaps. Coverage stays linearly averageable
 (mips).
+
+### Phase 3 implementation notes (2026-10-21)
+
+- **Pass:** `interaction_foam.glsl`, beside the second output pass. Coverage
+  lives in two halves of a buffer and in a second rgba16f map; `mip_chain.glsl`
+  now filters both maps in one dispatch.
+- **Drift** in whole cells with the remainder carried over (as the cascades'
+  foam), so the foam never blurs; cells new to the window start clean.
+- **Hull foam by speed, not displacement.** The first version grew foam with
+  how fast a hull displaces water (|dT/dt|). Over one passage that adds up to
+  roughly the draft, so the caravel (2.13 m) laid a solid white stripe while
+  the small boats looked right. Now each hull holds a coverage set by its speed
+  through the water, turning included (`_hull_foam()`: none below 1 m/s, 0.6 at
+  8 m/s, times `wake_strength`), over its footprint grown by 25 %, densest in
+  the middle: the trail's width follows the hull, its density the speed.
+- **Crest foam** past slope 0.35, growing toward 0.6 only: uncapped, a
+  skidding caravel's stern turned into a solid sheet.
+- Foam fades with an e-folding lifetime of 8 s; it joins `foam_signal`, so
+  `foam_intensity` scales it like the whitecaps. Debug view 18 shows it.
+
+### Phase 3 measurements
+
+- **Coverage** (map read back, wind 6 m/s): rowboat at 3.7 m/s peaks at 0.25
+  on a straight course and 0.33 in a turn; caravel 0.22 at 3.4 m/s, 0.40 in a
+  turn at 3.9 m/s. No cell reaches 0.6.
+- **Look:** a patchy lace trail behind the small boats, foam at the bow
+  waterline, and a lighter streak behind the caravel that breaks up with
+  distance.
+- **Cost:** a step with foam takes 0.093 ms (was 0.076 ms; 512², 8 hulls,
+  RTX 4070 Ti).
 
 ## Phase 4 — Hull cutouts
 

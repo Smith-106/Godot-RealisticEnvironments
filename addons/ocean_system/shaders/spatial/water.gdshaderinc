@@ -157,7 +157,7 @@ uniform float aerial_max_distance = 1.0;
 uniform float sky_reflection_strength : hint_range(0.0, 2.0) = 1.0;
 uniform float sky_reflection_f0 : hint_range(0.0, 0.12) = 0.02;
 uniform float sun_specular_strength : hint_range(0.0, 4.0) = 1.0;
-uniform int water_debug_view : hint_range(0, 17) = 0;
+uniform int water_debug_view : hint_range(0, 18) = 0;
 // The camera's exposure (CameraAttributes.exposure_multiplier, or the world's), set
 // every frame by OceanSystem. The reflections are summed pre-exposed, as the sky source's
 // clouds and atmosphere and the planar reflection are stored, and EMISSION (which Godot
@@ -214,6 +214,8 @@ uniform vec4 wave_frame_blends[MAX_CASCADES]; // x: weight of map B (OceanSystem
 // (height, slope x, slope z, squared slope) at rest positions, full mips.
 uniform bool interaction_enabled = false;
 uniform sampler2D interaction_map : filter_linear_mipmap_anisotropic, repeat_enable;
+// The foam hulls churn up, on the same window: x = coverage, full mips.
+uniform sampler2D interaction_foam_map : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec4 interaction_window = vec4(0.0, 0.0, 1.0, 1.0); // centre x, z, half size (m), 1 / size (1/m)
 
 varying float foam_factor;
@@ -1239,8 +1241,10 @@ void fragment() {
 	float slope_variance = 0.0;
 	foam_factor = 0.0;
 	vec3 world_normal = vec3(0.0, 1.0, 0.0);
-	// The interactive waves over the pixel footprint (height, slopes, squared slope).
+	// The interactive waves over the pixel footprint (height, slopes, squared slope), and
+	// the foam hulls churned up there.
 	vec4 interaction = vec4(0.0);
+	float interaction_foam = 0.0;
 	float sky_reflection_amount = 0.0;
 	vec3 reflected_sky_color = vec3(0.0);
 	float sun_specular_amount = 0.0;
@@ -1284,9 +1288,6 @@ void fragment() {
 			foam_signal += cascade_foam;
 		}
 
-		// Foam is coverage (fft_unpack.glsl), so its mips hold the covered share of
-		// each texel: right at every distance, with no fade.
-		foam_factor = saturate(foam_signal * foam_intensity);
 	}
 	if (interaction_enabled) {
 		// Filtered over the pixel footprint (anisotropic), so the mean slope and the
@@ -1297,7 +1298,12 @@ void fragment() {
 		gradient += interaction.yz * fade;
 		slope_variance += max(interaction.w - dot(interaction.yz, interaction.yz), 0.0) * fade;
 		interaction *= fade;
+		interaction_foam = textureGrad(interaction_foam_map, UV * scale, uv_dx * scale, uv_dy * scale).x * fade;
+		foam_signal += interaction_foam;
 	}
+	// Foam is coverage (fft_unpack.glsl, interaction_foam.glsl), so its mips hold the
+	// covered share of each texel: right at every distance, with no fade.
+	foam_factor = saturate(foam_signal * foam_intensity);
 	if (num_cascades > 0 || interaction_enabled) {
 		gradient *= normal_scale;
 		slope_variance *= normal_scale * normal_scale;
@@ -1543,6 +1549,8 @@ void fragment() {
 			debug_color = vec3(max(interaction.x, 0.0), max(-interaction.x, 0.0), 0.0) * 4.0; // interactive waves' height: red up, green down, full at 0.25 m
 		} else if (water_debug_view == 17) {
 			debug_color = vec3(abs(interaction.yz) * 4.0, 0.0); // interactive waves' slopes along x (red) and z (green)
+		} else if (water_debug_view == 18) {
+			debug_color = vec3(interaction_foam); // the foam hulls churned up (coverage)
 		}
 		// Shown unlit, so the scene's lighting does not scale the values.
 		ALBEDO = vec3(0.0);

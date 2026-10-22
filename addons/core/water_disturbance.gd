@@ -19,5 +19,5 @@ var depth := 0.0
 ## Horizontal velocity (m/s, world space) of the surface water under the hull: the
 ## waves' own motion and the surface drift. A hull moving with the water makes no waves.
 var water_velocity := Vector3.ZERO
-## Scales the waves the hull makes: 1 as its motion makes them, 0 none.
+## Scales the waves and foam the hull makes: 1 as its motion makes them, 0 none.
 var wave_strength := 1.0

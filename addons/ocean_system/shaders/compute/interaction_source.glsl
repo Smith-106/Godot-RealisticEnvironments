@@ -51,7 +51,7 @@ void main() {
 	vec2 p = (vec2(cell) + 0.5) * cell_size;
 	for (uint i = 0u; i < hull_count; ++i) {
 		InteractionHull hull = hulls[i];
-		state.x += interaction_hull_depth(hull.pose, hull.shape, p) - interaction_hull_depth(hull.previous_pose, hull.previous_shape, p);
+		state.x += interaction_hull_depth(hull.pose, hull.shape, p, 1.0) - interaction_hull_depth(hull.previous_pose, hull.previous_shape, p, 1.0);
 	}
 
 	vec2 inside = vec2(cell - origin) + 0.5;

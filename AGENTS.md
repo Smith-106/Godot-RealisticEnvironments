@@ -255,7 +255,15 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   kernel cannot draw a Kelvin wake (plan, Phase 0.1). `interaction_fade()` in
   `water.gdshaderinc` is copied in `surface_query.glsl`
   (`OceanSurfaceQueries.INTERACTION_FADE_START`); change both. Water debug
-  views 16, 17 show its height and slopes.
+  views 16, 17, 18 show its height, slopes and foam.
+- Wake foam (`interaction_foam.glsl`): coverage in two halves of a buffer
+  (read one step, written the next), moved by the surface drift in whole
+  cells (never resampled: no blur) and faded by `FOAM_LIFETIME`. A hull holds
+  coverage by its speed through the water (`_hull_foam()`, the record's fifth
+  vec4), not by its draft (that saturated big hulls); crest foam grows toward
+  `CREST_FOAM_MAX_COVERAGE`. Keep both well below 1 so the foam stays lace.
+  The water adds it to `foam_signal` before `foam_intensity`. `mip_chain.glsl`
+  filters both maps in one dispatch (z: waves, foam).
 - `fft_compute.glsl` (`buffer_slot, spectrum_count, direction`) and
   `transpose.glsl` (`buffer_slot, spectrum_count`) serve `WaveGenerator`
   (4 spectra, inverse) and `OceanInteraction` (1, forward and inverse).
@@ -263,7 +271,7 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `.godot/imported/<name>-*` of every shader using it (touching is not
   enough). `ocean_sampling.glslinc` → `surface_query.glsl`;
   `interaction_common.glslinc` → `interaction_source.glsl`,
-  `interaction_output.glsl`;
+  `interaction_output.glsl`, `interaction_foam.glsl`;
   `atmosphere_common.glslinc` → `atmosphere_*.glsl`, `aerial_perspective.glsl`,
   `cloud_raymarch.glsl`, `cloud_trace.glsl`;
   `cloud_noise.glslinc` → `cloud_noise_bake.glsl`, `cloud_weather.glsl`;

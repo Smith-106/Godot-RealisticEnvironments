@@ -37,7 +37,7 @@ Requires `core`, and water that registers a `WaterSurface` (e.g.
   footprint (from the collision shapes), how deep it sits below the surface
   around it and how the water under it moves. The ocean draws the waves its
   motion relative to the water makes: the wake, the bow wave and rings when it
-  bobs (`wake_strength` scales them).
+  bobs, and the foam its speed churns up (`wake_strength` scales both).
 - **Only the sea's waves.** A body reads the water simulation's waves, never
   the waves bodies stir up, so nothing it does can feed back into its motion.
 - **Start.** The body is held frozen until its first water sample arrives (a
@@ -63,7 +63,7 @@ RigidBody3D            mass, center_of_mass, not frozen
 | `probe_grid` | Probes across × along the hull; 0 picks a count from its proportions (about 16). More follow the waves under a long hull more closely. |
 | `damping_ratio` | 0 bobs on and on, 1 settles without overshooting. |
 | `forward_drag`, `sideways_drag` | How quickly (1/s) the water takes away speed along and across the hull. |
-| `wake_strength` | Scales the waves the body makes (1 as its motion makes them, 0 none). |
+| `wake_strength` | Scales the waves and foam the body makes (1 as its motion makes them, 0 none). |
 
 - The collision shapes decide where the probes go, and their height is the
   most the body can be pushed under.
