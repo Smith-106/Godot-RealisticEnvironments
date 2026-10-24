@@ -28,4 +28,6 @@ class_name WaveCascade extends Resource
 @export_range(0.0, 100.0, 0.1, "or_greater") var foam_generation := 10.0
 ## Seconds for foam to fade to 1/e once its crest has passed. Longer leaves
 ## patches and streaks behind breaking waves.
-@export_range(0.05, 30.0, 0.05, "or_greater", "suffix:s") var foam_lifetime := 2.0
+@export_range(0.05, 30.0, 0.05, "or_greater", "suffix:s") var foam_lifetime := 2.0 :
+	set(value):
+		foam_lifetime = maxf(value, 0.05)

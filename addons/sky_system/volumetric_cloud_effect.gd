@@ -32,63 +32,23 @@ const MAX_HISTORY_MOTION := 2000.0
 const MAX_TRACKED_BUFFERS := 16
 
 ## Off while there are no clouds or no atmosphere.
-var active := false :
-	set(value):
-		_params_mutex.lock()
-		active = value
-		_params_mutex.unlock()
+var active := false
 ## CloudRenderer.get_trace_resources(), or empty. Clear it before they are freed.
-var cloud_resources : Array[RID] = [] :
-	set(value):
-		_params_mutex.lock()
-		cloud_resources = value
-		_params_mutex.unlock()
+var cloud_resources : Array[RID] = []
 ## World height of the sea surface (SkySystem.sea_level): cloud altitudes are above it.
-var sea_level := 0.0 :
-	set(value):
-		_params_mutex.lock()
-		sea_level = value
-		_params_mutex.unlock()
+var sea_level := 0.0
 ## Weight of a traced pixel's previous value (0 replaces it).
-var history_weight := 0.6 :
-	set(value):
-		_params_mutex.lock()
-		history_weight = value
-		_params_mutex.unlock()
+var history_weight := 0.6
 ## As AerialPerspectiveEffect: the view volume's observer (world position and its
 ## altitude as the volume uses it), the key light and the haze lobe's g, the volume
 ## (AtmosphereRenderer.view_*) and its last regular slice. Clear the textures before
 ## they are freed.
-var observer_position := Vector3.ZERO :
-	set(value):
-		_params_mutex.lock()
-		observer_position = value
-		_params_mutex.unlock()
-var observer_altitude := 0.0 :
-	set(value):
-		_params_mutex.lock()
-		observer_altitude = value
-		_params_mutex.unlock()
-var light_direction := Vector3.UP :
-	set(value):
-		_params_mutex.lock()
-		light_direction = value
-		_params_mutex.unlock()
-var phase_g := 0.97 :
-	set(value):
-		_params_mutex.lock()
-		phase_g = value
-		_params_mutex.unlock()
-var view_textures : Array[RID] = [] :
-	set(value):
-		_params_mutex.lock()
-		view_textures = value
-		_params_mutex.unlock()
-var max_distance := 100000.0 :
-	set(value):
-		_params_mutex.lock()
-		max_distance = value
-		_params_mutex.unlock()
+var observer_position := Vector3.ZERO
+var observer_altitude := 0.0
+var light_direction := Vector3.UP
+var phase_g := 0.97
+var view_textures : Array[RID] = []
+var max_distance := 100000.0
 
 var _rd : RenderingDevice
 ## Per pass, per version ("single", "msaa"): [shader, pipeline].
@@ -145,6 +105,22 @@ func _init() -> void:
 	nearest_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
 	nearest_state.repeat_w = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
 	_nearest_clamp = _rd.sampler_create(nearest_state)
+
+## Sets parameters by name (the variables above) all at once, so the render callback
+## never reads a half-updated set.
+func set_parameters(values : Dictionary) -> void:
+	_params_mutex.lock()
+	for parameter : StringName in values:
+		assert(parameter in self, "Unknown %s parameter %s." % [get_script().get_global_name(), parameter])
+		var value : Variant = values[parameter]
+		# A copy of the property's own (typed) kind: set() ignores an untyped array for a
+		# typed one, and the caller keeps its array.
+		if value is Array:
+			var copy : Array = (get(parameter) as Array).duplicate()
+			copy.assign(value)
+			value = copy
+		set(parameter, value)
+	_params_mutex.unlock()
 
 
 func _notification(what: int) -> void:

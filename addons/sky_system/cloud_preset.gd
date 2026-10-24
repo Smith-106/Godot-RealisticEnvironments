@@ -68,10 +68,14 @@ const GEOMETRIC_BLENDED_PROPERTIES : Array[StringName] = [&"haze_visibility"]
 ## contrast; the haze's extinction there is 3.912 / visibility). Clear marine air
 ## 50-70 km, haze 5-20 km, mist 1-5 km, fog below 1 km. It also sets how bright
 ## the glow around the sun is.
-@export_range(100.0, 100000.0, 10.0, "or_greater", "exp") var haze_visibility := 50000.0
+@export_range(100.0, 100000.0, 10.0, "or_greater", "exp") var haze_visibility := 50000.0 :
+	set(value):
+		haze_visibility = maxf(value, 1.0)
 ## Height (m) over which the haze thins to 1/e: about 1 km for the haze of the
 ## marine boundary layer, 100-200 m for sea fog.
-@export_range(10.0, 5000.0, 1.0, "or_greater") var haze_scale_height := 1000.0
+@export_range(10.0, 5000.0, 1.0, "or_greater") var haze_scale_height := 1000.0 :
+	set(value):
+		haze_scale_height = maxf(value, 1.0)
 ## How sharply the haze scatters light forward: Henyey-Greenstein g of the
 ## forward lobe that holds 75 % of its scattering (the rest is isotropic), so the
 ## mean g is 0.75 times this; about 0.97 for marine haze (coarse sea salt), 0.98

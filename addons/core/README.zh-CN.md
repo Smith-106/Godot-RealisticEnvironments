@@ -64,13 +64,16 @@ func _exit_tree() -> void:
 继承 `WaterSurface` 并实现它的抽象方法。在 `_enter_tree()` 中调用
 `WaterSurface.register(get_world_3d(), surface)`，在 `_exit_tree()` 中调用
 `unregister()`。每个世界只能有一个水面。没有交互波浪的水体可以忽略
-`submit_disturbance()` 和 `release_disturbance()`。
+`submit_disturbance()`、`release_disturbance()` 和 `set_query_wave_response()`。
 
 ### 激起波浪
 
 每个物理帧用 `submit_disturbance(self, disturbance)` 报告一个船体（复用同一个
 `WaterDisturbance`），并在 `_exit_tree()` 中调用 `release_disturbance(self)`。
-`BuoyantBody` 会为漂浮物体这样做。这些波浪只用于绘制：查询结果不包含它们。
+`BuoyantBody` 会为漂浮物体这样做。查询结果默认不包含这些波浪，除非查询者调用
+`set_query_wave_response(self, response)`（0 为不包含，1 为全部包含；
+`BuoyantBody.wave_response`）；此时它自己报告的船体内的水面取自船体周围，所以它
+永远感受不到自己排开的水。
 
 ### 让开放船体内没有水
 

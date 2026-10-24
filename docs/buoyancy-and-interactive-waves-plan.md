@@ -28,8 +28,9 @@ extrapolated the water's height; that part stays.
 
 1. **Visual first.** Settings in units you can see (draft in m, a damping
    ratio, drag in 1/s); a body behaves the same at any mass.
-2. **One-way coupling.** Bodies make interactive waves; buoyancy and every
-   surface query read only the FFT sea. Nothing feeds back.
+2. **One-way coupling by default.** Bodies make interactive waves; buoyancy
+   and every surface query read only the FFT sea. Nothing feeds back. Since
+   Phase 5 a body can opt in to feel them, never the water it displaces.
 3. **Waves only from motion relative to the water.** A body moving with the
    water makes no waves (see Phase 2, Sources).
 4. **One foam look.** Interaction foam goes through the water's existing foam
@@ -400,6 +401,56 @@ the seat the inside is dry; low beside the hull and low off the bow the water
 outside, the contact line and the reflections are as without the mask; with
 the camera 0.15 m below the lid, inside the hull, the water inside shows and
 the sea beyond is whole. The demo and the examples run without errors.
+
+## Phase 5 — Wake response (opt-in)
+
+Added 2026-10-23 at the user's request: floaters may feel the interactive
+waves, their own and other hulls', since the buoyancy is visual anyway.
+
+- **Contract:** `WaterSurface.set_query_wave_response(owner, response)`, 0 to
+  1, kept until `release_query()`. `BuoyantBody.wave_response` (default 0)
+  sets it.
+- **Sampling:** `surface_query.glsl` reads the simulation's state
+  (`OceanInteraction.state_buffer`, the FFT buffer's output half: h and
+  dh/dt per cell), bilinear, soft-limited as drawn. The height goes into the
+  sample's height, dh/dt into `surface_velocity.y` (so `height_rate()`,
+  extrapolation and damping follow the wake), the slopes into the normal.
+  Points carry their owner's record (vec4 points, an owner buffer).
+- **Not the hull's own water:** the source puts the displaced water under the
+  hull as a bulge and leaves a hollow where it was. Read back, the bulge is
+  extra lift and the hollow extra sinking with the delay of the queries: the
+  old self-excitation. So inside a rim around the owner's own footprint the
+  waves are interpolated from the rim (its mean at the centre, the rim
+  straight out at the edge). The rim is the footprint grown by 30 % and at
+  least 3 cells (the cells blur the bulge: at 30 % alone a 1 m crate kept
+  bobbing, 0.34 m, and rested 0.17 m low), stretched back along the hull's
+  motion through the water over half the period of a hull-length wave
+  (without it a circling boat's stern sank into its hollow every 2.4 s,
+  rolling 2–7.5°, its propeller out of the water and its speed 2.5 instead
+  of 3.7 m/s). Bow waves, wakes and rings beyond the rim are felt, including
+  the hull's own.
+- The camera's point keeps the drawn map (the above/below test).
+
+### Phase 5 measurements
+
+The test floats the example boat, crates and barrels (`wave_response` 1
+unless stated), 60 ticks per second.
+
+- **Calm drop** (0.5 m/s wind): all rest within 1 mm of the heights with
+  response 0, level to 0.04°. The splash rings rock the neighbours 4 m away
+  (crate 3°, barrel 8°) for about 20 s.
+- **Driving in calm water:** straight at 4.3 m/s the boat trims as without
+  response (0.2°); circling at 3.7 m/s (same as response 0) it rolls 0.4–0.8°
+  (0.3–0.4° without). Crates the wake reaches rock 8–11° and heave 0.13 m
+  (0.3° and 0 without).
+- **Caravel** passing a row of crates 8 m off at 4–5 m/s: the crates pitch up
+  to 24°, roll 17° and heave 0.37 m; the caravel heaves at most 0.18 m on its
+  own waves.
+- **Rough sea** (12 m/s wind, 160 s, the boat circling): pitch, roll and heave
+  ranges per 10 s window match response 0 within their scatter, with no trend;
+  over 300 s the boat's heave range per window stays about 1 m.
+- `demo/main.tscn`, `examples/floating_objects.tscn`, `examples/boat.tscn` and
+  `demo/underwater_showcase.tscn` run without errors; no script warnings.
 
 ## Later
 

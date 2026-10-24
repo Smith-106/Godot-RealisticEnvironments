@@ -38,8 +38,14 @@ Requires `core`, and water that registers a `WaterSurface` (e.g.
   around it and how the water under it moves. The ocean draws the waves its
   motion relative to the water makes: the wake, the bow wave and rings when it
   bobs, and the foam its speed churns up (`wake_strength` scales both).
-- **Only the sea's waves.** A body reads the water simulation's waves, never
-  the waves bodies stir up, so nothing it does can feed back into its motion.
+- **Riding wakes (opt-in).** By default a body reads only the sea's waves,
+  never the waves bodies stir up, so nothing it does can feed back into its
+  motion. With `wave_response` above 0 it also feels those waves: a crate
+  rocks as a ship's wake passes, a boat bobs crossing its own wake. Inside its
+  own footprint the water is taken from a rim around the hull, stretched back
+  along its motion, so the water it displaces itself (the bulge under it and
+  the hollow it leaves behind) never lifts or sinks it. Only near the camera,
+  where the ocean simulates those waves.
 - **Start.** The body is held frozen until its first water sample arrives (a
   few frames), then released.
 
@@ -64,6 +70,7 @@ RigidBody3D            mass, center_of_mass, not frozen
 | `damping_ratio` | 0 bobs on and on, 1 settles without overshooting. |
 | `forward_drag`, `sideways_drag` | How quickly (1/s) the water takes away speed along and across the hull. |
 | `wake_strength` | Scales the waves and foam the body makes (1 as its motion makes them, 0 none). |
+| `wave_response` | How much the body feels the waves bodies make, its own included (0 not at all, the default; 1 fully). |
 
 - The collision shapes decide where the probes go, and their height is the
   most the body can be pushed under.
@@ -77,7 +84,9 @@ RigidBody3D            mass, center_of_mass, not frozen
 
 ## Limits
 
-- Bodies do not feel the waves other bodies make, nor their own.
+- Bodies feel the waves bodies make only with `wave_response` above 0, and
+  only near the camera, where the ocean simulates them: farther away they
+  float on the sea's waves alone.
 - The water sees the hull's footprint as a superellipse fitted to the
   collision shapes' outline (pointed bows come out rounder).
 - A body cannot capsize, flood or sink, and it floats level whatever its load.

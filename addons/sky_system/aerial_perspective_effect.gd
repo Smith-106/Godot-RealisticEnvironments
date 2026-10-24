@@ -16,46 +16,18 @@ extends CompositorEffect
 const SHADER := preload("res://addons/sky_system/shaders/aerial_perspective.glsl")
 
 ## Off while there is nothing to haze (no atmosphere, or a clear one).
-var active := false :
-	set(value):
-		_params_mutex.lock()
-		active = value
-		_params_mutex.unlock()
+var active := false
 ## World position of the observer the view volume was built for, and its altitude
 ## (m) as the volume uses it (AtmosphereRenderer.get_observer_altitude()).
-var observer_position := Vector3.ZERO :
-	set(value):
-		_params_mutex.lock()
-		observer_position = value
-		_params_mutex.unlock()
-var observer_altitude := 0.0 :
-	set(value):
-		_params_mutex.lock()
-		observer_altitude = value
-		_params_mutex.unlock()
+var observer_position := Vector3.ZERO
+var observer_altitude := 0.0
 ## Toward the key light, and the Henyey-Greenstein g of the haze's forward lobe.
-var light_direction := Vector3.UP :
-	set(value):
-		_params_mutex.lock()
-		light_direction = value
-		_params_mutex.unlock()
-var phase_g := 0.97 :
-	set(value):
-		_params_mutex.lock()
-		phase_g = value
-		_params_mutex.unlock()
+var light_direction := Vector3.UP
+var phase_g := 0.97
 ## The view volume (AtmosphereRenderer.view_*) as RenderingDevice textures, and the
 ## distance of its last regular slice. Clear the textures before they are freed.
-var view_textures : Array[RID] = [] :
-	set(value):
-		_params_mutex.lock()
-		view_textures = value
-		_params_mutex.unlock()
-var max_distance := 100000.0 :
-	set(value):
-		_params_mutex.lock()
-		max_distance = value
-		_params_mutex.unlock()
+var view_textures : Array[RID] = []
+var max_distance := 100000.0
 
 var _rd : RenderingDevice
 ## Shader per version: "single" and "msaa".
@@ -93,6 +65,22 @@ func _init() -> void:
 	volume_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
 	volume_state.repeat_w = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
 	_volume_sampler = _rd.sampler_create(volume_state)
+
+## Sets parameters by name (the variables above) all at once, so the render callback
+## never reads a half-updated set.
+func set_parameters(values : Dictionary) -> void:
+	_params_mutex.lock()
+	for parameter : StringName in values:
+		assert(parameter in self, "Unknown %s parameter %s." % [get_script().get_global_name(), parameter])
+		var value : Variant = values[parameter]
+		# A copy of the property's own (typed) kind: set() ignores an untyped array for a
+		# typed one, and the caller keeps its array.
+		if value is Array:
+			var copy : Array = (get(parameter) as Array).duplicate()
+			copy.assign(value)
+			value = copy
+		set(parameter, value)
+	_params_mutex.unlock()
 
 
 func _notification(what: int) -> void:

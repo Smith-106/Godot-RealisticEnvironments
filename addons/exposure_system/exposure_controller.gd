@@ -122,6 +122,9 @@ func _exit_tree() -> void:
 	_compositor = null
 	_night_vision = null
 	_view_meter = null
+	# Re-entering the tree (a reparent, a level put back) runs _ready() again, which adds
+	# the effects back.
+	request_ready()
 
 
 ## Appends effect to the target's compositor (created if missing).
@@ -174,6 +177,8 @@ func _process(delta : float) -> void:
 		var weight := 1.0 - exp(-delta / time_constant) if time_constant > 0.0 else 1.0
 		_adapted_lux = exp(lerpf(log(_adapted_lux), log(lux), weight))
 	var unit_lux : float = _light_source.get_illuminance_unit_lux()
+	if not (unit_lux > 0.0 and is_finite(unit_lux)):
+		return
 	_attributes.exposure_multiplier = _get_exposure(_adapted_lux, unit_lux)
 	var luminance_scale := unit_lux / _attributes.exposure_multiplier
 	if _view_meter:

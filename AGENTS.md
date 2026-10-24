@@ -159,11 +159,18 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   drive and weapon input (`controlled_property`).
 
 ## Buoyancy invariants
-- One-way coupling: bodies make waves, nothing reads them back. `BuoyantBody`
-  reads only the FFT sea through `WaterSurface` queries; the interactive waves
-  stay out of every query except `OceanSystem`'s own camera point (the
-  interaction owner, for the above/below test). The previous system fed them
-  back and bodies rocked harder and harder.
+- Bodies feel the interactive waves only by opting in
+  (`set_query_wave_response()`, `BuoyantBody.wave_response`, default 0). Then
+  `surface_query.glsl` reads `OceanInteraction.state_buffer` (h, dh/dt,
+  soft-limited as drawn) and, inside a rim around the owner's own hull
+  (`OceanSurfaceQueries._write_owner_record()`: the footprint grown by 30 % and
+  at least 3 cells, stretched back along its motion through the water over half
+  the period of a hull-length wave), interpolates from that rim. Never let a
+  hull read the water it displaces: the bulge under it, smeared a cell or two,
+  and the hollow behind it (without the stretch a circling boat's stern sank
+  into it, lifting its propeller out). The previous system fed it back and
+  bodies rocked harder and harder. `OceanSystem`'s camera point (the
+  interaction owner) gets the drawn map instead, for the above/below test.
 - `BuoyantBody` reports its hull every tick: a superellipse fitted to the
   collision shapes' outline (`_exponent_for_area_share()`), depth = `draft` +
   the waterline plane's mean depth (relative to the water, so riding the swell
@@ -289,7 +296,7 @@ the addon's `README.md` and the scripts' `##` doc comments before changing it.
   `.godot/imported/<name>-*` of every shader using it (touching is not
   enough). `ocean_sampling.glslinc` → `surface_query.glsl`;
   `interaction_common.glslinc` → `interaction_source.glsl`,
-  `interaction_output.glsl`, `interaction_foam.glsl`;
+  `interaction_output.glsl`, `interaction_foam.glsl`, `surface_query.glsl`;
   `atmosphere_common.glslinc` → `atmosphere_*.glsl`, `aerial_perspective.glsl`,
   `cloud_raymarch.glsl`, `cloud_trace.glsl`;
   `cloud_noise.glslinc` → `cloud_noise_bake.glsl`, `cloud_weather.glsl`;

@@ -43,6 +43,9 @@ Requires `core` and a `RenderingDevice` (Forward+).
   the sun, the moon and the sky. `ExposureController` reads it.
 
 After every change other systems depend on, the sky emits `lighting_changed`.
+The day cycle updates the sky (and emits it) each time the sun has moved
+0.05°, about every 5 frames for a 10-minute day; the sun and moon lights turn
+every frame in between.
 
 ## How to use
 

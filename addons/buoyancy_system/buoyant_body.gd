@@ -16,9 +16,10 @@ extends Node
 ##
 ## Every tick the body also reports its hull to the water (WaterSurface.submit_disturbance()):
 ## its footprint, how deep it sits and the water's motion under it, so the water draws
-## the waves its motion makes (wake_strength). The body reads only the water
-## simulation's waves, never waves bodies stir up, so nothing it does can feed back
-## into it.
+## the waves its motion makes (wake_strength). By default the body feels only the
+## water simulation's waves, never the waves bodies stir up, so nothing it does can
+## feed back into it; wave_response lets it ride those too (its own bow wave and wake,
+## other hulls' wakes), all but the water its own hull displaces.
 
 ## Seconds the body is held frozen waiting for its first water sample; after that it
 ## is released anyway, with an error.
@@ -87,8 +88,18 @@ class Hull:
 @export_group("Waves")
 ## Scales the waves and foam the body makes as it moves through the water: wake, bow
 ## wave, rings and the foam its speed churns up (drawn by the ocean's interactive waves,
-## never felt). 0 makes none.
+## felt only through wave_response). 0 makes none.
 @export_range(0.0, 4.0, 0.01, "or_greater") var wake_strength := 1.0
+## How much the body feels the waves hulls make (WaterSurface.set_query_wave_response()):
+## 0 not at all, 1 fully. It then pitches on its own bow wave, rocks crossing its own and
+## other hulls' wakes and bobs in the rings of things dropped beside it. Inside its own
+## footprint the water is taken from around the hull, so the water it displaces itself
+## never lifts it. Only near the camera, where the ocean simulates those waves.
+@export_range(0.0, 1.0, 0.01) var wave_response := 0.0 :
+	set(value):
+		wave_response = value
+		if _water != null:
+			_water.set_query_wave_response(self, wave_response)
 
 @export_group("Debug")
 ## Draws the probes and the water above or below each.
@@ -160,6 +171,7 @@ func _ready() -> void:
 		push_error("BuoyantBody %s: no water in this world (add an OceanSystem); buoyancy is off." % get_path())
 		set_physics_process(false)
 		return
+	_water.set_query_wave_response(self, wave_response)
 	_points.resize(_probes.size())
 	_water_heights.resize(_probes.size())
 	_water_slopes.resize(_probes.size())

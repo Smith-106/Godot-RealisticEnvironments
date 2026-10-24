@@ -5,8 +5,10 @@ extends WaterSurface
 ## reported for the interactive waves (OceanInteraction reads them). Owned by
 ## OceanSystem, which registers it for its world.
 ##
-## Results leave the interactive waves out, except for the interaction owner's points
-## (OceanSystem's camera, which needs the drawn height to tell above from below).
+## Results leave the interactive waves out unless their owner set a wave response
+## (set_query_wave_response(): the simulated waves, its own hull's footprint filled from
+## around it) or is the interaction owner (OceanSystem's camera, which gets the drawn
+## height to tell above from below).
 ##
 ## A ring of SLOT_COUNT buffer sets lets new dispatches start while earlier
 ## readbacks are still in flight; each slot is reused only after its readback
@@ -15,8 +17,12 @@ extends WaterSurface
 const SHADER_PATH := 'res://addons/ocean_system/shaders/compute/surface_query.glsl'
 const SLOT_COUNT := 3
 const WORKGROUP_SIZE := 64
-## Points are uploaded as tightly packed xyz floats (PackedVector3Array bytes).
-const BYTES_PER_POINT := 12
+## Points are uploaded as xyz plus their owner's record index (a vec4).
+const FLOATS_PER_POINT := 4
+const BYTES_PER_POINT := FLOATS_PER_POINT * 4
+## Floats of one owner record (QueryOwner in surface_query.glsl): its hull's pose and
+## shape, and its wave response.
+const FLOATS_PER_OWNER := 8
 ## Floats of one cascade record (OceanCascade in ocean_sampling.glslinc).
 const FLOATS_PER_CASCADE := 12
 const BYTES_PER_CASCADE := FLOATS_PER_CASCADE * 4
@@ -26,13 +32,25 @@ const NORMAL_SAMPLE_DISTANCE := 0.25
 ## Edge of the window (share of its half size) where the interactive waves start to fade
 ## out, as interaction_fade() in water.gdshaderinc.
 const INTERACTION_FADE_START := 0.8
+## The rim that stands in for the waves inside an owner's own hull: its footprint grown
+## by this share of its size, and at least WAVE_RESPONSE_RIM_CELLS cells of the
+## simulation, past the water it displaces (which the cells blur) but close enough for
+## its bow wave.
+const WAVE_RESPONSE_RIM := 1.3
+const WAVE_RESPONSE_RIM_CELLS := 3.0
+## A moving hull leaves a hollow behind it that the water takes about half the period of
+## a wave as long as the hull to fill: the rim stretches back along the hull's motion
+## through the water over this share of that period, so the stern does not sink into it.
+const WAVE_RESPONSE_TRAIL := 0.5
 
 class QuerySlot:
 	var capacity := 0
 	var point_buffer := RID()
+	var owner_buffer := RID()
 	var cascade_buffer := RID()
 	var sample_buffer := RID()
-	## "displacement_a_rid:displacement_b_rid:interaction_map_rid" -> uniform set RID.
+	## "displacement_a_rid:displacement_b_rid:interaction_map_rid:interaction_state_rid"
+	## -> uniform set RID.
 	var uniform_sets := {}
 	var in_flight := false
 	var points := PackedVector3Array()
@@ -60,12 +78,21 @@ var _queued := {}   # owner_id -> PackedVector3Array
 var _owners := {}   # owner_id -> true, for owners that have not been released
 var _results := {}  # owner_id -> WaterSurfaceQueryResult
 var _disturbances := {}  # owner_id -> WaterDisturbance (copies)
-## The owner whose points also get the interactive waves' height (0: none).
+## Owner id -> [position (x, z), physics frame, velocity through the water (x, z)] of its
+## hull at its last report.
+var _hull_motions := {}
+## Owner id -> how much of the interactive waves its results include (set_query_wave_response()).
+var _wave_responses := {}
+## The owner whose points get the interactive waves' drawn height (0: none).
 var _interaction_owner_id := 0
 var _retired := false
 var _displacement_sampler : RID
-## 1x1 zero map bound in place of the interactive waves' map while there is none.
+## 1x1 zero maps and a small zero buffer bound in place of the wave displacement maps
+## (a flat ocean: no cascades or no generator) and of the interactive waves' map and
+## state while there are none.
+var _flat_displacement_maps : RID
 var _flat_interaction_map : RID
+var _flat_interaction_state : RID
 
 
 ## Sampler for the wave displacement maps in compute shaders (ocean_sampling.glslinc):
@@ -93,6 +120,9 @@ func _init(device : RenderingDevice) -> void:
 	var zero := PackedByteArray()
 	zero.resize(8)
 	_flat_interaction_map = _device.texture_create(flat_format, RDTextureView.new(), [zero])
+	flat_format.texture_type = RenderingDevice.TEXTURE_TYPE_2D_ARRAY
+	_flat_displacement_maps = _device.texture_create(flat_format, RDTextureView.new(), [zero])
+	_flat_interaction_state = _device.storage_buffer_create(zero.size(), zero)
 
 
 func submit_query(query_owner : Object, points : PackedVector3Array) -> void:
@@ -130,6 +160,15 @@ func release_query(query_owner : Object) -> void:
 	_owners.erase(owner_id)
 	_queued.erase(owner_id)
 	_results.erase(owner_id)
+	_wave_responses.erase(owner_id)
+
+
+func set_query_wave_response(query_owner : Object, response : float) -> void:
+	var owner_id := query_owner.get_instance_id()
+	if response > 0.0:
+		_wave_responses[owner_id] = response
+	else:
+		_wave_responses.erase(owner_id)
 
 
 func submit_disturbance(disturbance_owner : Object, disturbance : WaterDisturbance) -> void:
@@ -147,10 +186,23 @@ func submit_disturbance(disturbance_owner : Object, disturbance : WaterDisturban
 	copy.depth = disturbance.depth
 	copy.water_velocity = disturbance.water_velocity
 	copy.wave_strength = disturbance.wave_strength
+	# Its velocity through the water, from its last report one tick before (none after a
+	# gap or a jump).
+	var position := Vector2(disturbance.position.x, disturbance.position.z)
+	var frame := Engine.get_physics_frames()
+	var velocity := Vector2.ZERO
+	var motion : Array = _hull_motions.get(owner_id, [])
+	if not motion.is_empty() and frame - int(motion[1]) == 1:
+		var step := 1.0 / Engine.physics_ticks_per_second
+		var moved : Vector2 = position - motion[0]
+		if moved.length() < disturbance.half_extents.x:
+			velocity = moved / step - Vector2(disturbance.water_velocity.x, disturbance.water_velocity.z)
+	_hull_motions[owner_id] = [position, frame, velocity]
 
 
 func release_disturbance(disturbance_owner : Object) -> void:
 	_disturbances.erase(disturbance_owner.get_instance_id())
+	_hull_motions.erase(disturbance_owner.get_instance_id())
 
 
 ## The latest hull reported per owner (owner instance id -> WaterDisturbance).
@@ -194,10 +246,9 @@ func clear_uniform_set_cache() -> void:
 		slot.uniform_sets.clear()
 
 
-## Dispatches every queued query. interaction_map is the interactive waves' map (an
-## invalid RID without them) and interaction_window its window (centre x, z, half size,
-## 1 / size; OceanInteraction.get_window()).
-func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedByteArray, cascade_count : int, water_level : float, interaction_map : RID, interaction_window : Vector4) -> void:
+## Dispatches every queued query, with the interactive waves of interaction (null without).
+## Empty displacement RIDs (cascade_count 0) sample a flat ocean.
+func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedByteArray, cascade_count : int, water_level : float, interaction : OceanInteraction) -> void:
 	if _queued.is_empty() or not _pipeline.is_valid():
 		return
 	var slot := _get_idle_slot()
@@ -210,7 +261,7 @@ func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedB
 	# The interaction owner's points go first: the shader adds the interactive waves to
 	# the first interaction_point_count points.
 	var interaction_point_count := 0
-	if interaction_map.is_valid() and _queued.has(_interaction_owner_id):
+	if interaction != null and _queued.has(_interaction_owner_id):
 		var interaction_points : PackedVector3Array = _queued[_interaction_owner_id]
 		requests.push_back({"owner_id": _interaction_owner_id, "offset": 0, "count": interaction_points.size()})
 		points.append_array(interaction_points)
@@ -222,27 +273,56 @@ func dispatch(displacement_a : RID, displacement_b : RID, cascade_data : PackedB
 		points.append_array(owner_points)
 	_queued.clear()
 
+	# Each point carries its request's owner record: the hull it reports (the footprint
+	# its own waves are filled in over) and its wave response.
+	var point_values := PackedFloat32Array()
+	point_values.resize(points.size() * FLOATS_PER_POINT)
+	var owner_values := PackedFloat32Array()
+	owner_values.resize(requests.size() * FLOATS_PER_OWNER)
+	for r in requests.size():
+		var request := requests[r]
+		var offset : int = request["offset"]
+		for i in range(offset, offset + int(request["count"])):
+			point_values[i * FLOATS_PER_POINT] = points[i].x
+			point_values[i * FLOATS_PER_POINT + 1] = points[i].y
+			point_values[i * FLOATS_PER_POINT + 2] = points[i].z
+			point_values[i * FLOATS_PER_POINT + 3] = r
+		_write_owner_record(owner_values, r, request["owner_id"], interaction.cell_size if interaction != null else 0.0)
+
 	_ensure_slot_capacity(slot, points.size(), cascade_data.size())
-	var point_data := points.to_byte_array()
+	var point_data := point_values.to_byte_array()
 	_device.buffer_update(slot.point_buffer, 0, point_data.size(), point_data)
+	var owner_data := owner_values.to_byte_array()
+	_device.buffer_update(slot.owner_buffer, 0, owner_data.size(), owner_data)
 	_device.buffer_update(slot.cascade_buffer, 0, cascade_data.size(), cascade_data)
 
+	var window := interaction.get_window() if interaction != null else Vector4.ZERO
+	var origin := interaction.get_origin() if interaction != null else Vector2i.ZERO
 	var push_constant := RenderingContext.create_push_constant([
 		points.size(),
 		cascade_count,
 		water_level,
 		NORMAL_SAMPLE_DISTANCE,
 		interaction_point_count,
-		interaction_window.x,
-		interaction_window.y,
-		interaction_window.z,
-		interaction_window.w,
+		window.x,
+		window.y,
+		window.z,
+		window.w,
 		INTERACTION_FADE_START,
+		origin.x,
+		origin.y,
+		interaction.map_size if interaction != null else 0,
+		interaction.cell_size if interaction != null else 1.0,
+		OceanInteraction.MAX_HEIGHT,
 	])
-	var map := interaction_map if interaction_map.is_valid() else _flat_interaction_map
+	var map := interaction.map.rid if interaction != null else _flat_interaction_map
+	var state := interaction.state_buffer.rid if interaction != null else _flat_interaction_state
+	if not displacement_a.is_valid() or not displacement_b.is_valid():
+		displacement_a = _flat_displacement_maps
+		displacement_b = _flat_displacement_maps
 	var compute_list := _device.compute_list_begin()
 	_device.compute_list_bind_compute_pipeline(compute_list, _pipeline)
-	_device.compute_list_bind_uniform_set(compute_list, _get_uniform_set(slot, displacement_a, displacement_b, map), 0)
+	_device.compute_list_bind_uniform_set(compute_list, _get_uniform_set(slot, displacement_a, displacement_b, map, state), 0)
 	_device.compute_list_set_push_constant(compute_list, push_constant, push_constant.size())
 	_device.compute_list_dispatch(compute_list, ceili(float(points.size()) / float(WORKGROUP_SIZE)), 1, 1)
 	_device.compute_list_end()
@@ -268,8 +348,12 @@ func retire() -> void:
 	for slot in _slots:
 		_free_slot_buffers(slot)
 	_device.free_rid(_displacement_sampler)
+	_device.free_rid(_flat_displacement_maps)
 	_device.free_rid(_flat_interaction_map)
+	_device.free_rid(_flat_interaction_state)
+	_wave_responses.clear()
 	_disturbances.clear()
+	_hull_motions.clear()
 	if _shader.is_valid():
 		_device.free_rid(_shader)
 	_owners.clear()
@@ -299,6 +383,36 @@ func _on_samples_read(slot : QuerySlot, data : PackedByteArray) -> void:
 		_results[owner_id] = result
 
 
+## Writes owner_id's record r: the rim around the hull it reports, stretched back along
+## its motion through the water, and its wave response (none: zero).
+func _write_owner_record(values : PackedFloat32Array, r : int, owner_id : int, cell_size : float) -> void:
+	var response : float = _wave_responses.get(owner_id, 0.0)
+	if response <= 0.0:
+		return
+	var o := r * FLOATS_PER_OWNER
+	values[o + 7] = response
+	var disturbance : WaterDisturbance = _disturbances.get(owner_id)
+	if disturbance == null:
+		return
+	var forward := Vector2(disturbance.forward.x, disturbance.forward.z)
+	forward = forward.normalized() if forward.length_squared() > 1e-8 else Vector2(0.0, -1.0)
+	var half_extents := disturbance.half_extents.max(Vector2(0.01, 0.01))
+	var rim := (half_extents * WAVE_RESPONSE_RIM).max(half_extents + Vector2.ONE * (WAVE_RESPONSE_RIM_CELLS * cell_size))
+	var gravity : float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
+	var fill_time := WAVE_RESPONSE_TRAIL * sqrt(TAU * 2.0 * half_extents.x / gravity)
+	var motion : Array = _hull_motions.get(owner_id, [])
+	var trail : Vector2 = motion[2] * fill_time if not motion.is_empty() else Vector2.ZERO
+	var beam_axis := Vector2(-forward.y, forward.x)
+	rim += Vector2(absf(trail.dot(forward)), absf(trail.dot(beam_axis))) * 0.5
+	values[o] = disturbance.position.x - trail.x * 0.5
+	values[o + 1] = disturbance.position.z - trail.y * 0.5
+	values[o + 2] = forward.x
+	values[o + 3] = forward.y
+	values[o + 4] = rim.x
+	values[o + 5] = rim.y
+	values[o + 6] = clampf(disturbance.shape_exponent, 1.0, 16.0)
+
+
 func _get_idle_slot() -> QuerySlot:
 	for slot in _slots:
 		if not slot.in_flight:
@@ -315,6 +429,8 @@ func _ensure_slot_capacity(slot : QuerySlot, point_count : int, cascade_bytes : 
 		capacity *= 2
 	slot.capacity = capacity
 	slot.point_buffer = _device.storage_buffer_create(capacity * BYTES_PER_POINT)
+	# At most one owner per point.
+	slot.owner_buffer = _device.storage_buffer_create(capacity * FLOATS_PER_OWNER * 4)
 	slot.cascade_buffer = _device.storage_buffer_create(cascade_bytes)
 	slot.sample_buffer = _device.storage_buffer_create(capacity * BYTES_PER_SAMPLE)
 
@@ -324,14 +440,15 @@ func _free_slot_buffers(slot : QuerySlot) -> void:
 		return
 	# Uniform sets depend on these buffers and are freed with them.
 	_device.free_rid(slot.point_buffer)
+	_device.free_rid(slot.owner_buffer)
 	_device.free_rid(slot.cascade_buffer)
 	_device.free_rid(slot.sample_buffer)
 	slot.uniform_sets.clear()
 	slot.capacity = 0
 
 
-func _get_uniform_set(slot : QuerySlot, displacement_a : RID, displacement_b : RID, interaction_map : RID) -> RID:
-	var key := "%d:%d:%d" % [displacement_a.get_id(), displacement_b.get_id(), interaction_map.get_id()]
+func _get_uniform_set(slot : QuerySlot, displacement_a : RID, displacement_b : RID, interaction_map : RID, interaction_state : RID) -> RID:
+	var key := "%d:%d:%d:%d" % [displacement_a.get_id(), displacement_b.get_id(), interaction_map.get_id(), interaction_state.get_id()]
 	if slot.uniform_sets.has(key):
 		return slot.uniform_sets[key]
 	var uniforms : Array[RDUniform] = [
@@ -341,6 +458,8 @@ func _get_uniform_set(slot : QuerySlot, displacement_a : RID, displacement_b : R
 		RenderingContext.sampled_uniform(3, _displacement_sampler, displacement_a),
 		RenderingContext.sampled_uniform(4, _displacement_sampler, displacement_b),
 		RenderingContext.sampled_uniform(5, _displacement_sampler, interaction_map),
+		RenderingContext.buffer_uniform(6, slot.owner_buffer),
+		RenderingContext.buffer_uniform(7, interaction_state),
 	]
 	var uniform_set := _device.uniform_set_create(uniforms, _shader, 0)
 	slot.uniform_sets[key] = uniform_set

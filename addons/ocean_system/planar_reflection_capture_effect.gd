@@ -13,74 +13,8 @@ extends CompositorEffect
 
 const WORKGROUP_SIZE := 8
 
-const CAPTURE_SHADER := """
-#version 450
-
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-
-layout(rgba16f, set = 0, binding = 0) uniform restrict readonly image2D color_image;
-layout(set = 0, binding = 1) uniform sampler2D depth_texture;
-layout(rgba16f, set = 0, binding = 2) uniform restrict writeonly image2D capture_image; // mip 0
-layout(r32f, set = 0, binding = 3) uniform restrict writeonly image2D distance_image;
-
-layout(push_constant, std430) uniform Params {
-	mat4 inv_view_projection;
-	vec2 raster_size;
-	float water_level;
-	float clip_bias;
-	vec3 camera_position;
-	float clip_below_water; // 1 or 0
-} params;
-
-void main() {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(pixel, ivec2(params.raster_size)))) {
-		return;
-	}
-	// The background is cleared to (0, 0, 0, 0), so color is premultiplied by coverage.
-	vec4 color = imageLoad(color_image, pixel);
-	float depth = texelFetch(depth_texture, pixel, 0).r;
-	vec2 uv = (vec2(pixel) + vec2(0.5)) / params.raster_size;
-	vec4 clip_position = params.inv_view_projection * vec4(uv * 2.0 - 1.0, depth, 1.0);
-	vec3 world_position = clip_position.xyz / clip_position.w;
-	if (params.clip_below_water > 0.0 && world_position.y < params.water_level - params.clip_bias) {
-		color = vec4(0.0);
-	}
-	imageStore(capture_image, pixel, color);
-	// 0 where there is no (opaque) geometry: the background or clipped pixels.
-	imageStore(distance_image, pixel, vec4(color.a > 0.5 ? distance(world_position, params.camera_position) : 0.0));
-}
-"""
-
-const DOWNSAMPLE_SHADER := """
-#version 450
-
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-
-// 2D views of one mip each: level - 1 and level.
-layout(rgba16f, set = 0, binding = 0) uniform restrict readonly image2D source;
-layout(rgba16f, set = 0, binding = 1) uniform restrict writeonly image2D target;
-
-layout(push_constant, std430) uniform Params {
-	ivec2 source_size;
-	ivec2 target_size;
-} params;
-
-void main() {
-	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(texel, params.target_size))) {
-		return;
-	}
-	// 2x2 box; clamped, so a level with an odd size drops its last row or column.
-	ivec2 last = params.source_size - 1;
-	ivec2 source_texel = texel * 2;
-	vec4 sum = imageLoad(source, min(source_texel, last));
-	sum += imageLoad(source, min(source_texel + ivec2(1, 0), last));
-	sum += imageLoad(source, min(source_texel + ivec2(0, 1), last));
-	sum += imageLoad(source, min(source_texel + ivec2(1, 1), last));
-	imageStore(target, texel, sum * 0.25);
-}
-"""
+const CAPTURE_SHADER := preload("res://addons/ocean_system/shaders/compute/planar_reflection_capture.glsl")
+const DOWNSAMPLE_SHADER := preload("res://addons/ocean_system/shaders/compute/planar_reflection_downsample.glsl")
 
 ## The captured reflection: rgb premultiplied by a (geometry coverage), with a
 ## full mip chain. Empty until set_size().
@@ -89,21 +23,11 @@ var texture := Texture2DRD.new()
 ## shows, 0 where it shows no geometry. One mip; read it unfiltered.
 var distance_texture := Texture2DRD.new()
 
-var water_level := 0.0 :
-	set(value):
-		_params_mutex.lock()
-		water_level = value
-		_params_mutex.unlock()
-var clip_below_water := true :
-	set(value):
-		_params_mutex.lock()
-		clip_below_water = value
-		_params_mutex.unlock()
-var clip_bias := 0.03 :
-	set(value):
-		_params_mutex.lock()
-		clip_bias = value
-		_params_mutex.unlock()
+## The water plane's world height (m); whether captured geometry below it is cleared,
+## and how far below (m) it must lie. Set through set_parameters().
+var water_level := 0.0
+var clip_below_water := true
+var clip_bias := 0.03
 
 var _rd : RenderingDevice
 var _capture_shader := RID()
@@ -124,6 +48,9 @@ func _init() -> void:
 	access_resolved_depth = true
 	access_resolved_color = true
 	_rd = RenderingServer.get_rendering_device()
+	# Without a RenderingDevice (Compatibility renderer) the compositor does not run.
+	if _rd == null:
+		return
 	_capture_shader = _compile_shader(CAPTURE_SHADER)
 	_capture_pipeline = _rd.compute_pipeline_create(_capture_shader) if _capture_shader.is_valid() else RID()
 	_downsample_shader = _compile_shader(DOWNSAMPLE_SHADER)
@@ -135,9 +62,18 @@ func _init() -> void:
 	sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
 	_sampler = _rd.sampler_create(sampler_state)
 
+## Sets parameters by name (the variables above) all at once, so the render callback
+## never reads a half-updated set.
+func set_parameters(values : Dictionary) -> void:
+	_params_mutex.lock()
+	for parameter : StringName in values:
+		assert(parameter in self, "Unknown %s parameter %s." % [get_script().get_global_name(), parameter])
+		set(parameter, values[parameter])
+	_params_mutex.unlock()
+
 
 func _notification(what: int) -> void:
-	if what != NOTIFICATION_PREDELETE:
+	if what != NOTIFICATION_PREDELETE or _rd == null:
 		return
 	# Inline: the script's own methods can't be called during predelete.
 	texture.texture_rd_rid = RID()
@@ -159,7 +95,7 @@ func _notification(what: int) -> void:
 ## (Re)creates the capture texture for a reflection viewport of this size.
 ## Call it on the main thread whenever the viewport is resized.
 func set_size(size: Vector2i) -> void:
-	if size == _size:
+	if size == _size or _rd == null:
 		return
 	var mip_count := 1 # down to 1x1
 	while maxi(size.x, size.y) >> mip_count > 0:
@@ -272,11 +208,8 @@ func _render_callback(_callback_type: int, render_data: RenderData) -> void:
 	_rd.compute_list_end()
 
 
-func _compile_shader(source: String) -> RID:
-	var shader_source := RDShaderSource.new()
-	shader_source.language = RenderingDevice.SHADER_LANGUAGE_GLSL
-	shader_source.source_compute = source
-	var spirv := _rd.shader_compile_spirv_from_source(shader_source)
+func _compile_shader(shader_file : RDShaderFile) -> RID:
+	var spirv := shader_file.get_spirv()
 	if not spirv.compile_error_compute.is_empty():
 		push_error("Planar reflection capture shader failed to compile; reflected geometry is off: %s" % spirv.compile_error_compute)
 		return RID()
