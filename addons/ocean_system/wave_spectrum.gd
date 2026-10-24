@@ -57,4 +57,6 @@ class_name WaveSpectrum extends Resource
 @export_range(0.0, 10.0, 0.01, "or_greater", "suffix:m/s") var speed_refresh_threshold := 0.25
 ## Seconds a newly generated spectrum takes to crossfade in. Longer blends hide
 ## changes but delay the full response.
-@export_range(0.01, 60.0, 0.01, "or_greater", "suffix:s") var blend_duration := 4.0
+@export_range(0.01, 60.0, 0.01, "or_greater", "suffix:s") var blend_duration := 4.0 :
+	set(value):
+		blend_duration = maxf(value, 0.01)

@@ -68,15 +68,18 @@ properties. Directions are the way the wind blows toward, in degrees: 0 = +Z,
 Extend `WaterSurface` and implement its abstract methods. Call
 `WaterSurface.register(get_world_3d(), surface)` in `_enter_tree()` and
 `unregister()` in `_exit_tree()`. Each world can have only one water surface.
-Water without interactive waves can ignore `submit_disturbance()` and
-`release_disturbance()`.
+Water without interactive waves can ignore `submit_disturbance()`,
+`release_disturbance()` and `set_query_wave_response()`.
 
 ### Make waves
 
 Report a hull every physics tick with `submit_disturbance(self, disturbance)`
 (one `WaterDisturbance`, reused) and call `release_disturbance(self)` in
-`_exit_tree()`. `BuoyantBody` does this for floating bodies. The waves are
-only drawn: query results leave them out.
+`_exit_tree()`. `BuoyantBody` does this for floating bodies. Query results
+leave those waves out unless the owner calls
+`set_query_wave_response(self, response)` (0 none, 1 all;
+`BuoyantBody.wave_response`); the water inside its own reported hull then
+comes from around the hull, so it never feels the water it displaces.
 
 ### Keep water out of an open hull
 

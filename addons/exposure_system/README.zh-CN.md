@@ -22,7 +22,10 @@
 
 结果只在运行时写入目标的 `CameraAttributes.exposure_multiplier`，由 Godot 应用到
 灯光、自发光和天空上。上述两个效果会在运行时加入目标的合成器（Compositor），需要
-`RenderingDevice`。
+`RenderingDevice`。画面测光会测量用这个合成器绘制的每个画面（`WorldEnvironment` 的
+合成器作用于其世界中所有没有自己合成器的相机）：有多个画面时（分屏、用 `SubViewport`
+做的小地图），它跟随最后渲染的那个。给额外的相机设置它自己的 `Compositor` 即可把它
+排除在外。
 
 ## 使用方法
 

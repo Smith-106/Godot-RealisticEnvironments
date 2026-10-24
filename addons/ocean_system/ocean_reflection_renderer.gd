@@ -84,9 +84,7 @@ func apply(water : GeometryInstance3D, target_water_level: float) -> void:
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if enabled else SubViewport.UPDATE_DISABLED
 	set_process(enabled)
 	_capture_effect.enabled = enabled
-	_capture_effect.clip_below_water = clip_below_water
-	_capture_effect.water_level = water_level
-	_capture_effect.clip_bias = clip_bias
+	_capture_effect.set_parameters({&"clip_below_water": clip_below_water, &"water_level": water_level, &"clip_bias": clip_bias})
 	_update_viewport_size()
 	_update_water_material()
 

@@ -308,7 +308,8 @@ const _SURFACE_DRIFT_WIND_SHARE := 0.03
 @export_group('Interactive Waves')
 ## Cells per side of the interactive waves around the camera: the wakes, bow waves and
 ## rings that hulls reporting to the WaterSurface make (BuoyantBody does). Off turns
-## them off. The cost grows with the square; the waves are only drawn, never felt.
+## them off. The cost grows with the square. Bodies feel them only when they opt in
+## (WaterSurface.set_query_wave_response(), BuoyantBody.wave_response).
 @export_enum('Off:0', '256x256:256', '512x512:512', '1024x1024:1024') var interaction_map_size := 512 :
 	set(value):
 		if value != 0 and value not in SIMULATION_MAP_SIZES:
@@ -431,6 +432,10 @@ var _has_wave_output := false
 ## Whether the spectrum's peak wave has been reported as too long for the largest tile
 ## (_check_peak_wavelength()); cleared once it fits again, so it is reported once per episode.
 var _peak_wavelength_reported := false
+## Whether the sky source's zero sun direction / mismatched planet arrays have been
+## reported; cleared once they are valid again, so a polled source reports once per episode.
+var _zero_sun_reported := false
+var _planet_mismatch_reported := false
 ## This frame's cascade records for the surface queries (_update_cascade_uniforms()).
 var _cascade_data := PackedByteArray()
 var _reflection_renderer : OceanReflectionRenderer
@@ -844,8 +849,12 @@ func _update_sky_lighting_shader_parameters() -> void:
 	_sky_lighting_dirty = false
 	var sun_direction : Vector3 = _read_sky(&'get_sun_direction', manual_sun_direction)
 	if sun_direction.length_squared() <= 0.0001:
-		push_error("OceanSystem %s: the sun direction is zero; using straight up." % get_path())
+		if not _zero_sun_reported:
+			push_error("OceanSystem %s: the sun direction is zero; using straight up." % get_path())
+		_zero_sun_reported = true
 		sun_direction = Vector3.UP
+	else:
+		_zero_sun_reported = false
 	_set_water_shader_parameter(&'sky_sun_direction', sun_direction.normalized())
 	_set_water_shader_parameter(&'sky_sun_visibility', float(_read_sky(&'get_sun_visibility', manual_sun_visibility)))
 	var cloud_cubemap : Texture = _read_sky(&'get_cloud_cubemap', null)
@@ -863,8 +872,12 @@ func _update_sky_lighting_shader_parameters() -> void:
 	var point_directions : PackedVector3Array = _read_sky(&'get_planet_directions', PackedVector3Array())
 	var point_irradiance : PackedVector3Array = _read_sky(&'get_planet_irradiance', PackedVector3Array())
 	if point_directions.size() != point_irradiance.size():
-		push_error("OceanSystem %s: the sky source's planet directions and irradiance differ in length; no planet glints." % get_path())
+		if not _planet_mismatch_reported:
+			push_error("OceanSystem %s: the sky source's planet directions and irradiance differ in length; no planet glints." % get_path())
+		_planet_mismatch_reported = true
 		point_directions.clear()
+	else:
+		_planet_mismatch_reported = false
 	var point_count := mini(point_directions.size(), MAX_SKY_POINTS)
 	_set_water_shader_parameter(&'sky_point_count', point_count)
 	if point_count > 0:
@@ -1082,7 +1095,12 @@ func _set_water_shader_parameter(parameter: StringName, value: Variant, force :=
 		_underwater_material.set_shader_parameter(parameter, value)
 
 func _dispatch_surface_queries() -> void:
-	# Nothing to sample until the first FFT output exists (or ever, with no cascades).
+	# Without a generator (no cascades, or its GPU resources failed) the ocean is flat
+	# and the queries sample flat maps.
+	if _wave_generator == null:
+		_surface_queries.dispatch(RID(), RID(), _cascade_data, 0, water_level, _interaction)
+		return
+	# Nothing to sample until the first FFT output exists.
 	if not _has_wave_output:
 		return
 	_surface_queries.dispatch(
@@ -1091,8 +1109,7 @@ func _dispatch_surface_queries() -> void:
 		_cascade_data,
 		cascades.size(),
 		water_level,
-		_interaction.map.rid if _interaction != null else RID(),
-		_interaction.get_window() if _interaction != null else Vector4.ZERO
+		_interaction
 	)
 
 func _notification(what: int) -> void:

@@ -28,6 +28,11 @@ colours in dim light. It depends on nothing.
 The result goes into the target's `CameraAttributes.exposure_multiplier`, at
 runtime only. Godot applies it to lights, emission and the sky. The two effects
 are added to the target's compositor at runtime and need a `RenderingDevice`.
+The view meter measures every view drawn with that compositor (a
+`WorldEnvironment`'s serves each camera in its world without a compositor of
+its own): with several (split screen, a `SubViewport` minimap) it follows
+whichever rendered last. Give an extra camera a `Compositor` of its own to
+leave it out.
 
 ## How to use
 

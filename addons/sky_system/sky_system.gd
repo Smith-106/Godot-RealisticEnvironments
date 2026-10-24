@@ -138,6 +138,10 @@ const CLOUD_LIGHT_RESPONSE_SECONDS := 0.3
 ## Relative change in the clouds' share of a light that updates the scene's lights
 ## (shares under 0.01 count as 0.01, so a covered light still settles).
 const CLOUD_LIGHT_UPDATE_THRESHOLD := 0.01
+## Degrees the day cycle turns the sky between full sky updates (light colours, the sky
+## material, which re-renders the radiance map, and lighting_changed). The sun and moon
+## lights still turn every frame, so shadows move smoothly.
+const CYCLE_UPDATE_DEGREES := 0.05
 
 ## World height of the sea surface: keep it equal to OceanSystem.water_level
 ## (OceanEnvironment.sea_level sets both). The sea's horizon lies below eye level by
@@ -321,6 +325,8 @@ var _sun_hour_angle := 0.0
 ## True while _process advances several calendar properties; their setters then
 ## skip _update_sky and _process runs it once afterwards.
 var _advancing_cycle := false
+## Days the cycle has advanced since the last full sky update.
+var _cycle_pending_days := 0.0
 
 # Lighting state, recomputed by _update_lighting_state() whenever an input changes.
 # The public getters return these, so reading the sky costs nothing per call.
@@ -512,7 +518,11 @@ func _process(delta : float) -> void:
 				year += 1
 			lunar_age_days = lunar_age_days + day_delta
 		_advancing_cycle = false
-		_update_sky()
+		_cycle_pending_days += day_delta
+		if _cycle_pending_days * 360.0 >= CYCLE_UPDATE_DEGREES:
+			_update_sky()
+		else:
+			_update_light_directions()
 	_elapsed_time += delta
 	_update_starfield()
 	if _cloud_transition_duration > 0.0:
@@ -740,6 +750,7 @@ func _update_lighting_state() -> void:
 func _update_sky() -> void:
 	if _advancing_cycle:
 		return
+	_cycle_pending_days = 0.0
 	_update_lighting_state()
 	if not is_inside_tree():
 		return
@@ -964,14 +975,10 @@ func _push_atmosphere_parameters() -> void:
 		RenderingServer.global_shader_parameter_set(AtmosphereGlobals.LIGHT, get_atmosphere_light())
 	var effect := _get_aerial_perspective_effect()
 	if effect:
-		effect.active = _haze_density > 0.0
-		effect.light_direction = _haze_light_direction
-		effect.phase_g = _haze_anisotropy
+		effect.set_parameters({&"active": _haze_density > 0.0, &"light_direction": _haze_light_direction, &"phase_g": _haze_anisotropy})
 	var cloud_effect := _get_cloud_effect()
 	if cloud_effect:
-		cloud_effect.light_direction = _haze_light_direction
-		cloud_effect.phase_g = _haze_anisotropy
-		cloud_effect.sea_level = sea_level
+		cloud_effect.set_parameters({&"light_direction": _haze_light_direction, &"phase_g": _haze_anisotropy, &"sea_level": sea_level})
 
 
 ## The WorldEnvironment's sky material (null, reported in _ready(), without one).
@@ -996,6 +1003,21 @@ func _get_cloud_effect() -> VolumetricCloudEffect:
 		if effect is VolumetricCloudEffect:
 			return effect
 	return null
+
+
+## Turns the sun and moon lights to where the bodies are now, between full sky updates
+## (CYCLE_UPDATE_DEGREES); everything else keeps the last update's values.
+func _update_light_directions() -> void:
+	if not is_inside_tree():
+		return
+	var solar_coordinates := _get_solar_equatorial_coordinates()
+	var sun_direction := _refracted(_equatorial_to_horizontal_direction(solar_coordinates.y, _get_solar_hour_angle()))
+	var moon_direction := _refracted(_get_moon_state()["direction"])
+	for light_direction in [[_sun_light, sun_direction], [_moon_light, moon_direction]]:
+		var light : DirectionalLight3D = light_direction[0]
+		if light != null and light.visible:
+			var direction : Vector3 = light_direction[1]
+			light.look_at(global_position - direction, _get_look_up(direction))
 
 
 ## A sun or moon light: energy above the atmosphere, transmittance down to the sea.
@@ -1374,8 +1396,7 @@ func _setup_clouds() -> void:
 				_cloud_renderer = null
 	var cloud_effect := _get_cloud_effect()
 	if cloud_effect and _cloud_renderer:
-		cloud_effect.cloud_resources = _cloud_renderer.get_trace_resources()
-		cloud_effect.active = true
+		cloud_effect.set_parameters({&"cloud_resources": _cloud_renderer.get_trace_resources(), &"active": true})
 	_push_cloud_material_parameters()
 	_update_sky()
 
@@ -1388,8 +1409,7 @@ func _release_clouds() -> void:
 	# Unbind the cubemaps and the trace resources before they are freed.
 	var cloud_effect := _get_cloud_effect()
 	if cloud_effect:
-		cloud_effect.active = false
-		cloud_effect.cloud_resources = []
+		cloud_effect.set_parameters({&"active": false, &"cloud_resources": []})
 	_push_cloud_material_parameters()
 	renderer.release()
 
@@ -1497,8 +1517,7 @@ func _setup_atmosphere() -> void:
 		volume_rids.push_back(volumes[i].texture_rd_rid)
 	for effect in [_get_aerial_perspective_effect(), _get_cloud_effect()]:
 		if effect:
-			effect.view_textures = volume_rids
-			effect.max_distance = AtmosphereRenderer.MAX_DISTANCE
+			effect.set_parameters({&"view_textures": volume_rids, &"max_distance": AtmosphereRenderer.MAX_DISTANCE})
 	_update_sky()
 	# Consumers start reading once the volumes hold this frame's atmosphere.
 	_process_atmosphere()
@@ -1521,11 +1540,10 @@ func _release_atmosphere() -> void:
 			RenderingServer.global_shader_parameter_set(global, _placeholder_volume)
 	var effect := _get_aerial_perspective_effect()
 	if effect:
-		effect.active = false
-		effect.view_textures = []
+		effect.set_parameters({&"active": false, &"view_textures": []})
 	var cloud_effect := _get_cloud_effect()
 	if cloud_effect:
-		cloud_effect.view_textures = []
+		cloud_effect.set_parameters({&"view_textures": []})
 	var renderer := _atmosphere_renderer
 	_atmosphere_renderer = null
 	_sky_irradiance = -1.0
@@ -1550,8 +1568,7 @@ func _process_atmosphere() -> void:
 		RenderingServer.global_shader_parameter_set(AtmosphereGlobals.OBSERVER, _atmosphere_observer)
 	for effect in [_get_aerial_perspective_effect(), _get_cloud_effect()]:
 		if effect:
-			effect.observer_position = camera_position
-			effect.observer_altitude = observer_altitude
+			effect.set_parameters({&"observer_position": camera_position, &"observer_altitude": observer_altitude})
 	if absf(observer_altitude - _radiance_observer_altitude) > maxf(2.0, RADIANCE_ALTITUDE_TOLERANCE * _radiance_observer_altitude):
 		_refresh_sky_radiance()
 

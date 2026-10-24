@@ -1,8 +1,9 @@
 class_name OceanInteraction extends RefCounted
 ## OceanSystem's interactive waves (internal): the waves hulls make as they move through
 ## the water (WaterSurface.submit_disturbance()), simulated on a window of map_size^2
-## cells around the camera. They are only drawn: surface queries for bodies leave them
-## out, so nothing feeds back (docs/buoyancy-and-interactive-waves-plan.md).
+## cells around the camera. Surface queries leave them out unless their owner opts in
+## (WaterSurface.set_query_wave_response()); OceanSurfaceQueries then reads state_buffer
+## (docs/buoyancy-and-interactive-waves-plan.md).
 ##
 ## One step per physics tick: the hulls' sources and the damped border
 ## (interaction_source.glsl), a forward FFT of h + i dh/dt, every mode's exact evolution
@@ -62,6 +63,9 @@ var context : RenderingContext
 ## squared slope) and the foam (coverage, 0, 0, 0).
 var map : RenderingContext.Descriptor
 var foam_map : RenderingContext.Descriptor
+## The FFT buffer: an input half, then the output half holding the state after the last
+## step, h + i dh/dt per texel (texel c mod map_size holds cell c, as the map).
+var state_buffer : RenderingContext.Descriptor
 var _pipelines := {}
 var _hull_buffer : RenderingContext.Descriptor
 var _mip_steps : Array[Vector2i] = []
@@ -110,6 +114,7 @@ func init_gpu(size : int, cell : float) -> void:
 	# One complex field: input half, then output half (fft_compute.glsl with one spectrum).
 	# Zeroed: the first step reads the output half as the flat starting state.
 	var fft_buffer := context.create_storage_buffer(map_size * map_size * 2 * 8)
+	state_buffer = fft_buffer
 	_hull_buffer = context.create_storage_buffer(MAX_DISTURBANCES * FLOATS_PER_HULL * 4)
 	# Two halves: last step's foam and this step's (zeroed: no foam to start with).
 	var foam_buffer := context.create_storage_buffer(map_size * map_size * 2 * 4)
@@ -214,6 +219,11 @@ func get_window() -> Vector4:
 	@warning_ignore("integer_division")
 	var center := (Vector2(_origin) + Vector2(map_size / 2, map_size / 2)) * cell_size
 	return Vector4(center.x, center.y, window_size * 0.5, 1.0 / window_size)
+
+
+## The window's first cell (x, z): it covers cells origin to origin + map_size - 1.
+func get_origin() -> Vector2i:
+	return _origin
 
 
 ## Where the foam lies relative to its cells (m, world x and z): the drift not yet moved

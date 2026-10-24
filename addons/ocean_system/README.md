@@ -44,8 +44,10 @@ Requires `core` and a `RenderingDevice` (Forward+). Without one
   moving relative to the water, so floating with the swell makes none. Every
   wave travels at its real speed: the simulation moves each Fourier mode
   exactly, by the finite-depth dispersion relation, once per physics tick.
-  The waves are only drawn: water queries leave them out, so they never push
-  bodies (one-way, so nothing can build up).
+  Water queries leave them out unless their owner opts in
+  (`WaterSurface.set_query_wave_response()`, `BuoyantBody.wave_response`);
+  the water inside the owner's own hull then comes from a rim around it, so a
+  hull never feels the water it displaces and nothing builds up.
 - **Wake foam.** Hulls churn up foam on the same window: around the waterline
   and in a trail behind them, denser the faster they move through the water
   (not the deeper they sit), plus foam where wake crests grow steep. It drifts

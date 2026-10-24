@@ -3,7 +3,8 @@
  * hulls' footprints.
  *
  * Godot does not track include dependencies: after editing this file, reimport
- * interaction_source.glsl, interaction_output.glsl and interaction_foam.glsl.
+ * interaction_source.glsl, interaction_output.glsl, interaction_foam.glsl and
+ * surface_query.glsl.
  */
 
 // A hull (OceanInteraction._write_hulls()): its footprint now and one step earlier,

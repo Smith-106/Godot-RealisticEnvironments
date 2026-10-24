@@ -13,8 +13,8 @@ extends RefCounted
 ## stops querying (e.g. in _exit_tree).
 ##
 ## Hulls report themselves with [method submit_disturbance] every physics tick, and
-## the water draws the waves they make. Those waves are only drawn: query results
-## leave them out, so nothing a body does to the water can push it back.
+## the water draws the waves they make. Query results leave those waves out unless the
+## owner opts in with [method set_query_wave_response].
 
 ## World3D instance id -> WaterSurface.
 static var _surfaces := {}
@@ -61,6 +61,13 @@ static func find(node : Node) -> WaterSurface:
 
 ## Forgets query_owner's submissions and results.
 @abstract func release_query(query_owner : Object) -> void
+
+## How much of the waves hulls make (submit_disturbance()) query_owner's results include:
+## 0 none (the default), 1 all, in height, slope and rate. While query_owner also reports
+## a hull, the waves inside its footprint are taken from around it, so the hull feels its
+## bow wave, its wake and other hulls' waves but not the water it displaces itself.
+## Water without such waves ignores it. Kept until release_query().
+@abstract func set_query_wave_response(query_owner : Object, response : float) -> void
 
 ## The surface's clock, in the units of WaterSurfaceQueryResult.dispatch_time:
 ## a result dispatched at or before a moment read here predates it.
